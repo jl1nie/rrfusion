@@ -55,7 +55,7 @@ Each section shows the FastMCP-style decoration you would give the tool in an ag
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="search_fulltext", path="/mcp/search_fulltext", method="POST")
+@mcp.tools.register(name="search_fulltext", path="/mcp/search_fulltext", method="POST")
 async def search_fulltext(request: SearchRequest) -> SearchToolResponse:
     """
     signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
@@ -75,7 +75,7 @@ The full-text lane maximizes recall by leaning on raw keyword scoring from the D
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="search_semantic", path="/mcp/search_semantic", method="POST")
+@mcp.tools.register(name="search_semantic", path="/mcp/search_semantic", method="POST")
 async def search_semantic(request: SearchRequest) -> SearchToolResponse:
     """
     signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
@@ -95,7 +95,7 @@ This lane biases toward precision by using embedding similarity. Pair it with th
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="blend_frontier_codeaware", path="/mcp/blend_frontier_codeaware", method="POST")
+@mcp.tools.register(name="blend_frontier_codeaware", path="/mcp/blend_frontier_codeaware", method="POST")
 async def blend_frontier_codeaware(request: BlendRequest) -> BlendResponse:
     """
     signature: blend_frontier_codeaware(runs: list[BlendRunInput], weights: dict[str, float], rrf_k: int = 60, beta: float = 1.0, family_fold: bool = True, target_profile: dict[str, dict[str, float]] | None = None, top_m_per_lane: dict[str, int], k_grid: list[int], peek: PeekConfig | None = None)
@@ -115,7 +115,7 @@ Fusion consumes multiple lane handles, applies RRF plus optional code-aware boos
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="peek_snippets", path="/mcp/peek_snippets", method="POST")
+@mcp.tools.register(name="peek_snippets", path="/mcp/peek_snippets", method="POST")
 async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
     """
     signature: peek_snippets(run_id: str, offset: int = 0, limit: int = 20, fields: list[str] = ..., per_field_chars: dict[str, int] = ..., claim_count: int = 3, strategy: Literal["head","match","mix"] = "head", budget_bytes: int = 12288)
@@ -135,7 +135,7 @@ async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="get_snippets", path="/mcp/get_snippets", method="POST")
+@mcp.tools.register(name="get_snippets", path="/mcp/get_snippets", method="POST")
 async def get_snippets(request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
     """
     signature: get_snippets(ids: list[str], fields: list[str] = ..., per_field_chars: dict[str, int] = ...)
@@ -155,7 +155,7 @@ Use this tool after you already know which doc IDs matter. It skips pagination a
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="mutate_run", path="/mcp/mutate_run", method="POST")
+@mcp.tools.register(name="mutate_run", path="/mcp/mutate_run", method="POST")
 async def mutate_run(request: MutateRequest) -> MutateResponse:
     """
     signature: mutate_run(run_id: str, delta: MutateDelta)
@@ -175,7 +175,7 @@ async def mutate_run(request: MutateRequest) -> MutateResponse:
 ```python
 from fastmcp import mcp
 
-@mcp.tool(name="get_provenance", path="/mcp/get_provenance", method="POST")
+@mcp.tools.register(name="get_provenance", path="/mcp/get_provenance", method="POST")
 async def get_provenance(request: ProvenanceRequest) -> ProvenanceResponse:
     """
     signature: get_provenance(run_id: str)
