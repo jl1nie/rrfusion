@@ -4,12 +4,15 @@ Multi-lane patent search with **RRF fusion**, **code-aware frontier**, and **MCP
 
 This scaffold includes:
 - `AGENT.md` — the implementation brief/spec for Codex or any dev agent
-- `deploy/docker-compose.yml` — spins up **Redis** locally
-- `deploy/.env.example` — environment defaults
+- `apps/db_stub` — FastAPI stub entrypoint plus a dedicated Dockerfile
+- `apps/mcp-host` — FastMCP/test image Dockerfile reused by Compose
+- `infra/compose.dev.yml` — dev/test stack for Redis, the stub, MCP, and Dockerized pytest
+- `infra/compose.full.yml` — reference Compose file for the eventual multi-service stack
+- `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
 ## Contents
 
-- [Quick start (Redis only)](#quick-start-redis-only)
+- [Quick start (Docker)](#quick-start-docker)
 - [Next steps](#next-steps)
 - [FastMCP Host](#fastmcp-host)
 - [Usage Workflow](#usage-workflow)
@@ -22,31 +25,35 @@ This scaffold includes:
   - [`mutate_run`](#mutate_run)
   - [`get_provenance`](#get_provenance)
 
-## Quick start (Redis only)
+## Quick start (Docker)
 
 ```bash
-cd deploy
-cp .env.example .env
-docker compose up -d
-docker ps  # confirm redis is up
+cp infra/env.example infra/.env
+docker compose -f infra/compose.dev.yml up -d redis db-stub mcp
+docker compose -f infra/compose.dev.yml ps  # confirm all services are healthy
+docker compose -f infra/compose.dev.yml run --rm tests  # run pytest inside Docker (optional)
 ```
+
+Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.dev.yml down` when you're done; the `tests` service uses a separate Compose profile so it only executes when you invoke `docker compose -f infra/compose.dev.yml run --rm tests [command]`.
 
 ## Next steps
 
-- Point your MCP server to `REDIS_URL` from `.env`
+- Point your MCP server to `REDIS_URL` from `infra/.env`
 - Hand `AGENT.md` to Codex to scaffold the FastMCP server and DB stub
 - Keep large `(doc_id, score)` arrays in Redis; expose **handles** (run_id/cursor) to the LLM
 
 ## FastMCP Host
 
-- `mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tools.register` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
+- `src/rrfusion/mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tools.register` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
 - Run it locally with HTTP transport:
 
 ```bash
-uv run fastmcp run --transport http mcp/host.py -- --host 0.0.0.0 --port 3000
+uv run fastmcp run --transport http src/rrfusion/mcp/host.py -- --host 0.0.0.0 --port 3000
 ```
 
 This exposes the same logic as the FastAPI service while letting any MCP-native client install the server directly.
+
+If you prefer Docker, `docker compose -f infra/compose.dev.yml up -d mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis, the DB stub, and the FastMCP host with port `3000` forwarded to your machine.
 
 ## Usage Workflow
 

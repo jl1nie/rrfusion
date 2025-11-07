@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="",
         env_file=(
+            Path(__file__).resolve().parent.parent / "infra" / ".env",
+            Path.cwd() / "infra" / ".env",
             Path(__file__).resolve().parent.parent / ".env",
             Path.cwd() / ".env",
         ),

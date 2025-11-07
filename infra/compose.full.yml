@@ -19,7 +19,7 @@ services:
 
   # --- To be added later by Codex/devs ---
   db-stub:
-    build: ../db-stub
+    build: ../apps/db_stub
     container_name: rrfusion-db-stub
     env_file: .env
     ports:
@@ -29,17 +29,9 @@ services:
     networks:
       - rrfusion-net
 
-  mcp:
-    build: ../mcp
-    container_name: rrfusion-mcp
-    env_file: .env
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-      - db-stub
-    networks:
-      - rrfusion-net
+  # mcp host is now launched via `uv run fastmcp run --transport http src/rrfusion/mcp/host.py`
+  # once the DB stub + Redis are healthy. Add a dedicated service here if you
+  # later decide to containerize the FastMCP process again.
 
 networks:
   rrfusion-net:
