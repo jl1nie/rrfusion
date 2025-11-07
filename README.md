@@ -11,6 +11,7 @@ This scaffold includes:
 
 - [Quick start (Redis only)](#quick-start-redis-only)
 - [Next steps](#next-steps)
+- [FastMCP Host](#fastmcp-host)
 - [Usage Workflow](#usage-workflow)
 - [MCP Tool Reference](#mcp-tool-reference)
   - [`search_fulltext`](#search_fulltext)
@@ -36,6 +37,17 @@ docker ps  # confirm redis is up
 - Hand `AGENT.md` to Codex to scaffold the FastMCP server and DB stub
 - Keep large `(doc_id, score)` arrays in Redis; expose **handles** (run_id/cursor) to the LLM
 
+## FastMCP Host
+
+- `mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tools.register` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
+- Run it locally with HTTP transport:
+
+```bash
+uv run fastmcp run --transport http mcp/host.py -- --host 0.0.0.0 --port 3000
+```
+
+This exposes the same logic as the FastAPI service while letting any MCP-native client install the server directly.
+
 ## Usage Workflow
 
 The MCP loop always starts with independent lane searches, continues with fusion/frontier exploration, and then spends snippet budget.
@@ -53,7 +65,7 @@ Each section shows the FastMCP-style decoration you would give the tool in an ag
 ### `search_fulltext`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="search_fulltext", path="/mcp/search_fulltext", method="POST")
 async def search_fulltext(request: SearchRequest) -> SearchToolResponse:
@@ -73,7 +85,7 @@ The full-text lane maximizes recall by leaning on raw keyword scoring from the D
 ### `search_semantic`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="search_semantic", path="/mcp/search_semantic", method="POST")
 async def search_semantic(request: SearchRequest) -> SearchToolResponse:
@@ -93,7 +105,7 @@ This lane biases toward precision by using embedding similarity. Pair it with th
 ### `blend_frontier_codeaware`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="blend_frontier_codeaware", path="/mcp/blend_frontier_codeaware", method="POST")
 async def blend_frontier_codeaware(request: BlendRequest) -> BlendResponse:
@@ -113,7 +125,7 @@ Fusion consumes multiple lane handles, applies RRF plus optional code-aware boos
 ### `peek_snippets`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="peek_snippets", path="/mcp/peek_snippets", method="POST")
 async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
@@ -133,7 +145,7 @@ async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
 ### `get_snippets`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="get_snippets", path="/mcp/get_snippets", method="POST")
 async def get_snippets(request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
@@ -153,7 +165,7 @@ Use this tool after you already know which doc IDs matter. It skips pagination a
 ### `mutate_run`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="mutate_run", path="/mcp/mutate_run", method="POST")
 async def mutate_run(request: MutateRequest) -> MutateResponse:
@@ -173,7 +185,7 @@ async def mutate_run(request: MutateRequest) -> MutateResponse:
 ### `get_provenance`
 
 ```python
-from fastmcp import mcp
+from rrfusion.mcp.host import mcp
 
 @mcp.tools.register(name="get_provenance", path="/mcp/get_provenance", method="POST")
 async def get_provenance(request: ProvenanceRequest) -> ProvenanceResponse:
