@@ -36,6 +36,49 @@ docker compose -f infra/compose.dev.yml run --rm tests  # run pytest inside Dock
 
 Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.dev.yml down` when you're done; the `tests` service uses a separate Compose profile so it only executes when you invoke `docker compose -f infra/compose.dev.yml run --rm tests [command]`.
 
+> **Note:** The FastMCP host uses a single Streamable HTTP endpoint at `http://localhost:3000/mcp`.  
+> Both the POST calls and the streaming responses flow through this path, so point `MCP_BASE_URL` (inside or outside Docker) to `/mcp`—no `/sse` suffix is needed.
+
+## E2E testing & 10k stub data
+
+1. Copy `infra/env.example` to `infra/.env`, then set `STUB_MAX_RESULTS=10000` to force the DB stub to emit 10k docs per lane.  
+2. (Optional) Snapshot the deterministic dataset for later inspection:
+
+   ```bash
+   uv run python -m rrfusion.scripts.make_stub_dataset --count 10000 --lane fulltext --output tests/data/stub_docs_10k.jsonl
+   ```
+
+3. Bring up Redis, the stub, and MCP as usual:
+
+   ```bash
+   docker compose -f infra/compose.dev.yml up -d redis db-stub mcp
+   ```
+
+4. Execute the end-to-end suite, which exercises every MCP tool (search, blend, peek/get snippets, mutate, provenance) against the running stack:
+
+   ```bash
+   docker compose -f infra/compose.dev.yml run --rm tests pytest -m e2e
+   ```
+
+The tests automatically talk to `http://mcp:3000/mcp/...` inside the Compose network, validate Redis cardinalities for the 10k-result lanes, paginate snippets under byte budgets, and cover fault cases (missing runs / doc IDs).
+
+5. FastMCP transportの長大レスポンス検証は pytest の event loop から切り離した専用スクリプトで実施します。
+
+   ```bash
+   docker compose -f infra/compose.dev.yml run --rm tests \
+     python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
+   ```
+
+   このコマンドは streamable-http の `peek_snippets` を 20 KB 予算・60 件ウィンドウで叩き、実際の FastMCP スタックが大きなレスポンスでもタイムアウトしないことを確認します。
+
+3. When FastMCP/SSE まで含めずに `MCPService` と Redis/DB stub の組み合わせだけを確認したい場合は、統合テストを実行します:
+
+   ```bash
+   docker compose -f infra/compose.dev.yml run --rm tests pytest -m integration
+   ```
+
+   こちらは `search → blend → peek_snippets` のループを直接呼び出すため、SSE トランスポートと切り離して問題を切り分けられます。
+
 ## Next steps
 
 - Point your MCP server to `REDIS_URL` from `infra/.env`
@@ -148,6 +191,8 @@ async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
 ```
 
 `peek_snippets` is the budget-gated way to inspect the fused ordering. Keep requests under `PEEK_MAX_DOCS` and watch the `peek_cursor` if you need to paginate through the ranking.
+
+デフォルトでは 12 件・`["title","abst","claim"]`・各 160/480/320 文字に収める設定になっており、総バイト数が 12 KB（`PEEK_BUDGET_BYTES`）を超えないように自動的にスケールします。フィールドを増やしたり大きな `per_field_chars` を指定した場合でも、最低 1 件は返せるようにタイトル／抄録を優先して縮めます。
 
 ### `get_snippets`
 

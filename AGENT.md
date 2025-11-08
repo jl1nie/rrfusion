@@ -61,12 +61,17 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 | `MCP_PORT` | `3000` | MCP port |
 | `RRF_K` | `60` | RRF constant |
 | `PEEK_MAX_DOCS` | `100` | Snippet count cap |
-| `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap |
+| `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap (12 docs × title/abstract/claim 160/480/320 chars) |
+| `STUB_MAX_RESULTS` | `2000` | DB stub lane cap (raise to `10000` for load/E2E tests) |
+| `MCP_BASE_URL` | `http://mcp:3000/mcp` | Streamable HTTP endpoint (single `/mcp` route handles POST + streaming) |
 
 ### 2.2 Development workflow
 - Install [`uv`](https://github.com/astral-sh/uv`) and ensure it is on `PATH`.
 - From repo root: `uv sync --all-packages` to create/refresh the managed virtual env.
 - Run tests via `uv run pytest` (use `uv run pytest tests/<pkg>` for subsets).
+- Full-stack verification: `docker compose -f infra/compose.dev.yml run --rm tests pytest -m e2e` (dockerized Redis + stub + MCP must be running; set `STUB_MAX_RESULTS=10000` to exercise 10k-result lanes).
+- FastMCP streamable HTTP の長大レスポンステストは pytest 外のスクリプトで実行する:  
+  `docker compose -f infra/compose.dev.yml run --rm tests python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large`
 - Local services:
   ```bash
   uv run uvicorn apps.db_stub.app:app --host 0.0.0.0 --port 8080
@@ -80,6 +85,8 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
   docker compose -f infra/compose.dev.yml run --rm tests  # executes pytest inside Docker
   ```
   Run `docker compose -f infra/compose.dev.yml down` to stop the containers when finished.
+- Deterministic 10k-doc snapshots (useful for diffing or sharing fixtures):  
+  `uv run python -m rrfusion.scripts.make_stub_dataset --lane fulltext --count 10000 --output tests/data/stub_docs_10k.jsonl`
 
 ---
 
@@ -123,6 +130,7 @@ Provided by `infra/compose.dev.yml` (mirrored by `infra/compose.full.yml` for th
   }
   ```
   - `doc_id` values are deterministic random strings; `score` variance differs per lane.
+  - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
   Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...}, "claim_count": 3, "strategy": "head|match|mix" }`.  
   Returns `{ doc_id: { field: truncated_text } }`, respecting char caps.
@@ -133,6 +141,7 @@ Provided by `infra/compose.dev.yml` (mirrored by `infra/compose.full.yml` for th
 - A Compose-managed instance is available via `docker compose -f infra/compose.dev.yml up mcp`; it listens on `localhost:3000` for local development.
 - **Stub milestone behavior**: call DB stub for data, keep fusion in Python, mock frontier.
 - **Algorithm milestone behavior**: rely on Redis for per-lane scores, fusion, snippets; implement code-aware + family fold logic outlined in §6.
+- **E2E coverage**: `tests/e2e/test_mcp_tools.py` drives the live HTTP transport through every MCP tool (search, blend, peek/get snippets, mutate, provenance), including pagination, byte-budget enforcement, repeated blends, and common error cases.
 
 ---
 
@@ -253,6 +262,7 @@ Return snippets for a run, honoring doc count + byte budgets.
 **Implementation notes**
 - Stub milestone: request snippets from DB stub per doc ID and enforce caps client-side.
 - Algorithm milestone: favor cached snippets in Redis; if missing, backfill via stub. Budget enforcement stays the same.
+- Defaults: 12 docs / `["title","abst","claim"]` / 160・480・320 文字構成、総 12 KB 以内になるよう自動調整。`per_field_chars` や `budget_bytes` を増やしてもまずはタイトルと抄録を優先してフィットさせ、どうしても入らない場合は最小構成 (タイトルのみ 等) で 1 件返すフォールバックを行う。詳細確認が必要なら `limit` を小さく刻むか `get_snippets` を使用する。
 
 ---
 

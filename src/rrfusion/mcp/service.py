@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -37,6 +38,22 @@ from ..models import (
 from ..snippets import build_snippet_item, cap_by_budget
 from ..storage import RedisStorage
 from ..utils import hash_query
+
+logger = logging.getLogger(__name__)
+
+FIELD_ORDER = ["title", "abst", "claim", "description"]
+FIELD_DEFAULT_CHARS = {
+    "title": 160,
+    "abst": 480,
+    "claim": 320,
+    "description": 400,
+}
+FIELD_MIN_CHARS = {
+    "title": 80,
+    "abst": 240,
+    "claim": 160,
+    "description": 200,
+}
 
 
 class MCPService:
@@ -221,19 +238,61 @@ class MCPService:
 
         start = request.offset
         stop = request.offset + limit - 1
+        budget_limit = min(request.budget_bytes, self.settings.peek_budget_bytes)
+        effective_chars = _coerce_field_char_limits(request.fields, request.per_field_chars, budget_limit)
+        logger.debug(
+            "peek_snippets run=%s key=%s offset=%s limit=%s budget=%s",
+            request.run_id,
+            key,
+            start,
+            limit,
+            budget_limit,
+        )
         rows = await self.storage.zslice(key, start, stop, desc=True)
+        logger.debug("peek_snippets fetched %s rows from %s", len(rows), key)
         doc_ids = [doc_id for doc_id, _ in rows]
         doc_metadata = await self.storage.get_docs(doc_ids)
+        logger.debug("peek_snippets hydrated %s docs with metadata", len(doc_metadata))
 
         items = [
-            build_snippet_item(doc_id, doc_metadata.get(doc_id, {}), request.fields, request.per_field_chars)
+            build_snippet_item(doc_id, doc_metadata.get(doc_id, {}), request.fields, effective_chars)
             for doc_id in doc_ids
         ]
-        capped, used_bytes, truncated = cap_by_budget(items, min(request.budget_bytes, self.settings.peek_budget_bytes))
+        capped, used_bytes, truncated = cap_by_budget(items, budget_limit)
+        if not capped and doc_ids:
+            fallback = _fallback_snippet(
+                doc_ids[0],
+                doc_metadata.get(doc_ids[0], {}),
+                request.fields,
+                budget_limit,
+            )
+            if fallback:
+                capped = [fallback[0]]
+                used_bytes = fallback[1]
+                truncated = True
+        logger.debug(
+            "peek_snippets budget result items=%s used=%s truncated=%s",
+            len(capped),
+            used_bytes,
+            truncated,
+        )
         total_docs = await self.redis.zcard(key)
+        retrieved = len(doc_ids)
+        returned = len(capped)
+        if returned == 0 and truncated and retrieved > 0:
+            returned = retrieved
         cursor = None
-        if request.offset + len(capped) < total_docs:
-            cursor = str(request.offset + len(capped))
+        if returned > 0 and request.offset + returned < total_docs:
+            cursor = str(request.offset + returned)
+        elif returned == 0:
+            truncated = False
+        logger.debug(
+            "peek_snippets cursor=%s total_docs=%s retrieved=%s returned=%s",
+            cursor,
+            total_docs,
+            retrieved,
+            returned,
+        )
 
         return PeekSnippetsResponse(
             items=capped,
@@ -330,3 +389,58 @@ class MCPService:
 
 
 __all__ = ["MCPService"]
+
+
+def _coerce_field_char_limits(
+    fields: list[str],
+    requested: dict[str, int],
+    budget_limit: int,
+) -> dict[str, int]:
+    ordered: list[str] = [field for field in FIELD_ORDER if field in fields]
+    ordered.extend(field for field in fields if field not in ordered)
+    if not ordered:
+        return {}
+
+    chars: dict[str, int] = {}
+    total = 0
+    for field in ordered:
+        base = requested.get(field, FIELD_DEFAULT_CHARS.get(field, 200))
+        cap = FIELD_DEFAULT_CHARS.get(field, base)
+        value = min(base, cap)
+        floor = FIELD_MIN_CHARS.get(field, 32)
+        value = max(floor, value)
+        chars[field] = value
+        total += value
+
+    if total == 0:
+        return chars
+
+    overhead = 64 + 24 * len(chars)
+    allowance = max(budget_limit - overhead, 64)
+    if total <= allowance:
+        return chars
+
+    ratio = allowance / total
+    for field in chars:
+        floor = FIELD_MIN_CHARS.get(field, 32)
+        chars[field] = max(floor, int(chars[field] * ratio))
+    return chars
+
+
+def _fallback_snippet(
+    doc_id: str,
+    doc_meta: dict[str, Any] | None,
+    requested_fields: list[str],
+    budget_limit: int,
+) -> tuple[dict[str, Any], int] | None:
+    ordered = [field for field in FIELD_ORDER if field in requested_fields]
+    ordered.extend(field for field in requested_fields if field not in ordered)
+    payload = doc_meta or {}
+    for count in range(len(ordered), 0, -1):
+        subset = ordered[:count]
+        per_chars = {field: FIELD_MIN_CHARS.get(field, 32) for field in subset}
+        snippet = build_snippet_item(doc_id, payload, subset, per_chars)
+        encoded = len(json.dumps(snippet, ensure_ascii=False).encode("utf-8"))
+        if encoded <= budget_limit:
+            return snippet, encoded
+    return None
