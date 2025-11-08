@@ -13,7 +13,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - rrfusion-net
+      - mcp-net
     volumes:
       - redis-data:/data
 
@@ -38,7 +38,7 @@ services:
       timeout: 5s
       retries: 12
     networks:
-      - rrfusion-net
+      - mcp-net
 
   mcp:
     build:
@@ -52,12 +52,13 @@ services:
         "run",
         "--transport",
         "http",
-        "src/rrfusion/mcp/host.py",
-        "--",
+        "--path",
+        "/mcp",
         "--host",
         "0.0.0.0",
         "--port",
         "3000",
+        "src/rrfusion/mcp/host.py",
       ]
     ports:
       - "3000:3000"
@@ -67,7 +68,7 @@ services:
       db-stub:
         condition: service_healthy
     networks:
-      - rrfusion-net
+      - mcp-net
 
   tests:
     build:
@@ -81,11 +82,12 @@ services:
       db-stub:
         condition: service_healthy
     networks:
-      - rrfusion-net
+      - mcp-net
     profiles: ["tests"]
 
 networks:
-  rrfusion-net:
+  mcp-net:
+    name: ${MCP_NETWORK:-rrfusion-net}
     driver: bridge
 
 volumes:
