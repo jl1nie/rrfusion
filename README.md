@@ -9,7 +9,7 @@ This scaffold includes:
 - The MCP CLI image now uses a multi-stage build so dependency installation (pip) is cached between builds, making `cargo make build-cli`/`cargo make start-*` faster.
 - `infra/compose.prod.yml` — minimal Redis + MCP stack (no DB stub) suitable for production-like runs
 - `infra/compose.test.yml` — CI/closed-network stack with Redis, the DB stub, MCP, and the pytest runner.
-- `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
+ - `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
 - `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
 ## Contents
@@ -38,6 +38,8 @@ docker compose -f infra/compose.prod.yml ps  # confirm Redis and MCP are healthy
 Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.prod.yml down` when you're done. Use `infra/compose.stub.yml` whenever you need an isolated network that also brings up the DB stub and pytest runner (and want to talk to `rrfusion-mcp` from an external container):
 
 > **Network note:** set `MCP_EXTERNAL_NETWORK=<existing-network>` (e.g., `docker_default`) and `MCP_EXTERNAL_NETWORK_ENABLED=true` before running Compose to join an external network. Services still expose their own service names (`rrfusion-redis`, `rrfusion-db-stub`, `rrfusion-mcp`, `rrfusion-tests`) so the stack keeps resolving internally.
+
+`infra/.env` now exposes `DATA_TTL_HOURS=12` and `SNIPPET_TTL_HOURS=24` so run-level data expires after 12 h and snippet payloads after 24 h. You can override these values and the Redis memory knobs (`REDIS_MAX_MEMORY=2gb`, `REDIS_MAXMEMORY_POLICY=volatile-lru`) to tune eviction. Every Compose stack reads the same `.env`, so those limits apply consistently across stub/test/prod setups.
 
 Both `cargo make start-stub` and `scripts/run_e2e.sh` source `infra/.env` before calling Compose, so the stub stack always honors the `MCP_EXTERNAL_NETWORK`/`MCP_EXTERNAL_NETWORK_ENABLED` values you’ve defined there (no Makefile overrides apply). Leave them blank to let Compose build `rrfusion-test-net`, or point them at another attachable bridge if needed.
 

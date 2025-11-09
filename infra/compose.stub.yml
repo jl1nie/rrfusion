@@ -2,7 +2,14 @@ services:
   rrfusion-redis:
     image: redis:7.4-alpine
     container_name: rrfusion-tests-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "${REDIS_MAX_MEMORY:-2gb}"
+      - --maxmemory-policy
+      - "${REDIS_MAXMEMORY_POLICY:-volatile-lru}"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
