@@ -1,0 +1,48 @@
+services:
+  rrfusion-redis:
+    image: redis:7.4-alpine
+    container_name: rrfusion-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      rrfusion-net:
+        aliases:
+          - rrfusion
+          - redis
+    volumes:
+      - redis-data:/data
+
+  rrfusion-mcp:
+    build:
+      context: ..
+      dockerfile: apps/mcp-host/Dockerfile
+    container_name: rrfusion-mcp
+    env_file: .env
+    environment:
+      - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-localhost}
+    ports:
+      - "3000:3000"
+    depends_on:
+      rrfusion-redis:
+        condition: service_healthy
+    networks:
+      rrfusion-net:
+        aliases:
+          - rrfusion
+          - mcp
+    command: ["python", "src/rrfusion/mcp/host.py"]
+
+networks:
+  rrfusion-net:
+    driver: bridge
+    name: ${MCP_EXTERNAL_NETWORK:-rrfusion-net}
+
+volumes:
+  redis-data:
+    driver: local

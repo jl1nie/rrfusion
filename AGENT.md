@@ -7,7 +7,7 @@
 ## 0. Definition of Done
 
 ### 0.1 Randomized stub milestone
-- `docker compose -f infra/compose.dev.yml up --build redis db-stub mcp` starts **redis**, **db-stub**, and **mcp**; all services report healthy.
+- `docker compose -f infra/compose.test.yml up --build rrfusion-redis rrfusion-db-stub rrfusion-mcp` starts **redis**, **db-stub**, and **mcp**; all services report healthy.
 - MCP exposes every tool at `/mcp/...` with the exact signatures listed below.
 - `search_fulltext/semantic` call the DB stub, store results in Redis ZSETs, and return only handles (`run_id_lane`, cursors, metadata).
 - `blend_frontier_codeaware` performs baseline RRF in Python, returns fused IDs, a mocked frontier, code freqs, and run `recipe`.
@@ -38,8 +38,8 @@ rrfusion/
     db_stub/               # FastAPI stub entrypoint + Dockerfile
     mcp-host/              # FastMCP/test image Dockerfile + overrides
   infra/
-    compose.dev.yml        # dev/test stack for Redis + stub + MCP + pytest
-    compose.full.yml       # reference compose (future multi-service stack)
+    compose.prod.yml        # production-like stack for Redis + MCP (no DB stub)
+    compose.test.yml        # hermetic stack for Redis + DB stub + MCP + pytest
     env.example            # copy to infra/.env for Docker runs
     .env                   # local overrides (git-tracked placeholder)
   src/rrfusion/            # shared libs (config, storage, fusion, snippets, FastMCP host)
@@ -57,34 +57,35 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 |---|---|---|
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection string |
 | `DB_STUB_URL` | `http://db-stub:8080` | Randomized scores & snippets |
+| `DB_STUB_PORT` | `8080` | Host port for the DB stub (set to another value or omit if the port is in use). |
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `3000` | MCP port |
+| `MCP_SERVICE_HOST` | `localhost` | Hostname clients should use when connecting to MCP (`infra/.env` overrides this to `mcp` inside Docker). |
 | `RRF_K` | `60` | RRF constant |
 | `PEEK_MAX_DOCS` | `100` | Snippet count cap |
 | `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap (12 docs × title/abstract/claim 160/480/320 chars) |
 | `STUB_MAX_RESULTS` | `2000` | DB stub lane cap (raise to `10000` for load/E2E tests) |
-| `MCP_BASE_URL` | `http://mcp:3000/mcp` | Streamable HTTP endpoint (single `/mcp` route handles POST + streaming) |
 
 ### 2.2 Development workflow
 - Install [`uv`](https://github.com/astral-sh/uv`) and ensure it is on `PATH`.
 - From repo root: `uv sync --all-packages` to create/refresh the managed virtual env.
 - Run tests via `uv run pytest` (use `uv run pytest tests/<pkg>` for subsets).
-- Full-stack verification: `docker compose -f infra/compose.dev.yml run --rm tests pytest -m e2e` (dockerized Redis + stub + MCP must be running; set `STUB_MAX_RESULTS=10000` to exercise 10k-result lanes).
+- Full-stack verification: `docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m e2e` (dockerized Redis + stub + MCP must be running; set `STUB_MAX_RESULTS=10000` to exercise 10k-result lanes).
 - FastMCP streamable HTTP の長大レスポンステストは pytest 外のスクリプトで実行する:  
-  `docker compose -f infra/compose.dev.yml run --rm tests python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large`
+  `docker compose -f infra/compose.test.yml run --rm rrfusion-tests python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large`
 - Local services:
   ```bash
   uv run uvicorn apps.db_stub.app:app --host 0.0.0.0 --port 8080
   uv run fastmcp run --transport http src/rrfusion/mcp/host.py -- --host 0.0.0.0 --port 3000
   ```
-- Docker Compose (Redis + stub + pytest runner):
+  - Docker Compose (Redis + stub + pytest runner):
   ```bash
   cp infra/env.example infra/.env
-  docker compose -f infra/compose.dev.yml up -d redis db-stub mcp
-  docker compose -f infra/compose.dev.yml ps  # wait for mcp:3000/healthz
-  docker compose -f infra/compose.dev.yml run --rm tests  # executes pytest inside Docker
+  docker compose -f infra/compose.test.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp
+  docker compose -f infra/compose.test.yml ps  # wait for mcp:3000/healthz
+  docker compose -f infra/compose.test.yml run --rm rrfusion-tests  # executes pytest inside Docker
   ```
-  Run `docker compose -f infra/compose.dev.yml down` to stop the containers when finished.
+  Run `docker compose -f infra/compose.test.yml down` to stop the containers when finished.
 - Deterministic 10k-doc snapshots (useful for diffing or sharing fixtures):  
   `uv run python -m rrfusion.scripts.make_stub_dataset --lane fulltext --count 10000 --output tests/data/stub_docs_10k.jsonl`
 
@@ -104,7 +105,7 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 ## 4. Services
 
 ### 4.1 Redis
-Provided by `infra/compose.dev.yml` (mirrored by `infra/compose.full.yml` for the future multi-service stack). Ensure persistence via the `redis-data` volume and keep the health check green before hitting the MCP host.
+Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` volume and keep the health check green before hitting the MCP host.
 
 ### 4.2 DB Stub API (FastAPI)
 - `GET /healthz` → `{"status":"ok"}`.
@@ -136,9 +137,9 @@ Provided by `infra/compose.dev.yml` (mirrored by `infra/compose.full.yml` for th
   Returns `{ doc_id: { field: truncated_text } }`, respecting char caps.
 
 ### 4.3 MCP host (FastMCP)
-- Launch via `uv run fastmcp run --transport http src/rrfusion/mcp/host.py -- --host 0.0.0.0 --port 3000`.
+- Launch via `python src/rrfusion/mcp/host.py`; it uses `MCP_HOST`/`MCP_PORT` from `infra/.env`, starts the streamable HTTP transport at `/mcp`, and lets Compose share the same configuration (the Compose stack sets `MCP_SERVICE_HOST=mcp` so other containers target it by name).
 - The HTTP transport exposes the tools at `/mcp/...` (plus `/healthz`) just like the earlier FastAPI wrapper.
-- A Compose-managed instance is available via `docker compose -f infra/compose.dev.yml up mcp`; it listens on `localhost:3000` for local development.
+- A Compose-managed instance is available via `docker compose -f infra/compose.prod.yml up rrfusion-redis rrfusion-mcp`; it listens on `localhost:3000` for local development (use `infra/compose.test.yml` when you also want the DB stub).
 - **Stub milestone behavior**: call DB stub for data, keep fusion in Python, mock frontier.
 - **Algorithm milestone behavior**: rely on Redis for per-lane scores, fusion, snippets; implement code-aware + family fold logic outlined in §6.
 - **E2E coverage**: `tests/e2e/test_mcp_tools.py` drives the live HTTP transport through every MCP tool (search, blend, peek/get snippets, mutate, provenance), including pagination, byte-budget enforcement, repeated blends, and common error cases.
@@ -372,10 +373,10 @@ Return `recipe` and lineage for auditability.
 - **Smoke**: `search_fulltext` → `search_semantic` → `blend_frontier_codeaware` → `peek_snippets`. Assert run IDs exist, Redis ZSETs populated, frontier non-empty, snippet budgets respected.
 - **Unit**: fusion math, code boosts, snippet truncation, family folding.
 - **Integration**: `mutate_run` delta path, `get_provenance` lineage, Redis TTL behavior.
-- **Acceptance checklist**
-  - `docker compose -f infra/compose.dev.yml up -d redis db-stub mcp` starts Redis + services healthy.
-  - MCP reads `REDIS_URL`, writes lane ZSETs, and fuses via Redis.
-  - Frontier computation is server-side and reproducible via `recipe`.
-  - Snippet endpoints enforce doc count and byte caps.
++ **Acceptance checklist**
+-  - `docker compose -f infra/compose.test.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp` starts Redis + services healthy.
+-  - MCP reads `REDIS_URL`, writes lane ZSETs, and fuses via Redis.
+-  - Frontier computation is server-side and reproducible via `recipe`.
+-  - Snippet endpoints enforce doc count and byte caps.
 
 This AGENT.md is the single source of truth; the previous `AGENT_2.md`, `CODEX_BRIEF_STUB.md`, and `CODEX_BRIEF_ALGO.md` have been merged here.

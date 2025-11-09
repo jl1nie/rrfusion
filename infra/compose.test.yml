@@ -1,0 +1,92 @@
+services:
+  rrfusion-redis:
+    image: redis:7.4-alpine
+    container_name: rrfusion-tests-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      rrfusion-test-net:
+        aliases:
+          - rrfusion
+          - redis
+    volumes:
+      - redis-data-tests:/data
+
+  rrfusion-db-stub:
+    build:
+      context: ..
+      dockerfile: apps/db_stub/Dockerfile
+    container_name: rrfusion-tests-db-stub
+    env_file: .env
+    ports:
+      - "${DB_STUB_PORT:-8080}:8080"
+    depends_on:
+      rrfusion-redis:
+        condition: service_healthy
+    networks:
+      rrfusion-test-net:
+        aliases:
+          - rrfusion
+          - db-stub
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  rrfusion-mcp:
+    build:
+      context: ..
+      dockerfile: apps/mcp-host/Dockerfile
+    container_name: rrfusion-tests-mcp
+    env_file: .env
+    environment:
+      - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-mcp}
+    command: ["python", "src/rrfusion/mcp/host.py"]
+    depends_on:
+      rrfusion-redis:
+        condition: service_healthy
+      rrfusion-db-stub:
+        condition: service_healthy
+    networks:
+      rrfusion-test-net:
+        aliases:
+          - rrfusion
+          - mcp
+
+  rrfusion-tests:
+    build:
+      context: ..
+      dockerfile: apps/mcp-host/Dockerfile
+    container_name: rrfusion-tests-runner
+    env_file: .env
+    environment:
+      - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-mcp}
+    depends_on:
+      rrfusion-redis:
+        condition: service_healthy
+      rrfusion-db-stub:
+        condition: service_healthy
+    networks:
+      rrfusion-test-net:
+        aliases:
+          - rrfusion
+          - tests
+    profiles: ["tests"]
+
+networks:
+  rrfusion-test-net:
+    driver: bridge
+    name: ${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}
+
+volumes:
+  redis-data-tests:
+    driver: local

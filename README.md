@@ -6,8 +6,8 @@ This scaffold includes:
 - `AGENT.md` — the implementation brief/spec for Codex or any dev agent
 - `apps/db_stub` — FastAPI stub entrypoint plus a dedicated Dockerfile
 - `apps/mcp-host` — FastMCP/test image Dockerfile reused by Compose
-- `infra/compose.dev.yml` — dev/test stack for Redis, the stub, MCP, and Dockerized pytest
-- `infra/compose.full.yml` — reference Compose file for the eventual multi-service stack
+- `infra/compose.prod.yml` — minimal Redis + MCP stack (no DB stub) suitable for production-like runs
+- `infra/compose.test.yml` — hermetic stack with Redis, the DB stub, MCP, and the pytest runner
 - `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
 ## Contents
@@ -29,15 +29,21 @@ This scaffold includes:
 
 ```bash
 cp infra/env.example infra/.env
-docker compose -f infra/compose.dev.yml up -d redis db-stub mcp
-docker compose -f infra/compose.dev.yml ps  # confirm all services are healthy
-docker compose -f infra/compose.dev.yml run --rm tests  # run pytest inside Docker (optional)
+docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp
+docker compose -f infra/compose.prod.yml ps  # confirm Redis and MCP are healthy
 ```
 
-Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.dev.yml down` when you're done; the `tests` service uses a separate Compose profile so it only executes when you invoke `docker compose -f infra/compose.dev.yml run --rm tests [command]`.
+Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.prod.yml down` when you're done. Use `infra/compose.test.yml` whenever you need an isolated network that also brings up the DB stub and pytest runner:
 
-> **Note:** The FastMCP host uses a single Streamable HTTP endpoint at `http://localhost:3000/mcp`.  
-> Both the POST calls and the streaming responses flow through this path, so point `MCP_BASE_URL` (inside or outside Docker) to `/mcp`—no `/sse` suffix is needed.
+> **Network note:** set `MCP_EXTERNAL_NETWORK=<existing-network>` (e.g., `docker_default`) before running Compose to join that external network; services still advertise `redis`, `db-stub`, `mcp`, and `tests` aliases so the code inside the stack keeps working.
+
+```bash
+docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m smoke
+```
+
+> **Note:** The FastMCP host uses a single Streamable HTTP endpoint at `/mcp`, so both the POST calls and streaming responses flow through `http://{host}:{port}/mcp`. Set `MCP_SERVICE_HOST`/`MCP_PORT` (e.g., `localhost` in `infra/env.example`, `mcp` in the Compose `.env`) to control where clients should reach the service.
+
+> **Auth:** Set `MCP_API_TOKEN=<token>` in `infra/.env` (and restart the stack) to require `Authorization: Bearer <token>` on every FastMCP request.
 
 ## E2E testing & 10k stub data
 
@@ -51,52 +57,50 @@ Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `do
 3. Bring up Redis, the stub, and MCP as usual:
 
    ```bash
-   docker compose -f infra/compose.dev.yml up -d redis db-stub mcp
+   docker compose -f infra/compose.test.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp
    ```
+
+   If your host already binds port 8080, export `DB_STUB_PORT=<other>` (and keep `DB_STUB_URL=http://db-stub:8080`) before running Compose so only the host mapping shifts.
 
 4. Execute the end-to-end suite, which exercises every MCP tool (search, blend, peek/get snippets, mutate, provenance) against the running stack:
 
    ```bash
-   docker compose -f infra/compose.dev.yml run --rm tests pytest -m e2e
+   docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m e2e
    ```
 
 The tests automatically talk to `http://mcp:3000/mcp/...` inside the Compose network, validate Redis cardinalities for the 10k-result lanes, paginate snippets under byte budgets, and cover fault cases (missing runs / doc IDs).
 
-5. FastMCP transportの長大レスポンス検証は pytest の event loop から切り離した専用スクリプトで実施します。
+5. Run the large-response FastMCP transport test outside pytest’s event loop via the dedicated script:
 
    ```bash
-   docker compose -f infra/compose.dev.yml run --rm tests \
+   docker compose -f infra/compose.test.yml run --rm rrfusion-tests \
      python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
    ```
 
-   このコマンドは streamable-http の `peek_snippets` を 20 KB 予算・60 件ウィンドウで叩き、実際の FastMCP スタックが大きなレスポンスでもタイムアウトしないことを確認します。
+   This hits the streamable-http `peek_snippets` tool with a 20 KB budget and 60-item window to confirm the FastMCP stack can stream large payloads without timing out.
 
-3. When FastMCP/SSE まで含めずに `MCPService` と Redis/DB stub の組み合わせだけを確認したい場合は、統合テストを実行します:
+3. If you only need to verify `MCPService` together with Redis and the DB stub—without the streaming transport—run the integration suite:
 
    ```bash
-   docker compose -f infra/compose.dev.yml run --rm tests pytest -m integration
+   docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m integration
    ```
 
-   こちらは `search → blend → peek_snippets` のループを直接呼び出すため、SSE トランスポートと切り離して問題を切り分けられます。
-
-## Next steps
-
-- Point your MCP server to `REDIS_URL` from `infra/.env`
-- Hand `AGENT.md` to Codex to scaffold the FastMCP server and DB stub
-- Keep large `(doc_id, score)` arrays in Redis; expose **handles** (run_id/cursor) to the LLM
+   That flow exercises `search → blend → peek_snippets` directly, isolating problems from the SSE transport.
 
 ## FastMCP Host
 
-- `src/rrfusion/mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tools.register` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
-- Run it locally with HTTP transport:
+- `src/rrfusion/mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tool` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
+- Run it locally via the Python entry point:
 
 ```bash
-uv run fastmcp run --transport http src/rrfusion/mcp/host.py -- --host 0.0.0.0 --port 3000
+python src/rrfusion/mcp/host.py
 ```
+
+The script reads `MCP_HOST`/`MCP_PORT`, starts the streamable HTTP transport at `/mcp`, and honors `MCP_SERVICE_HOST` so other services can discover the reachable hostname.
 
 This exposes the same logic as the FastAPI service while letting any MCP-native client install the server directly.
 
-If you prefer Docker, `docker compose -f infra/compose.dev.yml up -d mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis, the DB stub, and the FastMCP host with port `3000` forwarded to your machine.
+If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis and the FastMCP host with port `3000` forwarded to your machine; add the DB stub by running `docker compose -f infra/compose.test.yml up -d rrfusion-db-stub` when you need it.
 
 ## Usage Workflow
 
@@ -117,7 +121,7 @@ Each section shows the FastMCP-style decoration you would give the tool in an ag
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="search_fulltext", path="/mcp/search_fulltext", method="POST")
+@mcp.tool(name="search_fulltext")
 async def search_fulltext(request: SearchRequest) -> SearchToolResponse:
     """
     signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
@@ -137,7 +141,7 @@ The full-text lane maximizes recall by leaning on raw keyword scoring from the D
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="search_semantic", path="/mcp/search_semantic", method="POST")
+@mcp.tool(name="search_semantic")
 async def search_semantic(request: SearchRequest) -> SearchToolResponse:
     """
     signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
@@ -157,7 +161,7 @@ This lane biases toward precision by using embedding similarity. Pair it with th
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="blend_frontier_codeaware", path="/mcp/blend_frontier_codeaware", method="POST")
+@mcp.tool(name="blend_frontier_codeaware")
 async def blend_frontier_codeaware(request: BlendRequest) -> BlendResponse:
     """
     signature: blend_frontier_codeaware(runs: list[BlendRunInput], weights: dict[str, float], rrf_k: int = 60, beta: float = 1.0, family_fold: bool = True, target_profile: dict[str, dict[str, float]] | None = None, top_m_per_lane: dict[str, int], k_grid: list[int], peek: PeekConfig | None = None)
@@ -177,7 +181,7 @@ Fusion consumes multiple lane handles, applies RRF plus optional code-aware boos
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="peek_snippets", path="/mcp/peek_snippets", method="POST")
+@mcp.tool(name="peek_snippets")
 async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
     """
     signature: peek_snippets(run_id: str, offset: int = 0, limit: int = 20, fields: list[str] = ..., per_field_chars: dict[str, int] = ..., claim_count: int = 3, strategy: Literal["head","match","mix"] = "head", budget_bytes: int = 12288)
@@ -199,7 +203,7 @@ async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="get_snippets", path="/mcp/get_snippets", method="POST")
+@mcp.tool(name="get_snippets")
 async def get_snippets(request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
     """
     signature: get_snippets(ids: list[str], fields: list[str] = ..., per_field_chars: dict[str, int] = ...)
@@ -219,7 +223,7 @@ Use this tool after you already know which doc IDs matter. It skips pagination a
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="mutate_run", path="/mcp/mutate_run", method="POST")
+@mcp.tool(name="mutate_run")
 async def mutate_run(request: MutateRequest) -> MutateResponse:
     """
     signature: mutate_run(run_id: str, delta: MutateDelta)
@@ -239,7 +243,7 @@ async def mutate_run(request: MutateRequest) -> MutateResponse:
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tools.register(name="get_provenance", path="/mcp/get_provenance", method="POST")
+@mcp.tool(name="get_provenance")
 async def get_provenance(request: ProvenanceRequest) -> ProvenanceResponse:
     """
     signature: get_provenance(run_id: str)
