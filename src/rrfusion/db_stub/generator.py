@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 from collections import Counter
 
@@ -44,6 +45,22 @@ CPC_CODES = [
     "B60L11/18",
 ]
 
+DEFAULT_MAX_RESULTS = 2000
+
+
+def _resolve_max_results() -> int:
+    raw = os.getenv("STUB_MAX_RESULTS")
+    if not raw:
+        return DEFAULT_MAX_RESULTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_RESULTS
+    return max(1, min(10_000, value))
+
+
+MAX_RESULTS = _resolve_max_results()
+
 
 def _seed(value: str) -> random.Random:
     digest = hashlib.sha1(value.encode("utf-8")).hexdigest()
@@ -78,7 +95,7 @@ def _doc_meta(doc_id: str) -> dict:
 
 
 def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchResponse:
-    limit = min(request.top_k, 2000)
+    limit = min(request.top_k, MAX_RESULTS)
     rng = _seed(f"{lane}:{request.q}:{limit}")
     seen: set[str] = set()
     items: list[SearchItem] = []

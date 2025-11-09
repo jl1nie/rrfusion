@@ -25,6 +25,7 @@ class RunnerConfig:
     stub_max_results: int
     timeout: float
     scenario: str
+    api_token: str | None
 
 
 async def _call_tool(
@@ -49,7 +50,12 @@ async def _get_run_meta(redis_client: Redis, run_id: str) -> dict[str, Any]:
 
 def _make_client(cfg: RunnerConfig) -> MCPClient:
     init_timeout = max(cfg.timeout / 3, 1.0)
-    return MCPClient(cfg.base_url, timeout=cfg.timeout, init_timeout=init_timeout)
+    return MCPClient(
+        cfg.base_url,
+        timeout=cfg.timeout,
+        init_timeout=init_timeout,
+        auth=cfg.api_token,
+    )
 
 
 async def _prepare_lane_runs(
@@ -388,9 +394,20 @@ async def run(cfg: RunnerConfig) -> None:
         raise ValueError(f"Unknown scenario: {cfg.scenario}")
 
 
+
+def _default_mcp_client_host() -> str:
+    return os.getenv("MCP_SERVICE_HOST") or os.getenv("MCP_HOST", "localhost")
+
+
+def _default_mcp_base_url() -> str:
+    host = _default_mcp_client_host()
+    port = os.getenv("MCP_PORT", "3000")
+    return f"http://{host}:{port}/mcp"
+
+
 def parse_args(argv: list[str] | None = None) -> RunnerConfig:
     parser = argparse.ArgumentParser(description="Run FastMCP E2E scenarios outside pytest.")
-    parser.add_argument("--base-url", default=os.getenv("MCP_BASE_URL", "http://localhost:3000/mcp"))
+    parser.add_argument("--base-url", default=_default_mcp_base_url())
     parser.add_argument("--redis-url", default=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     parser.add_argument(
         "--stub-max-results",
@@ -421,6 +438,11 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
         default="peek-large",
         help="Scenario to execute",
     )
+    parser.add_argument(
+        "--api-token",
+        default=os.getenv("MCP_API_TOKEN"),
+        help="Bearer token for MCP server authentication (defaults to MCP_API_TOKEN env).",
+    )
     args = parser.parse_args(argv)
     return RunnerConfig(
         base_url=args.base_url.rstrip("/"),
@@ -428,6 +450,7 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
         stub_max_results=args.stub_max_results,
         timeout=args.timeout,
         scenario=args.scenario,
+        api_token=args.api_token or None,
     )
 
 

@@ -43,6 +43,10 @@ target-version = "py310"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+markers = [
+  "e2e: end-to-end MCP + Redis tests",
+  "integration: MCP service integration without FastMCP transport"
+]
 
 [dependency-groups]
 dev = [

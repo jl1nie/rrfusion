@@ -101,10 +101,10 @@ class BlendResponse(BaseModel):
 class PeekSnippetsRequest(BaseModel):
     run_id: str
     offset: int = 0
-    limit: int = 20
-    fields: list[str] = Field(default_factory=lambda: ["title", "abst"])
+    limit: int = 12
+    fields: list[str] = Field(default_factory=lambda: ["title", "abst", "claim"])
     per_field_chars: dict[str, int] = Field(
-        default_factory=lambda: {"title": 120, "abst": 360, "claim": 280, "description": 480}
+        default_factory=lambda: {"title": 160, "abst": 480, "claim": 320, "description": 400}
     )
     claim_count: int = 3
     strategy: Literal["head", "match", "mix"] = "head"

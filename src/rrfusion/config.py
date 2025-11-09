@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     data_ttl_hours: int = Field(24)
     snippet_ttl_hours: int = Field(72)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field("INFO")
+    mcp_api_token: str | None = Field(default=None, alias="MCP_API_TOKEN")
 
     model_config = SettingsConfigDict(
         env_prefix="",
