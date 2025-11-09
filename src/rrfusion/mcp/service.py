@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -21,17 +21,21 @@ from ..fusion import (
     sort_scores,
 )
 from ..models import (
-    BlendRunInput,
     BlendRequest,
     BlendResponse,
+    BlendRunInput,
     DBSearchResponse,
+    Filters,
     GetSnippetsRequest,
+    MutateDelta,
     MutateRequest,
     MutateResponse,
+    PeekConfig,
     PeekSnippetsRequest,
     PeekSnippetsResponse,
     ProvenanceRequest,
     ProvenanceResponse,
+    RollupConfig,
     SearchRequest,
     SearchToolResponse,
 )
@@ -55,6 +59,10 @@ FIELD_MIN_CHARS = {
     "description": 200,
 }
 
+DEFAULT_WEIGHTS = {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5}
+DEFAULT_TOP_M_PER_LANE = {"fulltext": 10000, "semantic": 10000}
+DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
+
 
 class MCPService:
     def __init__(self, settings: Settings) -> None:
@@ -68,7 +76,23 @@ class MCPService:
         await self.redis.close()
 
     # ------------------------------------------------------------------ #
-    async def search_lane(self, lane: str, request: SearchRequest) -> SearchToolResponse:
+    async def search_lane(
+        self,
+        lane: str,
+        *,
+        q: str,
+        filters: Filters | None = None,
+        top_k: int = 1000,
+        rollup: RollupConfig | None = None,
+        budget_bytes: int = 4096,
+    ) -> SearchToolResponse:
+        request = SearchRequest(
+            q=q,
+            filters=filters,
+            top_k=top_k,
+            rollup=rollup,
+            budget_bytes=budget_bytes,
+        )
         response = await self.http.post(f"/search/{lane}", json=request.model_dump())
         response.raise_for_status()
         db_payload = DBSearchResponse.model_validate(response.json())
@@ -110,7 +134,31 @@ class MCPService:
         )
 
     # ------------------------------------------------------------------ #
-    async def blend(self, request: BlendRequest, *, parent_meta: dict[str, Any] | None = None) -> BlendResponse:
+    async def blend(
+        self,
+        *,
+        runs: list[BlendRunInput],
+        weights: dict[str, float] | None = None,
+        rrf_k: int = 60,
+        beta: float = 1.0,
+        family_fold: bool = True,
+        target_profile: dict[str, dict[str, float]] | None = None,
+        top_m_per_lane: dict[str, int] | None = None,
+        k_grid: list[int] | None = None,
+        peek: PeekConfig | None = None,
+        parent_meta: dict[str, Any] | None = None,
+    ) -> BlendResponse:
+        request = BlendRequest(
+            runs=runs,
+            weights=(weights or DEFAULT_WEIGHTS.copy()),
+            rrf_k=rrf_k,
+            beta=beta,
+            family_fold=family_fold,
+            target_profile=target_profile or {},
+            top_m_per_lane=(top_m_per_lane or DEFAULT_TOP_M_PER_LANE.copy()),
+            k_grid=(k_grid or DEFAULT_K_GRID.copy()),
+            peek=peek,
+        )
         if not request.runs:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="runs required")
 
@@ -223,7 +271,31 @@ class MCPService:
         )
 
     # ------------------------------------------------------------------ #
-    async def peek_snippets(self, request: PeekSnippetsRequest) -> PeekSnippetsResponse:
+    async def peek_snippets(
+        self,
+        *,
+        run_id: str,
+        offset: int = 0,
+        limit: int = 12,
+        fields: list[str] | None = None,
+        per_field_chars: dict[str, int] | None = None,
+        claim_count: int = 3,
+        strategy: Literal["head", "match", "mix"] = "head",
+        budget_bytes: int = 12_288,
+    ) -> PeekSnippetsResponse:
+        request_kwargs: dict[str, Any] = {
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit,
+            "claim_count": claim_count,
+            "strategy": strategy,
+            "budget_bytes": budget_bytes,
+        }
+        if fields is not None:
+            request_kwargs["fields"] = fields
+        if per_field_chars is not None:
+            request_kwargs["per_field_chars"] = per_field_chars
+        request = PeekSnippetsRequest(**request_kwargs)
         meta = await self.storage.get_run_meta(request.run_id)
         if not meta:
             raise HTTPException(status_code=404, detail="run not found")
@@ -302,7 +374,19 @@ class MCPService:
         )
 
     # ------------------------------------------------------------------ #
-    async def get_snippets(self, request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
+    async def get_snippets(
+        self,
+        *,
+        ids: list[str],
+        fields: list[str] | None = None,
+        per_field_chars: dict[str, int] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        request_kwargs: dict[str, Any] = {"ids": ids}
+        if fields is not None:
+            request_kwargs["fields"] = fields
+        if per_field_chars is not None:
+            request_kwargs["per_field_chars"] = per_field_chars
+        request = GetSnippetsRequest(**request_kwargs)
         doc_metadata = await self.storage.get_docs(request.ids)
         response: dict[str, dict[str, str]] = {}
         for doc_id in request.ids:
@@ -317,7 +401,8 @@ class MCPService:
         return response
 
     # ------------------------------------------------------------------ #
-    async def mutate_run(self, request: MutateRequest) -> MutateResponse:
+    async def mutate_run(self, *, run_id: str, delta: MutateDelta) -> MutateResponse:
+        request = MutateRequest(run_id=run_id, delta=delta)
         meta = await self.storage.get_run_meta(request.run_id)
         if not meta or meta.get("run_type") != "fusion":
             raise HTTPException(status_code=404, detail="fusion run not found")
@@ -358,7 +443,18 @@ class MCPService:
             peek=None,
         )
 
-        response = await self.blend(blend_request, parent_meta=meta)
+        response = await self.blend(
+            runs=blend_request.runs,
+            weights=blend_request.weights,
+            rrf_k=blend_request.rrf_k,
+            beta=blend_request.beta,
+            family_fold=blend_request.family_fold,
+            target_profile=blend_request.target_profile,
+            top_m_per_lane=blend_request.top_m_per_lane,
+            k_grid=blend_request.k_grid,
+            peek=blend_request.peek,
+            parent_meta=meta,
+        )
         delta_payload = request.delta.model_dump(exclude_none=True)
         response.recipe["delta"] = delta_payload
 

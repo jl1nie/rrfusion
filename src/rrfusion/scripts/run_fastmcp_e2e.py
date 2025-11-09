@@ -35,7 +35,7 @@ async def _call_tool(
     *,
     timeout: float,
 ) -> dict[str, Any]:
-    result = await client.call_tool(name, {"request": payload}, timeout=timeout)
+    result = await client.call_tool(name, payload, timeout=timeout)
     return result.structured_content
 
 
@@ -69,6 +69,8 @@ async def _prepare_lane_runs(
         "q": "fastmcp fusion scenario",
         "top_k": cfg.stub_max_results,
         "budget_bytes": 4096,
+        "filters": None,
+        "rollup": None,
     }
     lane_runs: dict[str, dict[str, Any]] = {}
     for lane in ("fulltext", "semantic"):
@@ -102,6 +104,7 @@ async def _prepare_fusion_run(
         "target_profile": {},
         "top_m_per_lane": {"fulltext": cfg.stub_max_results, "semantic": cfg.stub_max_results},
         "k_grid": [10, 50, 100, 200, 500],
+        "peek": None,
     }
     fusion = await _call_tool(client, "blend_frontier_codeaware", blend_payload, timeout=cfg.timeout)
     return fusion
@@ -195,7 +198,7 @@ async def scenario_mutate_missing_run(cfg: RunnerConfig) -> None:
         try:
             await client.call_tool(
                 "mutate_run",
-                {"request": {"run_id": "fusion-deadbeef", "delta": {"weights": {"semantic": 1.1}}}},
+                {"run_id": "fusion-deadbeef", "delta": {"weights": {"semantic": 1.1}}},
                 timeout=cfg.timeout,
             )
         except ToolError:
