@@ -137,6 +137,21 @@ If you prefer to orchestrate via `cargo make`, the provided `Makefile.toml` defi
 
 For production-like validation you can also call `cargo make start-prod`/`cargo make stop-prod`, which spin up/down `infra/compose.prod.yml` (Redis + MCP) using the same `.env` so the host port and service variables stay consistent.
 
+## Configuration
+
+The redis-backed storage is tuned through `.env` / `infra/env.example`. Key knobs:
+
+```
+DATA_TTL_HOURS=12
+SNIPPET_TTL_HOURS=24
+REDIS_MAX_MEMORY=2gb
+REDIS_MAXMEMORY_POLICY=volatile-lru
+```
+
+- `DATA_TTL_HOURS` controls how long lane/fusion runs stay in Redis (default 12 hours).  
+- `SNIPPET_TTL_HOURS` keeps snippet payloads for 24 hours by default.  
+- `REDIS_MAX_MEMORY` / `REDIS_MAXMEMORY_POLICY` cap Redis at 2 GB and prefer evicting expired data (`volatile-lru`). All Compose stacks pass these values to `redis-server` via command-line, so just change `.env` to tune both local stub/test and CI/prod setups.  
+
 Because `cargo make` reuses the same commands locally and in CI, you can run `cargo make ci` on your workstation to exercise the whole stack exactly as GitHub Actions would.
 
 ## Usage Workflow
