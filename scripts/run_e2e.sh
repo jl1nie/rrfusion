@@ -27,10 +27,14 @@ COMPOSE_FILE="infra/compose.test.yml"
 
 docker compose -f "$COMPOSE_FILE" down >/dev/null 2>&1 || true
 # Rebuild & recreate to ensure fresh images
-docker compose -f "$COMPOSE_FILE" build rrfusion-tests
+docker build -f apps/mcp-host/Dockerfile -t infra-rrfusion-tests .
 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp
-
-docker compose -f "$COMPOSE_FILE" run --rm rrfusion-tests pytest -m e2e
+NETWORK_NAME="${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}"
+until docker run --rm --network "$NETWORK_NAME" busybox nslookup "${MCP_SERVICE_HOST}" >/dev/null 2>&1; do
+  sleep 1
+done
+docker run --rm --network "$NETWORK_NAME" --env-file infra/.env infra-rrfusion-tests pytest -m integration
+docker run --rm --network "$NETWORK_NAME" --env-file infra/.env infra-rrfusion-tests pytest -m e2e
 
 RESULT=$?
 docker compose -f "$COMPOSE_FILE" down

@@ -52,27 +52,13 @@ services:
       rrfusion-test-net:
         aliases:
           - ${MCP_SERVICE_HOST:-rrfusion-mcp}
+          - rrfusion-tests-mcp
 
-  rrfusion-tests:
-    build:
-      context: ..
-      dockerfile: apps/mcp-host/Dockerfile
-    container_name: rrfusion-tests-runner
-    env_file: .env
-    environment:
-      - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-mcp}
-    depends_on:
-      rrfusion-redis:
-        condition: service_healthy
-      rrfusion-db-stub:
-        condition: service_healthy
-    networks:
-      - rrfusion-test-net
-    profiles: ["tests"]
 
 networks:
   rrfusion-test-net:
     driver: bridge
+    attachable: true
     name: ${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}
     external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 

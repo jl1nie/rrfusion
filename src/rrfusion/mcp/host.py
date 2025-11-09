@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
-from fastmcp import FastMCP, Prompt
+from fastmcp import FastMCP
 from starlette.middleware import Middleware as StarletteMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -120,6 +120,69 @@ def _require_service() -> MCPService:
     if _service is None:
         raise RuntimeError("MCP service is not initialized")
     return _service
+
+_HANDBOOK = """# RRFusion MCP Handbook (v1.0)
+
+**Mission**: Maximize Fβ (default β=1) for prior-art retrieval with multi-lane search.
+**Transport**: HTTP/streamable-http at `/{base_path}`.
+**Auth**: Bearer token required if configured.
+
+## Pipeline
+1) Normalize and expand query.
+2) Run `search_fulltext` + `search_semantic`.
+3) Fuse via `blend_frontier_codeaware`.
+4) Preview with `peek_snippets`, finalize with `get_snippets`.
+5) Adjust via `mutate_run`, audit via `get_provenance`.
+
+## Tool notes
+- `search_fulltext`: high recall, generous `top_k`, use IPC/CPC filters.
+- `search_semantic`: concise query, mirror filters if drift.
+- `blend_frontier_codeaware`: tune weights/β/family_fold; reuse `mutate_run` for tweaks.
+- `peek_snippets`/`get_snippets`: budget per-field caps, `peek` first then `get`.
+- `mutate_run`: adjust weights/rrf_k/beta/delta.
+- `get_provenance`: capture history.
+
+## Metrics
+- emit lane/fusion stats, watch `hit@k`, `p@k`, `r@k`, `f_beta@k`.
+- retry on 429/5xx with backoff.
+
+## Security
+- Avoid sending secrets; client supplies Bearer token.
+"""
+
+_TOOL_RECIPES = """# Tool Recipes & Examples
+
+## search_fulltext
+Good: `{"q":"HARQ", "top_k":500}`
+Bad: `{"q":"HARQ","top_k":1}`
+
+## search_semantic
+Good: `{"q":"URLLC contention", "top_k":400}`
+
+## blend_frontier_codeaware
+Good: `{"runs":[...], "weights":{"recall":1.0,"precision":1.0}, "rrf_k":60}`
+
+## peek_snippets
+`{"run_id":"fusion-1","offset":0,"limit":20,"budget_bytes":12288}`
+
+## get_snippets
+`{"ids":["US2023A1"],"fields":["title","abst"]}`
+
+## mutate_run
+`{"run_id":"fusion-1","delta":{"weights":{"precision":1.2}}}`
+
+## get_provenance
+`{"run_id":"fusion-1"}`
+"""
+
+@mcp.prompt(name="RRFusion MCP Handbook")
+def _prompt_handbook() -> str:
+    return _HANDBOOK.format(base_path="mcp")
+
+
+@mcp.prompt(name="Tool Recipes")
+def _prompt_recipes() -> str:
+    return _TOOL_RECIPES
 
 
 # ============================
@@ -307,183 +370,6 @@ async def get_provenance(run_id: str) -> ProvenanceResponse:
     """
     return await _require_service().provenance(run_id)
 
-
-# ============================
-# Prompts
-# ============================
-
-_HANDBOOK = """# RRFusion MCP Handbook (v1.0)
-
-**Mission**: Maximize Fβ (default β=1) for prior-art retrieval with multi-lane search (fulltext + semantic) and code-aware fusion.  
-**Transport**: HTTP/streamable-http at `/{base_path}` (default `/mcp`).  
-**Auth**: Bearer token is required if configured on the server.
-
-## 1. Pipeline (Agent-facing)
-1) Normalize and expand query (synonyms / acronyms)
-2) Run lanes in parallel
-   - `search_fulltext` → high recall on keyword evidence
-   - `search_semantic` → embedding-driven coverage on-spec
-3) Fuse with `blend_frontier_codeaware` (RRF with β control)
-4) Peek text budget with `peek_snippets` (head/match/mix)
-5) Shortlist and fetch payloads via `get_snippets`
-6) If metrics unsatisfactory → `mutate_run` (weights/rrf_k/β)
-7) Persist trail with `get_provenance`
-
-## 2. Lane Tools (I/O + Guidance)
-### `search_fulltext`
-- **Args**: `q`, `filters?`, `top_k=1000`, `rollup?`, `budget_bytes=4096`
-- **Tips**: Prefer generous `top_k` (200–1000) for recall. Use IPC/FI/CPC in `filters.must` to restrain drift.
-
-### `search_semantic`
-- **Args**: `q`, `filters?`, `top_k=1000`, `rollup?`, `budget_bytes=4096`
-- **Tips**: Keep query concise (≤256 chars). When drift risk, mirror the same filters as fulltext.
-
-## 3. Fusion
-### `blend_frontier_codeaware`
-- **Args**: `runs[]`, `weights?`, `rrf_k=60`, `beta=1.0`, `family_fold=True`, `target_profile?`, `top_m_per_lane?`, `k_grid?`, `peek?`
-- **Heuristics**:
-  - Start with equal weights; tune via `mutate_run`.
-  - Increase `beta` to favor recall; lower to favor precision.
-  - `family_fold=True` to avoid family duplicates in top-K.
-
-## 4. Snippet Budgeting
-### `peek_snippets`
-- **Args**: `run_id`, `offset=0`, `limit=12`, `fields?`, `per_field_chars?`, `claim_count=3`, `strategy=head|match|mix`, `budget_bytes=12288`
-- **Patterns**:
-  - `head` for abstracts/titles; `match` to focus on query highlights; `mix` to balance.
-  - Use `per_field_chars` to cap long fields deterministically.
-
-### `get_snippets`
-- **Args**: `ids[]`, `fields?`, `per_field_chars?`
-- **Note**: Independent of fusion cursor; safe for random access after shortlist.
-
-## 5. Iterative Tuning
-### `mutate_run`
-- **Args**: `run_id`, `delta` (weights / rrf_k / beta / filters)
-- **Loop**: Adjust → re-peek → compare P/R/Fβ at fixed K.
-
-### `get_provenance`
-- **Args**: `run_id`
-- **Use**: Audit lineage, reproduce settings, checkpoint good frontiers.
-
-## 6. Metrics & Logging
-- Emit: `lane.top_k`, `fuse.rrf_k`, `beta`, `hit@k`, `p@k`, `r@k`, `f_beta@k`
-- Backoff: retry on 429/5xx with exponential backoff (≤5 attempts).
-
-## 7. Security
-- Never send PII/secret content in queries. Server injects API keys for downstream systems. Client provides **Bearer** token only.
-
-"""
-
-_TOOL_RECIPES = """# Tool Recipes & Few-shot (v1.0)
-
-## search_fulltext — examples
-**Good**
-```json
-{
-  "q": "grant-free uplink HARQ process scheduling",
-  "filters": {"must": [{"field":"ipc","op":"in","value":["H04W72/04","H04L1/18"]}]},
-  "top_k": 500
-}
-```
-**Bad**
-```json
-{"q":"HARQ","top_k":10}
-```
-
-## search_semantic — examples
-**Good**
-```json
-{
-  "q": "contention-based uplink, early HARQ feedback for URLLC",
-  "filters": {"must":[{"field":"cpc","op":"in","value":["H04W72/12"]}]},
-  "top_k": 400
-}
-```
-
-## blend_frontier_codeaware — examples
-**Equal-weight fuse**
-```json
-{
-  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
-  "rrf_k": 60,
-  "beta": 1.0,
-  "family_fold": true
-}
-```
-**Favor codes**
-```json
-{
-  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
-  "target_profile": {"ipc":{"H04W72/04":1.2,"H04L1/18":1.0}},
-  "rrf_k": 50
-}
-```
-
-## peek_snippets — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "offset":0,
-  "limit":12,
-  "strategy":"mix",
-  "budget_bytes": 12288
-}
-```
-
-## get_snippets — examples
-```json
-{
-  "ids":["US2023XXXXXXA1","EPXXXXXXXB1"],
-  "fields":["title","abstract","claims"],
-  "per_field_chars":{"claims":1200}
-}
-```
-
-## mutate_run — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "delta":{"weights":{"semantic":1.2,"fulltext":1.0},"rrf_k":50,"beta":1.2}
-}
-```
-
-## get_provenance — example
-```json
-{"run_id":"FUSION_123"}
-```
-"""
-
-@mcp.prompt_list
-def prompt_list():
-    return [
-        Prompt(
-            name="RRFusion MCP Handbook",
-            description="End-to-end pipeline, parameter guidance, metrics, and security.",
-            tags=["handbook", "retrieval", "fusion", "f1"]
-        ),
-        Prompt(
-            name="Tool Recipes",
-            description="Per-tool signatures with good/bad examples and few-shot JSON.",
-            tags=["recipes", "examples"]
-        ),
-    ]
-
-
-@mcp.prompt_get
-def prompt_get(name: str):
-    if name == "RRFusion MCP Handbook":
-        # inject base path info for readability
-        base_path = "/mcp"
-        return _HANDBOOK.format(base_path=base_path)
-    if name == "Tool Recipes":
-        return _TOOL_RECIPES
-    raise ValueError(f"unknown prompt: {name}")
-
-
-# ============================
-# Custom routes
-# ============================
 
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
 async def health(_: Request) -> JSONResponse:

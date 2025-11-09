@@ -33,7 +33,6 @@ from ..models import (
     PeekConfig,
     PeekSnippetsRequest,
     PeekSnippetsResponse,
-    ProvenanceRequest,
     ProvenanceResponse,
     RollupConfig,
     SearchRequest,
@@ -148,6 +147,8 @@ class MCPService:
         peek: PeekConfig | None = None,
         parent_meta: dict[str, Any] | None = None,
     ) -> BlendResponse:
+        if not runs:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="runs required")
         request = BlendRequest(
             runs=runs,
             weights=(weights or DEFAULT_WEIGHTS.copy()),
