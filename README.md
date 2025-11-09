@@ -77,7 +77,7 @@ The tests automatically talk to `http://mcp:3000/mcp/...` inside the Compose net
      python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
    ```
 
-   This hits the streamable-http `peek_snippets` tool with a 20 KB budget and 60-item window to confirm the FastMCP stack can stream large payloads without timing out.
+    This hits the streamable-http `peek_snippets` tool with a 20 KB budget and 60-item window to confirm the FastMCP stack can stream large payloads without timing out.
 
 3. If you only need to verify `MCPService` together with Redis and the DB stub—without the streaming transport—run the integration suite:
 
@@ -196,7 +196,7 @@ async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
 
 `peek_snippets` is the budget-gated way to inspect the fused ordering. Keep requests under `PEEK_MAX_DOCS` and watch the `peek_cursor` if you need to paginate through the ranking.
 
-デフォルトでは 12 件・`["title","abst","claim"]`・各 160/480/320 文字に収める設定になっており、総バイト数が 12 KB（`PEEK_BUDGET_BYTES`）を超えないように自動的にスケールします。フィールドを増やしたり大きな `per_field_chars` を指定した場合でも、最低 1 件は返せるようにタイトル／抄録を優先して縮めます。
+By default it returns up to 12 items with `["title","abst","claim"]`, clamping each field to 160/480/320 characters so the total size stays under 12 KB (`PEEK_BUDGET_BYTES`). If you request more fields or larger `per_field_chars`, it still guarantees at least one result by progressively truncating title/abstract text first.
 
 ### `get_snippets`
 
