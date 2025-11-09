@@ -26,13 +26,26 @@ script = [
 description = "Start the stub-based stack (for local E2E testing)."
 dependencies = ["build-cli"]
 script = [
-    "bash -c 'set -a && source infra/.env && MCP_EXTERNAL_NETWORK=rrfusion-test-net && MCP_EXTERNAL_NETWORK_ENABLED=false && set +a && docker compose -f infra/compose.stub.yml up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp'"
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.stub.yml up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp'"
 ]
 
 [tasks.stop-stub]
 description = "Stop the stub-based stack."
 script = [
     "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.stub.yml down'"
+]
+
+[tasks.start-prod]
+description = "Start the production-like Redis + MCP stack."
+dependencies = ["build-cli"]
+script = [
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.prod.yml up -d --force-recreate --build rrfusion-redis rrfusion-mcp'"
+]
+
+[tasks.stop-prod]
+description = "Stop the production-like stack."
+script = [
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.prod.yml down'"
 ]
 
 # --- テストタスク ---

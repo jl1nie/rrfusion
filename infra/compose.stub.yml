@@ -59,8 +59,6 @@ services:
 
 networks:
   rrfusion-test-net:
-    driver: bridge
-    attachable: true
     name: ${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}
     external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 

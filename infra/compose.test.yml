@@ -66,9 +66,7 @@ services:
 networks:
   rrfusion-ci-net:
     driver: bridge
-    name: ${MCP_EXTERNAL_NETWORK:-rrfusion-ci-net}
-    external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
-
+    
 volumes:
   redis-data-tests:
     driver: local

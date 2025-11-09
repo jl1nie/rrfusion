@@ -36,7 +36,6 @@ services:
 
 networks:
   rrfusion-net:
-    driver: bridge
     name: ${MCP_EXTERNAL_NETWORK:-rrfusion-net}
     external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 

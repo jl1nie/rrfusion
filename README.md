@@ -38,6 +38,8 @@ Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `do
 
 > **Network note:** set `MCP_EXTERNAL_NETWORK=<existing-network>` (e.g., `docker_default`) and `MCP_EXTERNAL_NETWORK_ENABLED=true` before running Compose to join an external network. Services still expose their own service names (`rrfusion-redis`, `rrfusion-db-stub`, `rrfusion-mcp`, `rrfusion-tests`) so the stack keeps resolving internally.
 
+Both `cargo make start-stub` and `scripts/run_e2e.sh` source `infra/.env` before calling Compose, so the stub stack always honors the `MCP_EXTERNAL_NETWORK`/`MCP_EXTERNAL_NETWORK_ENABLED` values you’ve defined there (no Makefile overrides apply). Leave them blank to let Compose build `rrfusion-test-net`, or point them at another attachable bridge if needed.
+
 ```bash
 docker compose -f infra/compose.stub.yml run --rm rrfusion-tests pytest -m smoke
 ```
@@ -129,6 +131,8 @@ If you prefer to orchestrate via `cargo make`, the provided `Makefile.toml` defi
 3. `cargo make integration` — start the stub stack, run `pytest -m integration`, and shut it down.
 4. `cargo make e2e` — start the stub stack, run `pytest -m e2e`, and shut it down.
 5. `cargo make ci` — sequentially runs lint, unit, integration, and e2e under a single invocation.
+
+For production-like validation you can also call `cargo make start-prod`/`cargo make stop-prod`, which spin up/down `infra/compose.prod.yml` (Redis + MCP) using the same `.env` so the host port and service variables stay consistent.
 
 Because `cargo make` reuses the same commands locally and in CI, you can run `cargo make ci` on your workstation to exercise the whole stack exactly as GitHub Actions would.
 
