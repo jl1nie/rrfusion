@@ -1,7 +1,7 @@
 services:
   rrfusion-redis:
     image: redis:7.4-alpine
-    container_name: rrfusion-tests-redis-ci
+    container_name: rrfusion-tests-redis
     command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -9,7 +9,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - rrfusion-ci-net
+      - rrfusion-test-net
     volumes:
       - redis-data-tests:/data
 
@@ -17,13 +17,13 @@ services:
     build:
       context: ..
       dockerfile: apps/db_stub/Dockerfile
-    container_name: rrfusion-tests-db-stub-ci
+    container_name: rrfusion-tests-db-stub
     env_file: .env
     depends_on:
       rrfusion-redis:
         condition: service_healthy
     networks:
-      - rrfusion-ci-net
+      - rrfusion-test-net
     healthcheck:
       test:
         [
@@ -38,10 +38,12 @@ services:
     build:
       context: ..
       dockerfile: apps/mcp-host/Dockerfile
-    container_name: ${MCP_SERVICE_HOST:-rrfusion-tests-mcp-ci}
+    container_name: ${MCP_SERVICE_HOST:-rrfusion-tests-mcp}
     env_file: .env
     environment:
       - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-mcp}
+    ports:
+      - "${MCP_PORT:-3000}:${MCP_PORT:-3000}"
     command: ["python", "src/rrfusion/mcp/host.py"]
     depends_on:
       rrfusion-redis:
@@ -49,24 +51,17 @@ services:
       rrfusion-db-stub:
         condition: service_healthy
     networks:
-      - rrfusion-ci-net
+      rrfusion-test-net:
+        aliases:
+          - ${MCP_SERVICE_HOST:-rrfusion-mcp}
+          - rrfusion-tests-mcp
 
-  rrfusion-tests:
-    image: infra-rrfusion-tests
-    container_name: rrfusion-tests-runner
-    env_file: .env
-    networks:
-      - rrfusion-ci-net
-    depends_on:
-      - rrfusion-mcp
-      - rrfusion-db-stub
-    # Keep container alive so we can run commands inside it
-    entrypoint: ["tail", "-f", "/dev/null"]
 
 networks:
-  rrfusion-ci-net:
+  rrfusion-test-net:
     driver: bridge
-    name: ${MCP_EXTERNAL_NETWORK:-rrfusion-ci-net}
+    attachable: true
+    name: ${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}
     external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 
 volumes:

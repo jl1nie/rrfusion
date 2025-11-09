@@ -12,18 +12,14 @@ if [[ -f infra/.env ]]; then
 fi
 
 MCP_SERVICE_HOST="${MCP_SERVICE_HOST:-rrfusion-mcp}"
-MCP_EXTERNAL_NETWORK="${MCP_EXTERNAL_NETWORK:-}"
-MCP_EXTERNAL_NETWORK_ENABLED="${MCP_EXTERNAL_NETWORK_ENABLED:-}"
-
-if [[ -n "$MCP_EXTERNAL_NETWORK" && -z "$MCP_EXTERNAL_NETWORK_ENABLED" ]]; then
-  MCP_EXTERNAL_NETWORK_ENABLED=true
-fi
+MCP_EXTERNAL_NETWORK="${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}"
+MCP_EXTERNAL_NETWORK_ENABLED=false
 
 export MCP_SERVICE_HOST
 export MCP_EXTERNAL_NETWORK
 export MCP_EXTERNAL_NETWORK_ENABLED
 
-COMPOSE_FILE="infra/compose.test.yml"
+COMPOSE_FILE="infra/compose.stub.yml"
 
 docker compose -f "$COMPOSE_FILE" down >/dev/null 2>&1 || true
 # Rebuild & recreate to ensure fresh images
