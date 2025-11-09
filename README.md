@@ -6,6 +6,7 @@ This scaffold includes:
 - `AGENT.md` — the implementation brief/spec for Codex or any dev agent
 - `apps/db_stub` — FastAPI stub entrypoint plus a dedicated Dockerfile
 - `apps/mcp-host` — FastMCP/test image Dockerfile reused by Compose
+- The MCP CLI image now uses a multi-stage build so dependency installation (pip) is cached between builds, making `cargo make build-cli`/`cargo make start-*` faster.
 - `infra/compose.prod.yml` — minimal Redis + MCP stack (no DB stub) suitable for production-like runs
 - `infra/compose.test.yml` — CI/closed-network stack with Redis, the DB stub, MCP, and the pytest runner.
 - `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
