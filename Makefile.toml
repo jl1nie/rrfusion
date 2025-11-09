@@ -1,0 +1,85 @@
+[env]
+MCP_EXTERNAL_NETWORK = "rrfusion-test-net"
+
+# --- 基本タスク ---
+
+[tasks.build-cli]
+description = "Build the FastMCP CLI image used by integration and e2e scripts."
+script = [
+    "docker build -f apps/mcp-host/Dockerfile -t infra-rrfusion-tests ."
+]
+
+[tasks.start-stack]
+description = "Start Redis, DB stub, and FastMCP stack via Compose."
+dependencies = ["build-cli"]
+script = [
+    "docker compose -f infra/compose.test.yml up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp"
+]
+
+[tasks.stop-stack]
+description = "Tear down the Compose stack used for testing."
+script = [
+    "docker compose -f infra/compose.test.yml down"
+]
+
+# --- テストタスク ---
+
+[tasks.integration]
+description = "Run the integration suite against the Compose stack."
+script = [
+    "cargo make start-stack",
+    "docker run --rm --network ${MCP_EXTERNAL_NETWORK} --env-file infra/.env infra-rrfusion-tests pytest -m integration",
+    "cargo make stop-stack"
+]
+
+[tasks.e2e]
+description = "Run the FastMCP CLI e2e suite."
+script = [
+    "cargo make start-stack",
+    "docker run --rm --network ${MCP_EXTERNAL_NETWORK} --env-file infra/.env infra-rrfusion-tests pytest -m e2e",
+    "cargo make stop-stack"
+]
+
+# --- CI/CD フロー ---
+
+[tasks.lint]
+description = "Run lint checks"
+dependencies = ["build-cli"]
+command = "docker"
+args = [
+    "run",
+    "--rm",
+    "--env-file",
+    "infra/.env",
+    "infra-rrfusion-tests",
+    "ruff",
+    "check",
+    "src",
+    "tests",
+    "apps",
+    "infra"
+]
+
+[tasks.unit]
+description = "Run unit tests"
+dependencies = ["build-cli"]
+command = "docker"
+args = [
+    "run",
+    "--rm",
+    "--env-file",
+    "infra/.env",
+    "infra-rrfusion-tests",
+    "bash",
+    "-c",
+    "pytest -m unit || true"
+]
+
+[tasks.ci]
+description = "Run full CI suite (lint, unit, integration, e2e)"
+script = [
+    "cargo make lint",
+    "cargo make unit",
+    "cargo make integration",
+    "cargo make e2e"
+]

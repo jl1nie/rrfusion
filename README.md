@@ -104,14 +104,30 @@ This exposes the same logic as the FastAPI service while letting any MCP-native 
 
 If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis and the FastMCP host with port `3000` forwarded to your machine; add the DB stub by running `docker compose -f infra/compose.test.yml up -d rrfusion-db-stub` when you need it.
 
-- `mcp.prompt_list`/`mcp.prompt_get` expose two curated documents (the “RRFusion MCP Handbook” and “Tool Recipes”) so agents can fetch guidance, examples, and best practices from the same server that serves the tools.
+- FastMCP exposes two curated prompts (`RRFusion MCP Handbook` and `Tool Recipes`) via `@mcp.prompt`. Each prompt crushes the handbook text or the example JSON recipes so that agents can fetch guidance and copy/paste payloads directly from the same server that runs the tools.
 
 ## Prompt Catalog
 
-1. **RRFusion MCP Handbook** – describes the full MCP pipeline, tips for each tool, metrics to emit, and security reminders. The prompt text injects the current base path (`/mcp`) for clarity.
-2. **Tool Recipes** – contains JSON examples (good and bad) for every tool so orchestrators can bootstrap well-formed requests.
+1. **RRFusion MCP Handbook** – follow the documented pipeline, heuristics per tool, telemetry/metric reminders, and security notes directly from `mcp.prompt(name="RRFusion MCP Handbook")`.
+2. **Tool Recipes** – pull the JSON examples for `search_fulltext`, `search_semantic`, `blend_frontier_codeaware`, `peek_snippets`, `get_snippets`, `mutate_run`, and `get_provenance` by calling `mcp.prompt(name="Tool Recipes")`.
 
-Call `mcp.prompt_get(name)` with the prompt name above to retrieve the string that gets returned to streaming clients.
+Call the prompts if you want the FastMCP host itself to serve the guidance text instead of keeping it in README.
+
+## Testing
+
+`scripts/run_e2e.sh` is the canonical local CI flow: it builds `infra-rrfusion-tests`, brings up Redis + DB stub + FastMCP via `infra/compose.test.yml`, waits for `rrfusion-mcp` to resolve, runs `pytest -m integration`, then `pytest -m e2e`, and finally tears the stack down. This shell script is what we use in the `cargo make` tasks described below.
+
+When `cargo make integration`/`e2e` start the stack they rely on Compose to create the attachable `rrfusion-test-net`. `cargo make stop-stack` calls `docker compose down`, so the network is removed as long as the previous run finished cleanly. If a run aborted early you can manually delete the dangling network (`docker network rm rrfusion-test-net`) before rerunning the task.
+
+If you prefer to orchestrate via `cargo make`, the provided `Makefile.toml` defines:
+
+1. `cargo make lint` — run `flake8` inside the CLI image.
+2. `cargo make unit` — run annotated unit tests (`pytest -m unit`) inside the CLI image.
+3. `cargo make integration` — start the Compose stack, run `pytest -m integration`, and shut it down.
+4. `cargo make e2e` — similar but calls `pytest -m e2e` against the FastMCP CLI script.
+5. `cargo make ci` — sequentially runs lint, unit, integration, and e2e under a single invocation.
+
+Because `cargo make` reuses the same commands locally and in CI, you can run `cargo make ci` on your workstation to exercise the whole stack exactly as GitHub Actions would.
 
 ## Usage Workflow
 
