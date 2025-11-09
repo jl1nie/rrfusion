@@ -38,7 +38,7 @@ services:
     build:
       context: ..
       dockerfile: apps/mcp-host/Dockerfile
-    container_name: rrfusion-tests-mcp
+    container_name: ${MCP_SERVICE_HOST:-rrfusion-tests-mcp}
     env_file: .env
     environment:
       - MCP_SERVICE_HOST=${MCP_SERVICE_HOST:-mcp}
