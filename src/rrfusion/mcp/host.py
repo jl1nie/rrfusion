@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Prompt
 from starlette.middleware import Middleware as StarletteMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -122,6 +122,10 @@ def _require_service() -> MCPService:
     return _service
 
 
+# ============================
+# Tools
+# ============================
+
 @mcp.tool
 async def search_fulltext(
     q: str,
@@ -132,14 +136,12 @@ async def search_fulltext(
 ) -> SearchToolResponse:
     """
     signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
-    promits/list:
-    - "List high-recall patent families mentioning {q} with IPC filters {filters}"
     prompts/list:
+    - "List high-recall patent families mentioning {q} with IPC filters {filters}"
     - "List prior art using only keyword evidence for {q}"
-    prompts/gets:
+    prompts/get:
     - "Get a lane run handle I can feed into fusion for {q}"
     """
-
     return await _require_service().search_lane(
         "fulltext",
         q=q,
@@ -160,14 +162,12 @@ async def search_semantic(
 ) -> SearchToolResponse:
     """
     signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
-    promits/list:
-    - "List semantically similar inventions about {q}"
     prompts/list:
+    - "List semantically similar inventions about {q}"
     - "List embedding-driven hits that stay on-spec for {q}"
-    prompts/gets:
+    prompts/get:
     - "Get the semantic lane handle so I can blend with run {q}"
     """
-
     return await _require_service().search_lane(
         "semantic",
         q=q,
@@ -202,14 +202,12 @@ async def blend_frontier_codeaware(
         k_grid: list[int] | None = None,
         peek: PeekConfig | None = None,
     )
-    promits/list:
-    - "List the best fusion frontier balancing recall and precision for {runs}"
     prompts/list:
+    - "List the best fusion frontier balancing recall and precision for {runs}"
     - "List fused rankings that favor IPC {target_profile}"
-    prompts/gets:
+    prompts/get:
     - "Get a fusion run_id with frontier stats so I can peek snippets for {runs}"
     """
-
     return await _require_service().blend(
         runs=runs,
         weights=weights,
@@ -245,14 +243,12 @@ async def peek_snippets(
         strategy: Literal["head","match","mix"] = "head",
         budget_bytes: int = 12288,
     )
-    promits/list:
-    - "List snippet previews for the top {limit} docs in fusion run {run_id}"
     prompts/list:
+    - "List snippet previews for the top {limit} docs in fusion run {run_id}"
     - "List concise abstracts for positions {offset}-{offset + limit}"
-    prompts/gets:
+    prompts/get:
     - "Get the next peek_cursor so I can continue streaming run {run_id}"
     """
-
     return await _require_service().peek_snippets(
         run_id=run_id,
         offset=offset,
@@ -273,14 +269,12 @@ async def get_snippets(
 ) -> dict[str, dict[str, str]]:
     """
     signature: get_snippets(ids: list[str], fields: list[str] | None = None, per_field_chars: dict[str, int] | None = None)
-    promits/list:
-    - "List detailed snippets for the decision-ready doc IDs {ids}"
     prompts/list:
+    - "List detailed snippets for the decision-ready doc IDs {ids}"
     - "List claims plus abstracts for specific documents after shortlisting"
-    prompts/gets:
+    prompts/get:
     - "Get the text payloads for ids {ids} without touching the fusion cursor"
     """
-
     return await _require_service().get_snippets(
         ids=ids,
         fields=fields,
@@ -292,14 +286,12 @@ async def get_snippets(
 async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     """
     signature: mutate_run(run_id: str, *, delta: MutateDelta)
-    promits/list:
-    - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
     prompts/list:
+    - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
     - "List frontier deltas after tightening beta/rrf_k on run {run_id}"
-    prompts/gets:
+    prompts/get:
     - "Get a fresh run_id derived from {run_id} with updated weights/filters"
     """
-
     return await _require_service().mutate_run(run_id=run_id, delta=delta)
 
 
@@ -307,21 +299,195 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 async def get_provenance(run_id: str) -> ProvenanceResponse:
     """
     signature: get_provenance(run_id: str)
-    promits/list:
-    - "List the recipe parameters that produced fusion run {run_id}"
     prompts/list:
+    - "List the recipe parameters that produced fusion run {run_id}"
     - "List the historical lineage for run {run_id}"
-    prompts/gets:
+    prompts/get:
     - "Get parent/history handles so I can audit or reproduce run {run_id}"
     """
-
     return await _require_service().provenance(run_id)
 
+
+# ============================
+# Prompts
+# ============================
+
+_HANDBOOK = """# RRFusion MCP Handbook (v1.0)
+
+**Mission**: Maximize Fβ (default β=1) for prior-art retrieval with multi-lane search (fulltext + semantic) and code-aware fusion.  
+**Transport**: HTTP/streamable-http at `/{base_path}` (default `/mcp`).  
+**Auth**: Bearer token is required if configured on the server.
+
+## 1. Pipeline (Agent-facing)
+1) Normalize and expand query (synonyms / acronyms)
+2) Run lanes in parallel
+   - `search_fulltext` → high recall on keyword evidence
+   - `search_semantic` → embedding-driven coverage on-spec
+3) Fuse with `blend_frontier_codeaware` (RRF with β control)
+4) Peek text budget with `peek_snippets` (head/match/mix)
+5) Shortlist and fetch payloads via `get_snippets`
+6) If metrics unsatisfactory → `mutate_run` (weights/rrf_k/β)
+7) Persist trail with `get_provenance`
+
+## 2. Lane Tools (I/O + Guidance)
+### `search_fulltext`
+- **Args**: `q`, `filters?`, `top_k=1000`, `rollup?`, `budget_bytes=4096`
+- **Tips**: Prefer generous `top_k` (200–1000) for recall. Use IPC/FI/CPC in `filters.must` to restrain drift.
+
+### `search_semantic`
+- **Args**: `q`, `filters?`, `top_k=1000`, `rollup?`, `budget_bytes=4096`
+- **Tips**: Keep query concise (≤256 chars). When drift risk, mirror the same filters as fulltext.
+
+## 3. Fusion
+### `blend_frontier_codeaware`
+- **Args**: `runs[]`, `weights?`, `rrf_k=60`, `beta=1.0`, `family_fold=True`, `target_profile?`, `top_m_per_lane?`, `k_grid?`, `peek?`
+- **Heuristics**:
+  - Start with equal weights; tune via `mutate_run`.
+  - Increase `beta` to favor recall; lower to favor precision.
+  - `family_fold=True` to avoid family duplicates in top-K.
+
+## 4. Snippet Budgeting
+### `peek_snippets`
+- **Args**: `run_id`, `offset=0`, `limit=12`, `fields?`, `per_field_chars?`, `claim_count=3`, `strategy=head|match|mix`, `budget_bytes=12288`
+- **Patterns**:
+  - `head` for abstracts/titles; `match` to focus on query highlights; `mix` to balance.
+  - Use `per_field_chars` to cap long fields deterministically.
+
+### `get_snippets`
+- **Args**: `ids[]`, `fields?`, `per_field_chars?`
+- **Note**: Independent of fusion cursor; safe for random access after shortlist.
+
+## 5. Iterative Tuning
+### `mutate_run`
+- **Args**: `run_id`, `delta` (weights / rrf_k / beta / filters)
+- **Loop**: Adjust → re-peek → compare P/R/Fβ at fixed K.
+
+### `get_provenance`
+- **Args**: `run_id`
+- **Use**: Audit lineage, reproduce settings, checkpoint good frontiers.
+
+## 6. Metrics & Logging
+- Emit: `lane.top_k`, `fuse.rrf_k`, `beta`, `hit@k`, `p@k`, `r@k`, `f_beta@k`
+- Backoff: retry on 429/5xx with exponential backoff (≤5 attempts).
+
+## 7. Security
+- Never send PII/secret content in queries. Server injects API keys for downstream systems. Client provides **Bearer** token only.
+
+"""
+
+_TOOL_RECIPES = """# Tool Recipes & Few-shot (v1.0)
+
+## search_fulltext — examples
+**Good**
+```json
+{
+  "q": "grant-free uplink HARQ process scheduling",
+  "filters": {"must": [{"field":"ipc","op":"in","value":["H04W72/04","H04L1/18"]}]},
+  "top_k": 500
+}
+```
+**Bad**
+```json
+{"q":"HARQ","top_k":10}
+```
+
+## search_semantic — examples
+**Good**
+```json
+{
+  "q": "contention-based uplink, early HARQ feedback for URLLC",
+  "filters": {"must":[{"field":"cpc","op":"in","value":["H04W72/12"]}]},
+  "top_k": 400
+}
+```
+
+## blend_frontier_codeaware — examples
+**Equal-weight fuse**
+```json
+{
+  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
+  "rrf_k": 60,
+  "beta": 1.0,
+  "family_fold": true
+}
+```
+**Favor codes**
+```json
+{
+  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
+  "target_profile": {"ipc":{"H04W72/04":1.2,"H04L1/18":1.0}},
+  "rrf_k": 50
+}
+```
+
+## peek_snippets — examples
+```json
+{
+  "run_id":"FUSION_123",
+  "offset":0,
+  "limit":12,
+  "strategy":"mix",
+  "budget_bytes": 12288
+}
+```
+
+## get_snippets — examples
+```json
+{
+  "ids":["US2023XXXXXXA1","EPXXXXXXXB1"],
+  "fields":["title","abstract","claims"],
+  "per_field_chars":{"claims":1200}
+}
+```
+
+## mutate_run — examples
+```json
+{
+  "run_id":"FUSION_123",
+  "delta":{"weights":{"semantic":1.2,"fulltext":1.0},"rrf_k":50,"beta":1.2}
+}
+```
+
+## get_provenance — example
+```json
+{"run_id":"FUSION_123"}
+```
+"""
+
+@mcp.prompt_list
+def prompt_list():
+    return [
+        Prompt(
+            name="RRFusion MCP Handbook",
+            description="End-to-end pipeline, parameter guidance, metrics, and security.",
+            tags=["handbook", "retrieval", "fusion", "f1"]
+        ),
+        Prompt(
+            name="Tool Recipes",
+            description="Per-tool signatures with good/bad examples and few-shot JSON.",
+            tags=["recipes", "examples"]
+        ),
+    ]
+
+
+@mcp.prompt_get
+def prompt_get(name: str):
+    if name == "RRFusion MCP Handbook":
+        # inject base path info for readability
+        base_path = "/mcp"
+        return _HANDBOOK.format(base_path=base_path)
+    if name == "Tool Recipes":
+        return _TOOL_RECIPES
+    raise ValueError(f"unknown prompt: {name}")
+
+
+# ============================
+# Custom routes
+# ============================
 
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
 async def health(_: Request) -> JSONResponse:
     """Lightweight health check for load balancers hitting GET /healthz."""
-
     return JSONResponse({"status": "ok"})
 
 

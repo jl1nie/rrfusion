@@ -91,7 +91,7 @@ As a convenience, `scripts/run_e2e.sh` brings the Compose test stack up, runs th
 
 ## FastMCP Host
 
-- `src/rrfusion/mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tool` decorator. Each tool docstring contains the canonical signature plus the typical `promits/list` / `prompts/list` / `prompts/gets` prompts used throughout this README.
+- `src/rrfusion/mcp/host.py` is a `fastmcp.FastMCP` entrypoint that registers every lane/fusion/snippet tool via the `@mcp.tool` decorator. Each tool docstring contains the canonical signature plus the typical `prompts/list` / `prompts/get` prompts used throughout this README.
 - Run it locally via the Python entry point:
 
 ```bash
@@ -103,6 +103,15 @@ The script reads `MCP_HOST`/`MCP_PORT`, starts the streamable HTTP transport at 
 This exposes the same logic as the FastAPI service while letting any MCP-native client install the server directly.
 
 If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis and the FastMCP host with port `3000` forwarded to your machine; add the DB stub by running `docker compose -f infra/compose.test.yml up -d rrfusion-db-stub` when you need it.
+
+- `mcp.prompt_list`/`mcp.prompt_get` expose two curated documents (the “RRFusion MCP Handbook” and “Tool Recipes”) so agents can fetch guidance, examples, and best practices from the same server that serves the tools.
+
+## Prompt Catalog
+
+1. **RRFusion MCP Handbook** – describes the full MCP pipeline, tips for each tool, metrics to emit, and security reminders. The prompt text injects the current base path (`/mcp`) for clarity.
+2. **Tool Recipes** – contains JSON examples (good and bad) for every tool so orchestrators can bootstrap well-formed requests.
+
+Call `mcp.prompt_get(name)` with the prompt name above to retrieve the string that gets returned to streaming clients.
 
 ## Usage Workflow
 
@@ -116,23 +125,28 @@ The MCP loop always starts with independent lane searches, continues with fusion
 
 ## MCP Tool Reference
 
-Each section shows the FastMCP-style decoration you would give the tool in an agent registry. The docstrings list the canonical signature plus typical prompts (`promits/list` for “give me a ranked list” asks and `prompts/gets` for retrieval/handle requests).
+Each section shows the FastMCP-style decoration you would give the tool in an agent registry. The docstrings list the canonical signature plus typical prompts (`prompts/list` for “give me a ranked list” asks and `prompts/get` for retrieval/handle requests).
 
 ### `search_fulltext`
 
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="search_fulltext")
-async def search_fulltext(request: SearchRequest) -> SearchToolResponse:
+@mcp.tool
+async def search_fulltext(
+    q: str,
+    filters: Filters | None = None,
+    top_k: int = 1000,
+    rollup: RollupConfig | None = None,
+    budget_bytes: int = 4096,
+) -> SearchToolResponse:
     """
     signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
-    promits/list:
-    - "List high-recall patent families mentioning {topic} with IPC filters {codes}"
     prompts/list:
-    - "List prior art using only keyword evidence for {technology}"
-    prompts/gets:
-    - "Get a lane run handle I can feed into fusion for {query}"
+    - "List high-recall patent families mentioning {q} with IPC filters {filters}"
+    - "List prior art using only keyword evidence for {q}"
+    prompts/get:
+    - "Get a lane run handle I can feed into fusion for {q}"
     """
 ```
 
@@ -143,16 +157,21 @@ The full-text lane maximizes recall by leaning on raw keyword scoring from the D
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="search_semantic")
-async def search_semantic(request: SearchRequest) -> SearchToolResponse:
+@mcp.tool
+async def search_semantic(
+    q: str,
+    filters: Filters | None = None,
+    top_k: int = 1000,
+    rollup: RollupConfig | None = None,
+    budget_bytes: int = 4096,
+) -> SearchToolResponse:
     """
     signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
-    promits/list:
-    - "List semantically similar inventions about {capability}"
     prompts/list:
-    - "List embedding-driven hits that stay on-spec for {system}"
-    prompts/gets:
-    - "Get the semantic lane handle so I can blend with run {id}"
+    - "List semantically similar inventions about {q}"
+    - "List embedding-driven hits that stay on-spec for {q}"
+    prompts/get:
+    - "Get the semantic lane handle so I can blend with run {q}"
     """
 ```
 
@@ -163,16 +182,35 @@ This lane biases toward precision by using embedding similarity. Pair it with th
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="blend_frontier_codeaware")
-async def blend_frontier_codeaware(request: BlendRequest) -> BlendResponse:
+@mcp.tool
+async def blend_frontier_codeaware(
+    runs: list[BlendRunInput],
+    weights: dict[str, float] | None = None,
+    rrf_k: int = 60,
+    beta: float = 1.0,
+    family_fold: bool = True,
+    target_profile: dict[str, dict[str, float]] | None = None,
+    top_m_per_lane: dict[str, int] | None = None,
+    k_grid: list[int] | None = None,
+    peek: PeekConfig | None = None,
+) -> BlendResponse:
     """
-    signature: blend_frontier_codeaware(runs: list[BlendRunInput], weights: dict[str, float], rrf_k: int = 60, beta: float = 1.0, family_fold: bool = True, target_profile: dict[str, dict[str, float]] | None = None, top_m_per_lane: dict[str, int], k_grid: list[int], peek: PeekConfig | None = None)
-    promits/list:
-    - "List the best fusion frontier for balancing recall and precision on {query}"
+    signature: blend_frontier_codeaware(
+        runs: list[BlendRunInput],
+        weights: dict[str, float] | None = None,
+        rrf_k: int = 60,
+        beta: float = 1.0,
+        family_fold: bool = True,
+        target_profile: dict[str, dict[str, float]] | None = None,
+        top_m_per_lane: dict[str, int] | None = None,
+        k_grid: list[int] | None = None,
+        peek: PeekConfig | None = None,
+    )
     prompts/list:
-    - "List fused rankings that favor IPC {code} at {k} depth"
-    prompts/gets:
-    - "Get a fusion run_id with frontier stats so I can peek snippets later"
+    - "List the best fusion frontier balancing recall and precision for {runs}"
+    - "List fused rankings that favor IPC {target_profile}"
+    prompts/get:
+    - "Get a fusion run_id with frontier stats so I can peek snippets for {runs}"
     """
 ```
 
@@ -183,16 +221,33 @@ Fusion consumes multiple lane handles, applies RRF plus optional code-aware boos
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="peek_snippets")
-async def peek_snippets(request: PeekSnippetsRequest) -> PeekSnippetsResponse:
+@mcp.tool
+async def peek_snippets(
+    run_id: str,
+    offset: int = 0,
+    limit: int = 12,
+    fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
+    claim_count: int = 3,
+    strategy: Literal["head", "match", "mix"] = "head",
+    budget_bytes: int = 12_288,
+) -> PeekSnippetsResponse:
     """
-    signature: peek_snippets(run_id: str, offset: int = 0, limit: int = 20, fields: list[str] = ..., per_field_chars: dict[str, int] = ..., claim_count: int = 3, strategy: Literal["head","match","mix"] = "head", budget_bytes: int = 12288)
-    promits/list:
-    - "List snippet previews for the top {n} docs in fusion run {id}"
+    signature: peek_snippets(
+        run_id: str,
+        offset: int = 0,
+        limit: int = 12,
+        fields: list[str] | None = None,
+        per_field_chars: dict[str, int] | None = None,
+        claim_count: int = 3,
+        strategy: Literal["head","match","mix"] = "head",
+        budget_bytes: int = 12288,
+    )
     prompts/list:
-    - "List concise abstracts for positions {offset}-{offset+limit}"
-    prompts/gets:
-    - "Get the next peek_cursor so I can continue scrolling this run"
+    - "List snippet previews for the top {limit} docs in fusion run {run_id}"
+    - "List concise abstracts for positions {offset}-{offset + limit}"
+    prompts/get:
+    - "Get the next peek_cursor so I can continue streaming run {run_id}"
     """
 ```
 
@@ -205,15 +260,18 @@ By default it returns up to 12 items with `["title","abst","claim"]`, clamping e
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="get_snippets")
-async def get_snippets(request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
+@mcp.tool
+async def get_snippets(
+    ids: list[str],
+    fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
+) -> dict[str, dict[str, str]]:
     """
-    signature: get_snippets(ids: list[str], fields: list[str] = ..., per_field_chars: dict[str, int] = ...)
-    promits/list:
-    - "List detailed snippets for the decision-ready doc IDs {ids}"
+    signature: get_snippets(ids: list[str], fields: list[str] | None = None, per_field_chars: dict[str, int] | None = None)
     prompts/list:
+    - "List detailed snippets for the decision-ready doc IDs {ids}"
     - "List claims plus abstracts for specific documents after shortlisting"
-    prompts/gets:
+    prompts/get:
     - "Get the text payloads for ids {ids} without touching the fusion cursor"
     """
 ```
@@ -225,16 +283,15 @@ Use this tool after you already know which doc IDs matter. It skips pagination a
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="mutate_run")
-async def mutate_run(request: MutateRequest) -> MutateResponse:
+@mcp.tool
+async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     """
-    signature: mutate_run(run_id: str, delta: MutateDelta)
-    promits/list:
-    - "List how the ranking shifts if we bump semantic weight by {x}"
+    signature: mutate_run(run_id: str, *, delta: MutateDelta)
     prompts/list:
-    - "List frontier deltas after tightening beta/rrf_k on run {id}"
-    prompts/gets:
-    - "Get a fresh run_id derived from {id} with updated weights/filters"
+    - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
+    - "List frontier deltas after tightening beta/rrf_k on run {run_id}"
+    prompts/get:
+    - "Get a fresh run_id derived from {run_id} with updated weights/filters"
     """
 ```
 
@@ -245,16 +302,15 @@ async def mutate_run(request: MutateRequest) -> MutateResponse:
 ```python
 from rrfusion.mcp.host import mcp
 
-@mcp.tool(name="get_provenance")
-async def get_provenance(request: ProvenanceRequest) -> ProvenanceResponse:
+@mcp.tool
+async def get_provenance(run_id: str) -> ProvenanceResponse:
     """
     signature: get_provenance(run_id: str)
-    promits/list:
-    - "List the recipe parameters that produced fusion run {id}"
     prompts/list:
-    - "List the historical lineage for run {id}"
-    prompts/gets:
-    - "Get parent/history handles so I can audit or reproduce this run"
+    - "List the recipe parameters that produced fusion run {run_id}"
+    - "List the historical lineage for run {run_id}"
+    prompts/get:
+    - "Get parent/history handles so I can audit or reproduce run {run_id}"
     """
 ```
 
