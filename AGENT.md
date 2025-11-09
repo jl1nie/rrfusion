@@ -56,12 +56,13 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 | Key | Default | Notes |
 |---|---|---|
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection string |
-| `DB_STUB_URL` | `http://db-stub:8080` | Randomized scores & snippets |
-| `DB_STUB_PORT` | `8080` | Host port for the DB stub (set to another value or omit if the port is in use). |
+| `DB_STUB_URL` | `http://rrfusion-db-stub:8080` | Randomized scores & snippets |
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `3000` | MCP port |
 | `MCP_SERVICE_HOST` | `localhost` | Hostname clients should use when connecting to MCP (`infra/.env` overrides this to `mcp` inside Docker). |
-| `RRF_K` | `60` | RRF constant |
+| `MCP_EXTERNAL_NETWORK` | `docker_default` | Network name to join when you already have an existing Docker network (enable with `MCP_EXTERNAL_NETWORK_ENABLED=true`). |
+| `MCP_EXTERNAL_NETWORK_ENABLED` | `false` | Set to `true` when connecting to an external network; leave `false` to use the stack’s private bridge. |
+| `RRF_K` | `60` | MCP constant |
 | `PEEK_MAX_DOCS` | `100` | Snippet count cap |
 | `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap (12 docs × title/abstract/claim 160/480/320 chars) |
 | `STUB_MAX_RESULTS` | `2000` | DB stub lane cap (raise to `10000` for load/E2E tests) |

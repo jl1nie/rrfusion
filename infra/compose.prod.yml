@@ -11,10 +11,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      rrfusion-net:
-        aliases:
-          - rrfusion
-          - redis
+      - rrfusion-net
     volumes:
       - redis-data:/data
 
@@ -34,14 +31,14 @@ services:
     networks:
       rrfusion-net:
         aliases:
-          - rrfusion
-          - mcp
+          - ${MCP_SERVICE_HOST:-rrfusion-mcp}
     command: ["python", "src/rrfusion/mcp/host.py"]
 
 networks:
   rrfusion-net:
     driver: bridge
     name: ${MCP_EXTERNAL_NETWORK:-rrfusion-net}
+    external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 
 volumes:
   redis-data:

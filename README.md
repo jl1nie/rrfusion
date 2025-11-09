@@ -35,7 +35,7 @@ docker compose -f infra/compose.prod.yml ps  # confirm Redis and MCP are healthy
 
 Visit `http://localhost:3000/healthz` to confirm the FastMCP host is up. Run `docker compose -f infra/compose.prod.yml down` when you're done. Use `infra/compose.test.yml` whenever you need an isolated network that also brings up the DB stub and pytest runner:
 
-> **Network note:** set `MCP_EXTERNAL_NETWORK=<existing-network>` (e.g., `docker_default`) before running Compose to join that external network; services still advertise `redis`, `db-stub`, `mcp`, and `tests` aliases so the code inside the stack keeps working.
+> **Network note:** set `MCP_EXTERNAL_NETWORK=<existing-network>` (e.g., `docker_default`) and `MCP_EXTERNAL_NETWORK_ENABLED=true` before running Compose to join an external network. Services still expose their own service names (`rrfusion-redis`, `rrfusion-db-stub`, `rrfusion-mcp`, `rrfusion-tests`) so the stack keeps resolving internally.
 
 ```bash
 docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m smoke
@@ -60,7 +60,7 @@ docker compose -f infra/compose.test.yml run --rm rrfusion-tests pytest -m smoke
    docker compose -f infra/compose.test.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp
    ```
 
-   If your host already binds port 8080, export `DB_STUB_PORT=<other>` (and keep `DB_STUB_URL=http://db-stub:8080`) before running Compose so only the host mapping shifts.
+   The DB stub is only reachable inside the Compose stack (it listens on `rrfusion-db-stub:8080`), so no host port mapping is published by default.
 
 4. Execute the end-to-end suite, which exercises every MCP tool (search, blend, peek/get snippets, mutate, provenance) against the running stack:
 
@@ -75,6 +75,8 @@ The tests automatically talk to `http://mcp:3000/mcp/...` inside the Compose net
    ```bash
    docker compose -f infra/compose.test.yml run --rm rrfusion-tests \
      python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
+
+As a convenience, `scripts/run_e2e.sh` brings the Compose test stack up, runs the Pytest E2E suite, and tears the stack back down with the correct MCP/DB host names. Run it from the repo root (`bash scripts/run_e2e.sh`) instead of repeating the Compose commands manually.
    ```
 
     This hits the streamable-http `peek_snippets` tool with a 20 KB budget and 60-item window to confirm the FastMCP stack can stream large payloads without timing out.

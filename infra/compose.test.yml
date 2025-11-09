@@ -9,10 +9,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      rrfusion-test-net:
-        aliases:
-          - rrfusion
-          - redis
+      - rrfusion-test-net
     volumes:
       - redis-data-tests:/data
 
@@ -22,16 +19,11 @@ services:
       dockerfile: apps/db_stub/Dockerfile
     container_name: rrfusion-tests-db-stub
     env_file: .env
-    ports:
-      - "${DB_STUB_PORT:-8080}:8080"
     depends_on:
       rrfusion-redis:
         condition: service_healthy
     networks:
-      rrfusion-test-net:
-        aliases:
-          - rrfusion
-          - db-stub
+      - rrfusion-test-net
     healthcheck:
       test:
         [
@@ -59,8 +51,7 @@ services:
     networks:
       rrfusion-test-net:
         aliases:
-          - rrfusion
-          - mcp
+          - ${MCP_SERVICE_HOST:-rrfusion-mcp}
 
   rrfusion-tests:
     build:
@@ -76,16 +67,14 @@ services:
       rrfusion-db-stub:
         condition: service_healthy
     networks:
-      rrfusion-test-net:
-        aliases:
-          - rrfusion
-          - tests
+      - rrfusion-test-net
     profiles: ["tests"]
 
 networks:
   rrfusion-test-net:
     driver: bridge
     name: ${MCP_EXTERNAL_NETWORK:-rrfusion-test-net}
+    external: ${MCP_EXTERNAL_NETWORK_ENABLED:-false}
 
 volumes:
   redis-data-tests:
