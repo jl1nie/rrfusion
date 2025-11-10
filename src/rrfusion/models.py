@@ -73,7 +73,7 @@ class BlendRequest(BaseModel):
         default_factory=lambda: {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5}
     )
     rrf_k: int = 60
-    beta: float = 1.0
+    beta_fuse: float = 1.0
     family_fold: bool = True
     target_profile: dict[str, dict[str, float]] = Field(default_factory=dict)
     top_m_per_lane: dict[str, int] = Field(default_factory=lambda: {"fulltext": 10000, "semantic": 10000})
@@ -132,7 +132,7 @@ class MutateDelta(BaseModel):
     rollup_change: dict[str, Any] | None = None
     weights: dict[str, float] | None = None
     rrf_k: int | None = None
-    beta: float | None = None
+    beta_fuse: float | None = None
 
 
 class MutateRequest(BaseModel):

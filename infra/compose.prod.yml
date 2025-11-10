@@ -26,6 +26,9 @@ services:
     build:
       context: ..
       dockerfile: apps/mcp-host/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
     container_name: rrfusion-mcp
     env_file: .env
     environment:

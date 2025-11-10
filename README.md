@@ -228,7 +228,7 @@ async def blend_frontier_codeaware(
     runs: list[BlendRunInput],
     weights: dict[str, float] | None = None,
     rrf_k: int = 60,
-    beta: float = 1.0,
+    beta_fuse: float = 1.0,
     family_fold: bool = True,
     target_profile: dict[str, dict[str, float]] | None = None,
     top_m_per_lane: dict[str, int] | None = None,
@@ -240,7 +240,7 @@ async def blend_frontier_codeaware(
         runs: list[BlendRunInput],
         weights: dict[str, float] | None = None,
         rrf_k: int = 60,
-        beta: float = 1.0,
+        beta_fuse: float = 1.0,
         family_fold: bool = True,
         target_profile: dict[str, dict[str, float]] | None = None,
         top_m_per_lane: dict[str, int] | None = None,
@@ -330,7 +330,7 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     signature: mutate_run(run_id: str, delta: MutateDelta)
     prompts/list:
     - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
-    - "List frontier deltas after tightening beta/rrf_k on run {run_id}"
+    - "List frontier deltas after tightening beta_fuse/rrf_k on run {run_id}"
     prompts/get:
     - "Get a fresh run_id derived from {run_id} with updated weights/filters"
     """
@@ -338,7 +338,7 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 
 `mutate_run` copies the cached lane results, reapplies the tweaked recipe, and yields a brand-new fusion run (with lineage). Prefer this over re-searching when you only change blending parameters.
 
-`delta` accepts weight adjustments, RRF/additional `rrf_k`/`beta` tweaks, and filter overrides so you can mutate the frontier without replicating full lane searches.
+`delta` accepts weight adjustments, RRF/additional `rrf_k`/`beta_fuse` tweaks, and filter overrides so you can mutate the frontier without replicating full lane searches.
 
 ### `get_provenance`
 

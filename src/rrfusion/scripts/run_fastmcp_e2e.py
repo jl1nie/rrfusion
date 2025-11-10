@@ -98,7 +98,7 @@ async def _prepare_fusion_run(
         ],
         "weights": {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
         "rrf_k": 60,
-        "beta": 1.0,
+        "beta_fuse": 1.0,
         "family_fold": False,
         "target_profile": {},
         "top_m_per_lane": {"fulltext": cfg.stub_max_results, "semantic": cfg.stub_max_results},
@@ -348,7 +348,7 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             "delta": {
                 "weights": {"semantic": 1.25},
                 "rrf_k": 45,
-                "beta": 0.8,
+                "beta_fuse": 0.8,
             },
         }
         mutation = await _call_tool(client, "mutate_run", mutate_payload, timeout=cfg.timeout)
@@ -356,6 +356,8 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             raise AssertionError("mutate_run returned identical run_id")
         if mutation["recipe"]["delta"]["weights"]["semantic"] <= 1.2:
             raise AssertionError("mutate_run did not echo semantic weight delta")
+        if mutation["recipe"]["delta"].get("beta_fuse") != 0.8:
+            raise AssertionError("mutate_run delta missing beta_fuse")
 
         provenance = await _call_tool(
             client,
@@ -367,6 +369,8 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             raise AssertionError("Provenance parent mismatch")
         if fusion["run_id"] not in provenance["history"]:
             raise AssertionError("Parent run missing from provenance history")
+        if provenance["recipe"].get("beta_fuse") != 0.8:
+            raise AssertionError("Provenance recipe beta_fuse mismatch")
 
     await redis_client.aclose()
 

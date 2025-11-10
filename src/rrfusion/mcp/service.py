@@ -71,8 +71,10 @@ class MCPService:
         self.http = httpx.AsyncClient(base_url=settings.db_stub_url, timeout=30.0)
 
     async def close(self) -> None:
-        await self.http.aclose()
-        await self.redis.close()
+        try:
+            await self.http.aclose()
+        finally:
+            await self.redis.aclose()
 
     # ------------------------------------------------------------------ #
     async def search_lane(
@@ -139,7 +141,7 @@ class MCPService:
         runs: list[BlendRunInput],
         weights: dict[str, float] | None = None,
         rrf_k: int = 60,
-        beta: float = 1.0,
+        beta_fuse: float = 1.0,
         family_fold: bool = True,
         target_profile: dict[str, dict[str, float]] | None = None,
         top_m_per_lane: dict[str, int] | None = None,
@@ -148,12 +150,14 @@ class MCPService:
         parent_meta: dict[str, Any] | None = None,
     ) -> BlendResponse:
         if not runs:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="runs required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="runs required"
+            )
         request = BlendRequest(
             runs=runs,
             weights=(weights or DEFAULT_WEIGHTS.copy()),
             rrf_k=rrf_k,
-            beta=beta,
+            beta_fuse=beta_fuse,
             family_fold=family_fold,
             target_profile=target_profile or {},
             top_m_per_lane=(top_m_per_lane or DEFAULT_TOP_M_PER_LANE.copy()),
@@ -161,7 +165,9 @@ class MCPService:
             peek=peek,
         )
         if not request.runs:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="runs required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="runs required"
+            )
 
         lane_docs: dict[str, list[tuple[str, float]]] = {}
         doc_ids: set[str] = set()
@@ -170,9 +176,13 @@ class MCPService:
         for run in request.runs:
             meta = await self.storage.get_run_meta(run.run_id_lane)
             if not meta:
-                raise HTTPException(status_code=404, detail=f"run {run.run_id_lane} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"run {run.run_id_lane} not found"
+                )
             if meta.get("run_type") != "lane":
-                raise HTTPException(status_code=400, detail=f"run {run.run_id_lane} is not a lane run")
+                raise HTTPException(
+                    status_code=400, detail=f"run {run.run_id_lane} is not a lane run"
+                )
             lane_key = meta["lane_key"]
             limit = request.top_m_per_lane.get(run.lane, 1000)
             stop = limit - 1 if limit > 0 else -1
@@ -190,7 +200,9 @@ class MCPService:
             for doc_id, meta in doc_metadata.items()
         }
 
-        scores, contributions = compute_rrf_scores(lane_docs, request.rrf_k, request.weights)
+        scores, contributions = compute_rrf_scores(
+            lane_docs, request.rrf_k, request.weights
+        )
         scores = apply_code_boosts(
             scores,
             contributions,
@@ -202,7 +214,9 @@ class MCPService:
         ordered_ids = [doc_id for doc_id, _ in ordered]
 
         relevant_flags = compute_relevance_flags(doc_metadata, request.target_profile)
-        frontier = compute_frontier(ordered_ids, request.k_grid, relevant_flags, request.beta)
+        frontier = compute_frontier(
+            ordered_ids, request.k_grid, relevant_flags, request.beta_fuse
+        )
 
         max_k = max(request.k_grid) if request.k_grid else len(ordered_ids)
         max_k = min(max_k, len(ordered_ids))
@@ -214,7 +228,8 @@ class MCPService:
             if total == 0:
                 continue
             contrib_payload[doc_id] = {
-                key: round(value / total, 3) for key, value in contributions[doc_id].items()
+                key: round(value / total, 3)
+                for key, value in contributions[doc_id].items()
             }
 
         peek_samples: list[dict[str, Any]] = []
@@ -238,7 +253,8 @@ class MCPService:
         recipe = {
             "weights": request.weights,
             "rrf_k": request.rrf_k,
-            "beta": request.beta,
+            "beta_fuse": request.beta_fuse,
+            "beta": request.beta_fuse,
             "family_fold": request.family_fold,
             "target_profile": request.target_profile,
             "top_m_per_lane": request.top_m_per_lane,
@@ -263,7 +279,7 @@ class MCPService:
 
         return BlendResponse(
             run_id=run_id,
-            pairs_top=ordered[: max_k],
+            pairs_top=ordered[:max_k],
             frontier=frontier,
             freqs_topk=freqs_topk,
             contrib=contrib_payload,
@@ -301,18 +317,26 @@ class MCPService:
         if not meta:
             raise HTTPException(status_code=404, detail="run not found")
 
-        key = meta.get("rrf_key") if meta.get("run_type") == "fusion" else meta.get("lane_key")
+        key = (
+            meta.get("rrf_key")
+            if meta.get("run_type") == "fusion"
+            else meta.get("lane_key")
+        )
         if not key:
             raise HTTPException(status_code=400, detail="run missing sorted set key")
 
         limit = min(request.limit, self.settings.peek_max_docs)
         if limit <= 0:
-            return PeekSnippetsResponse(items=[], used_bytes=0, truncated=False, peek_cursor=None)
+            return PeekSnippetsResponse(
+                items=[], used_bytes=0, truncated=False, peek_cursor=None
+            )
 
         start = request.offset
         stop = request.offset + limit - 1
         budget_limit = min(request.budget_bytes, self.settings.peek_budget_bytes)
-        effective_chars = _coerce_field_char_limits(request.fields, request.per_field_chars, budget_limit)
+        effective_chars = _coerce_field_char_limits(
+            request.fields, request.per_field_chars, budget_limit
+        )
         logger.debug(
             "peek_snippets run=%s key=%s offset=%s limit=%s budget=%s",
             request.run_id,
@@ -328,7 +352,9 @@ class MCPService:
         logger.debug("peek_snippets hydrated %s docs with metadata", len(doc_metadata))
 
         items = [
-            build_snippet_item(doc_id, doc_metadata.get(doc_id, {}), request.fields, effective_chars)
+            build_snippet_item(
+                doc_id, doc_metadata.get(doc_id, {}), request.fields, effective_chars
+            )
             for doc_id in doc_ids
         ]
         capped, used_bytes, truncated = cap_by_budget(items, budget_limit)
@@ -412,18 +438,26 @@ class MCPService:
         updated_recipe = json.loads(json.dumps(base_recipe))
 
         if request.delta.weights:
-            updated_recipe["weights"] = {**updated_recipe.get("weights", {}), **request.delta.weights}
+            updated_recipe["weights"] = {
+                **updated_recipe.get("weights", {}),
+                **request.delta.weights,
+            }
         if request.delta.rrf_k is not None:
             updated_recipe["rrf_k"] = request.delta.rrf_k
-        if request.delta.beta is not None:
-            updated_recipe["beta"] = request.delta.beta
+        if request.delta.beta_fuse is not None:
+            updated_recipe["beta_fuse"] = request.delta.beta_fuse
+            updated_recipe["beta"] = request.delta.beta_fuse
 
         updated_recipe.setdefault(
             "top_m_per_lane",
             base_recipe.get("top_m_per_lane", {"fulltext": 10000, "semantic": 10000}),
         )
-        updated_recipe.setdefault("k_grid", base_recipe.get("k_grid", [10, 20, 30, 40, 50]))
-        updated_recipe.setdefault("target_profile", base_recipe.get("target_profile", {}))
+        updated_recipe.setdefault(
+            "k_grid", base_recipe.get("k_grid", [10, 20, 30, 40, 50])
+        )
+        updated_recipe.setdefault(
+            "target_profile", base_recipe.get("target_profile", {})
+        )
 
         normalized_runs = []
         for run in meta.get("source_runs", []):
@@ -436,10 +470,14 @@ class MCPService:
             runs=normalized_runs,
             weights=updated_recipe.get("weights", {}),
             rrf_k=updated_recipe.get("rrf_k", self.settings.rrf_k),
-            beta=updated_recipe.get("beta", 1.0),
+            beta_fuse=updated_recipe.get(
+                "beta_fuse", updated_recipe.get("beta", 1.0)
+            ),
             family_fold=base_recipe.get("family_fold", True),
             target_profile=updated_recipe.get("target_profile", {}),
-            top_m_per_lane=updated_recipe.get("top_m_per_lane", {"fulltext": 10000, "semantic": 10000}),
+            top_m_per_lane=updated_recipe.get(
+                "top_m_per_lane", {"fulltext": 10000, "semantic": 10000}
+            ),
             k_grid=updated_recipe.get("k_grid", [10, 20, 30, 40, 50]),
             peek=None,
         )
@@ -448,7 +486,7 @@ class MCPService:
             runs=blend_request.runs,
             weights=blend_request.weights,
             rrf_k=blend_request.rrf_k,
-            beta=blend_request.beta,
+            beta_fuse=blend_request.beta_fuse,
             family_fold=blend_request.family_fold,
             target_profile=blend_request.target_profile,
             top_m_per_lane=blend_request.top_m_per_lane,

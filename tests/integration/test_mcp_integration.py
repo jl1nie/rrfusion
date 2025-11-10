@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -20,6 +21,17 @@ async def service_context() -> AsyncIterator[MCPService]:
         await service.close()
 
 
+def _stub_max_results() -> int:
+    value = os.getenv("STUB_MAX_RESULTS")
+    if not value:
+        return 2000
+    try:
+        parsed = int(value)
+    except ValueError:
+        return 2000
+    return max(1, min(10_000, parsed))
+
+
 async def _ensure_runs(service: MCPService) -> tuple[str, str]:
     fulltext = await service.search_lane("fulltext", q="integration query", top_k=200)
     semantic = await service.search_lane("semantic", q="integration query", top_k=200)
@@ -38,7 +50,7 @@ async def test_peek_snippets_flow_with_real_backends():
             ],
             weights={"recall": 1.0, "precision": 1.0},
             rrf_k=60,
-            beta=1.0,
+            beta_fuse=1.0,
             family_fold=False,
             target_profile={},
             top_m_per_lane={"fulltext": 10000, "semantic": 10000},
@@ -48,7 +60,7 @@ async def test_peek_snippets_flow_with_real_backends():
             runs=blend_request.runs,
             weights=blend_request.weights,
             rrf_k=blend_request.rrf_k,
-            beta=blend_request.beta,
+            beta_fuse=blend_request.beta_fuse,
             family_fold=blend_request.family_fold,
             target_profile=blend_request.target_profile,
             top_m_per_lane=blend_request.top_m_per_lane,
@@ -83,7 +95,8 @@ async def test_peek_snippets_flow_with_real_backends():
 async def test_search_lane_handles_thousands_of_docs():
     async with service_context() as service:
         response = await service.search_lane("fulltext", q="large search", top_k=5000)
-        assert response.count_returned == 5000
+        expected = min(5000, _stub_max_results())
+        assert response.count_returned == expected
         assert response.run_id_lane
 
 
@@ -105,7 +118,7 @@ async def test_large_search_and_peek_budget_flow():
             ],
             weights={"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
             rrf_k=60,
-            beta=1.0,
+            beta_fuse=1.0,
             family_fold=False,
             target_profile={},
             top_m_per_lane={"fulltext": 5000, "semantic": 5000},

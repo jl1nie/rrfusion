@@ -59,7 +59,7 @@ def compute_frontier(
     ordered_docs: list[str],
     k_grid: Sequence[int],
     relevant_flags: dict[str, bool],
-    beta: float,
+    beta_fuse: float,
 ) -> list[BlendFrontierEntry]:
     total_relevant = sum(1 for flag in relevant_flags.values() if flag)
     if total_relevant == 0:
@@ -73,7 +73,7 @@ def compute_frontier(
         relevant_found = sum(1 for doc_id in top_subset if relevant_flags.get(doc_id))
         precision = relevant_found / len(top_subset)
         recall = relevant_found / total_relevant
-        beta_sq = beta * beta
+        beta_sq = beta_fuse * beta_fuse
         if precision == 0 and recall == 0:
             f_beta = 0.0
         else:

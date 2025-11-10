@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +50,13 @@ def _build_cli_env(redis_url: str, stub_max_results: int) -> dict[str, str]:
     env = os.environ.copy()
     env["REDIS_URL"] = redis_url
     env["STUB_MAX_RESULTS"] = str(stub_max_results)
+    src_path = Path(__file__).resolve().parents[2] / "src"
+    pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(src_path)
+        if not pythonpath
+        else os.pathsep.join([str(src_path), pythonpath])
+    )
     return env
 
 

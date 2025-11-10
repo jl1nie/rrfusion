@@ -24,6 +24,9 @@ services:
     build:
       context: ..
       dockerfile: apps/db_stub/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
     container_name: rrfusion-ci-db-stub
     env_file: .env
     depends_on:
@@ -45,6 +48,9 @@ services:
     build:
       context: ..
       dockerfile: apps/mcp-host/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
     container_name: ${MCP_SERVICE_HOST:-rrfusion-ci-mcp}
     env_file: .env
     environment:
