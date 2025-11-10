@@ -9,6 +9,19 @@ script = [
     "docker build -f apps/mcp-host/Dockerfile -t infra-rrfusion-tests ."
 ]
 
+[tasks.start-stack]
+description = "Start the CI-focused Redis/DB/MCP stack (closed network)."
+dependencies = ["build-cli"]
+script = [
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.test.yml up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp rrfusion-tests'"
+]
+
+[tasks.stop-stack]
+description = "Tear down the CI test stack."
+script = [
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.test.yml down'"
+]
+
 [tasks.start-stub]
 description = "Start the stub-based stack (for local E2E testing)."
 dependencies = ["build-cli"]
@@ -35,35 +48,22 @@ script = [
     "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.prod.yml down'"
 ]
 
-[tasks.start-ci]
-description = "Start the tightly encapsulated CI stack using infra/compose.ci.yml."
-dependencies = ["build-cli"]
-script = [
-    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.ci.yml up -d --force-recreate --build rrfusion-redis rrfusion-db-stub rrfusion-mcp rrfusion-tests'"
-]
-
-[tasks.stop-ci]
-description = "Stop the CI stack started from infra/compose.ci.yml."
-script = [
-    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.ci.yml down'"
-]
-
 # --- テストタスク ---
 
 [tasks.integration]
-description = "Run the integration suite against the closed CI stack."
+description = "Run the integration suite against the stub stack."
 script = [
-    "cargo make start-ci",
-    "docker compose -f infra/compose.ci.yml exec -T rrfusion-tests pytest -m integration",
-    "cargo make stop-ci"
+    "cargo make start-stub",
+    "docker run --rm --network ${MCP_EXTERNAL_NETWORK} --env-file infra/.env infra-rrfusion-tests pytest -m integration",
+    "cargo make stop-stub"
 ]
 
 [tasks.e2e]
-description = "Run the FastMCP CLI e2e suite against the closed CI stack."
+description = "Run the FastMCP CLI e2e suite against the stub stack."
 script = [
-    "cargo make start-ci",
-    "docker compose -f infra/compose.ci.yml exec -T rrfusion-tests pytest -m e2e",
-    "cargo make stop-ci"
+    "cargo make start-stub",
+    "docker run --rm --network ${MCP_EXTERNAL_NETWORK} --env-file infra/.env infra-rrfusion-tests pytest -m e2e",
+    "cargo make stop-stub"
 ]
 
 # --- CI/CD フロー ---

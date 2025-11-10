@@ -8,8 +8,8 @@ This scaffold includes:
 - `apps/mcp-host` — FastMCP/test image Dockerfile reused by Compose
 - The MCP CLI image now uses a multi-stage build so dependency installation (pip) is cached between builds, making `cargo make build-cli`/`cargo make start-*` faster.
 - `infra/compose.prod.yml` — minimal Redis + MCP stack (no DB stub) suitable for production-like runs
-- `infra/compose.ci.yml` — hermetic CI stack (Redis + DB stub + MCP + pytest runner) used by `cargo make integration`/`e2e`/`ci` so no external network is needed.
-- `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
+- `infra/compose.test.yml` — CI/closed-network stack with Redis, the DB stub, MCP, and the pytest runner.
+ - `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
 - `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
 ## Contents
@@ -112,27 +112,27 @@ This exposes the same logic as the FastAPI service while letting any MCP-native 
 
 If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis and the FastMCP host with port `3000` forwarded to your machine; add the DB stub by running `docker compose -f infra/compose.stub.yml up -d rrfusion-db-stub rrfusion-mcp` when you need it.
 
-- FastMCP exposes two curated prompts (`RRFusion MCP Handbook` and `Tool Recipes`) via `@mcp.prompt`. Each prompt crushes the handbook text or the example JSON recipes so that agents can fetch guidance and copy/paste payloads directly from the same server that runs the tools. New handbook/toolrecipe content now spells out the pipeline, heuristics, budgeting, metrics, and security reminders agents rely on at runtime.
+- FastMCP exposes two curated prompts (`RRFusion MCP Handbook` and `Tool Recipes`) via `@mcp.prompt`. Each prompt crushes the handbook text or the example JSON recipes so that agents can fetch guidance and copy/paste payloads directly from the same server that runs the tools.
 
 ## Prompt Catalog
 
-1. **RRFusion MCP Handbook** – follow the documented pipeline (query normalization → lane searches → fusion → snippet budgeting → mutation → provenance), read tool-specific heuristics, see snippet budget/peek patterns, and mind the telemetry and security reminders directly from `mcp.prompt(name="RRFusion MCP Handbook")`.
-2. **Tool Recipes** – pull the JSON examples (including good/bad prompts) for `search_fulltext`, `search_semantic`, `blend_frontier_codeaware`, `peek_snippets`, `get_snippets`, `mutate_run`, and `get_provenance` by calling `mcp.prompt(name="Tool Recipes")`.
+1. **RRFusion MCP Handbook** – follow the documented pipeline, heuristics per tool, telemetry/metric reminders, and security notes directly from `mcp.prompt(name="RRFusion MCP Handbook")`.
+2. **Tool Recipes** – pull the JSON examples for `search_fulltext`, `search_semantic`, `blend_frontier_codeaware`, `peek_snippets`, `get_snippets`, `mutate_run`, and `get_provenance` by calling `mcp.prompt(name="Tool Recipes")`.
 
 Call the prompts if you want the FastMCP host itself to serve the guidance text instead of keeping it in README.
 
 ## Testing
 
-`scripts/run_e2e.sh` is the canonical local CI flow: it builds `infra-rrfusion-tests`, brings up Redis + DB stub + FastMCP via `infra/compose.stub.yml`, waits for `rrfusion-mcp` to resolve, runs `pytest -m integration`, then `pytest -m e2e`, and finally tears the stack down. This shell script powers the `cargo make start-stub`/`stop-stub` tasks described below when you need attachable networking.
+`scripts/run_e2e.sh` is the canonical local CI flow: it builds `infra-rrfusion-tests`, brings up Redis + DB stub + FastMCP via `infra/compose.stub.yml`, waits for `rrfusion-mcp` to resolve, runs `pytest -m integration`, then `pytest -m e2e`, and finally tears the stack down. This shell script is what we use in the `cargo make` tasks described below.
 
-`cargo make integration`, `cargo make e2e`, and therefore `cargo make ci` now use `infra/compose.ci.yml` via `cargo make start-ci`/`stop-ci`, so they run in a hermetic Redis+stub+MCP+pytest stack that never touches any external network. The stub stack (started via `cargo make start-stub`) is still useful when you want to talk to the MCP host from another container or the host itself.
+When you call `cargo make start-stack`/`stop-stack` you get the CI-focused `infra/compose.test.yml` stack running entirely inside a Compose network (its `rrfusion-tests` service hosts the runner). The stub stack remains available via `cargo make start-stub`/`stop-stub` when you need attachable networking.
 
 If you prefer to orchestrate via `cargo make`, the provided `Makefile.toml` defines:
 
 1. `cargo make lint` — run `flake8` inside the CLI image.
 2. `cargo make unit` — run annotated unit tests (`pytest -m unit`) inside the CLI image.
-3. `cargo make integration` — start the CI stack (`infra/compose.ci.yml`) via `start-ci`, run `pytest -m integration`, and shut it down.
-4. `cargo make e2e` — start the CI stack (`infra/compose.ci.yml`) via `start-ci`, run `pytest -m e2e`, and shut it down.
+3. `cargo make integration` — start the stub stack, run `pytest -m integration`, and shut it down.
+4. `cargo make e2e` — start the stub stack, run `pytest -m e2e`, and shut it down.
 5. `cargo make ci` — sequentially runs lint, unit, integration, and e2e under a single invocation.
 
 For production-like validation you can also call `cargo make start-prod`/`cargo make stop-prod`, which spin up/down `infra/compose.prod.yml` (Redis + MCP) using the same `.env` so the host port and service variables stay consistent.
@@ -327,7 +327,7 @@ from rrfusion.mcp.host import mcp
 @mcp.tool
 async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     """
-    signature: mutate_run(run_id: str, delta: MutateDelta)
+    signature: mutate_run(run_id: str, *, delta: MutateDelta)
     prompts/list:
     - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
     - "List frontier deltas after tightening beta/rrf_k on run {run_id}"
@@ -337,8 +337,6 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 ```
 
 `mutate_run` copies the cached lane results, reapplies the tweaked recipe, and yields a brand-new fusion run (with lineage). Prefer this over re-searching when you only change blending parameters.
-
-`delta` accepts weight adjustments, RRF/additional `rrf_k`/`beta` tweaks, and filter overrides so you can mutate the frontier without replicating full lane searches.
 
 ### `get_provenance`
 
