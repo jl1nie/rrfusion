@@ -125,7 +125,8 @@ async def scenario_search_counts(cfg: RunnerConfig) -> None:
             if data["zcard"] != payload["count_returned"]:
                 raise AssertionError(f"{lane} lane zcard mismatch {data['zcard']}")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
@@ -141,7 +142,8 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
         if not fusion["freqs_topk"]["ipc"]:
             raise AssertionError("IPC freqs missing in fusion response")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_peek_multi_cycle(cfg: RunnerConfig) -> None:
@@ -167,7 +169,8 @@ async def scenario_peek_multi_cycle(cfg: RunnerConfig) -> None:
         if peeked <= 0:
             raise AssertionError("No items peeked over cycles")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_snippets_missing_id(cfg: RunnerConfig) -> None:
@@ -189,7 +192,8 @@ async def scenario_snippets_missing_id(cfg: RunnerConfig) -> None:
         if response["doc-missing-000"]["title"] != "":
             raise AssertionError("Missing ID did not return empty snippet")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_mutate_missing_run(cfg: RunnerConfig) -> None:
@@ -233,7 +237,8 @@ async def scenario_peek_large(cfg: RunnerConfig) -> None:
         if peek.get("peek_cursor") is None:
             raise AssertionError("Peek response missing cursor")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_peek_single(cfg: RunnerConfig) -> None:
@@ -257,7 +262,8 @@ async def scenario_peek_single(cfg: RunnerConfig) -> None:
             raise AssertionError("First page missing cursor")
         logger.debug("peek-single items=%s cursor=%s", len(first["items"]), cursor)
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_peek_pagination(cfg: RunnerConfig) -> None:
@@ -308,7 +314,8 @@ async def scenario_peek_pagination(cfg: RunnerConfig) -> None:
         if budget_third.get("peek_cursor") is not None:
             logger.debug("tight budget returned cursor=%s (allowed)", budget_third["peek_cursor"])
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_get_snippets(cfg: RunnerConfig) -> None:
@@ -334,7 +341,8 @@ async def scenario_get_snippets(cfg: RunnerConfig) -> None:
             if len(fields["title"]) > 60 or len(fields["abst"]) > 120:
                 raise AssertionError(f"Snippet length exceeded caps for {doc_id}")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
@@ -368,7 +376,8 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
         if fusion["run_id"] not in provenance["history"]:
             raise AssertionError("Parent run missing from provenance history")
 
-    await redis_client.aclose()
+    await redis_client.close()
+    await redis_client.wait_closed()
 
 
 async def run(cfg: RunnerConfig) -> None:
