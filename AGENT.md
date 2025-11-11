@@ -56,7 +56,6 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 | Key | Default | Notes |
 |---|---|---|
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection string |
-| `DB_STUB_URL` | `http://rrfusion-db-stub:8080` | Randomized scores & snippets |
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `3000` | MCP port |
 | `MCP_SERVICE_HOST` | `localhost` | Hostname clients should use when connecting to MCP (`infra/.env` overrides this to `mcp` inside Docker). |

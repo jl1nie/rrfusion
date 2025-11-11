@@ -93,12 +93,15 @@ def aggregate_code_freqs(
     doc_meta: dict[str, dict[str, list[str]]],
     doc_ids: Sequence[str],
 ) -> dict[str, dict[str, int]]:
-    freqs: dict[str, dict[str, int]] = {"ipc": defaultdict(int), "cpc": defaultdict(int)}  # type: ignore[assignment]
+    TAXONOMIES = ("ipc", "cpc", "fi", "ft")
+    freqs: dict[str, dict[str, int]] = {
+        taxonomy: defaultdict(int) for taxonomy in TAXONOMIES  # type: ignore[assignment]
+    }
     for doc_id in doc_ids:
         meta = doc_meta.get(doc_id)
         if not meta:
             continue
-        for taxonomy in ("ipc", "cpc"):
+        for taxonomy in TAXONOMIES:
             for code in meta.get(f"{taxonomy}_codes", []):
                 freqs[taxonomy][code] += 1
     return {

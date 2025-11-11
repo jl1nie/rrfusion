@@ -31,21 +31,23 @@ class SearchRequest(BaseModel):
 class SearchItem(BaseModel):
     doc_id: str
     score: float
-    title: str
-    abst: str
-    claim: str
-    description: str
-    ipc_codes: list[str]
-    cpc_codes: list[str]
+    ipc_codes: list[str] = Field(default_factory=list)
+    cpc_codes: list[str] = Field(default_factory=list)
+    fi_codes: list[str] = Field(default_factory=list)
+    ft_codes: list[str] = Field(default_factory=list)
+    title: str | None = None
+    abst: str | None = None
+    claim: str | None = None
+    description: str | None = None
 
 
 class DBSearchResponse(BaseModel):
     items: list[SearchItem]
-    code_freqs: dict[str, dict[str, int]]
+    code_freqs: dict[str, dict[str, int]] | None = None
 
 
 class SearchToolResponse(BaseModel):
-    lane: Literal["fulltext", "semantic"]
+    lane: Literal["fulltext", "semantic", "original_dense"]
     run_id_lane: str
     count_returned: int
     truncated: bool
@@ -54,7 +56,7 @@ class SearchToolResponse(BaseModel):
 
 
 class BlendRunInput(BaseModel):
-    lane: Literal["fulltext", "semantic"]
+    lane: Literal["fulltext", "semantic", "original_dense"]
     run_id_lane: str
 
 

@@ -74,6 +74,8 @@ class RedisStorage:
                 "description": doc.get("description", ""),
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
+                "fi_codes": json.dumps(doc.get("fi_codes", [])),
+                "ft_codes": json.dumps(doc.get("ft_codes", [])),
             }
             pipe.hset(doc_key, mapping=doc_payload)
             pipe.expire(doc_key, snippet_ttl)
@@ -117,6 +119,8 @@ class RedisStorage:
                 "description": doc.get("description", ""),
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
+                "fi_codes": json.dumps(doc.get("fi_codes", [])),
+                "ft_codes": json.dumps(doc.get("ft_codes", [])),
             }
             pipe.hset(doc_key, mapping=doc_payload)
             pipe.expire(doc_key, snippet_ttl)
@@ -175,6 +179,8 @@ class RedisStorage:
                 "description": payload.get("description", ""),
                 "ipc_codes": json.loads(payload.get("ipc_codes", "[]")),
                 "cpc_codes": json.loads(payload.get("cpc_codes", "[]")),
+                "fi_codes": json.loads(payload.get("fi_codes", "[]")),
+                "ft_codes": json.loads(payload.get("ft_codes", "[]")),
             }
         return docs
 

@@ -188,6 +188,7 @@ _HANDBOOK = """# RRFusion MCP Handbook (v1.1)
   - Let query-side code weights be `w_q(c)` from PRF/LLM.
   - Doc-side contribution: `s_code(d) = Σ_{c∈C_d} idf_c * w_q(c)`
   - Final rank score ~ `RRF(rank)` adjusted by lane weights, then **re-ranked** by `s_code(d)` with a small mixing λ.
+  - When encoding `target_profile` for Japanese families, prefer FI coverage first and treat FT references as supporting signal; fall back to IPC/CPC only if FI/FT is absent or for non‑JP jurisdictions.
 
 ---
 

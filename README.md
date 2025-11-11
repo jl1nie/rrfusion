@@ -164,6 +164,8 @@ The MCP loop always starts with independent lane searches, continues with fusion
 4. When you need to branch on weights, RRF constants, or code targeting, call `mutate_run` instead of issuing new lane searches.
 5. Preserve provenance by logging the fusion `run_id` and, when necessary, resolve it later via `get_provenance`.
 
+**Classification guidance:** When the mission targets JP families, bias `target_profile` toward FI codes first and treat FT codes as secondary corroboration; rely on IPC/CPC evidence for other jurisdictions or when FI/FT labels are missing.
+
 ## MCP Tool Reference
 
 Each section shows the FastMCP-style decoration you would give the tool in an agent registry. The docstrings list the canonical signature plus typical prompts (`prompts/list` for “give me a ranked list” asks and `prompts/get` for retrieval/handle requests).

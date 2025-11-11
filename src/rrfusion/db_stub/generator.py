@@ -44,6 +44,8 @@ CPC_CODES = [
     "C07D401/12",
     "B60L11/18",
 ]
+FI_CODES = ["H04L1/00", "H04W24/00", "G06F3/00", "B60L3/00"]
+FT_CODES = ["432", "562", "H439", "G261"]
 
 DEFAULT_MAX_RESULTS = 2000
 
@@ -79,6 +81,8 @@ def _doc_meta(doc_id: str) -> dict:
     rng = _seed(doc_id)
     ipc_codes = sorted(set(rng.sample(IPC_CODES, k=rng.randint(1, 3))))
     cpc_codes = sorted(set(rng.sample(CPC_CODES, k=rng.randint(1, 3))))
+    fi_codes = sorted(set(rng.sample(FI_CODES, k=rng.randint(0, 2))))
+    ft_codes = sorted(set(rng.sample(FT_CODES, k=rng.randint(0, 2))))
     title = f"{rng.choice(WORDS).title()} {rng.choice(WORDS).title()} system {doc_id[-3:]}"
     abst = _paragraph(rng, sentences=2, words=10)
     claim = _paragraph(rng, sentences=1, words=14)
@@ -91,6 +95,8 @@ def _doc_meta(doc_id: str) -> dict:
         "description": description,
         "ipc_codes": ipc_codes,
         "cpc_codes": cpc_codes,
+        "fi_codes": fi_codes,
+        "ft_codes": ft_codes,
     }
 
 
@@ -101,6 +107,8 @@ def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchRes
     items: list[SearchItem] = []
     ipc_freq: Counter[str] = Counter()
     cpc_freq: Counter[str] = Counter()
+    fi_freq: Counter[str] = Counter()
+    ft_freq: Counter[str] = Counter()
 
     for rank in range(limit):
         doc_id = random_doc_id(rng)
@@ -111,6 +119,8 @@ def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchRes
         score = 1.0 / (rank + 1 + rng.random())
         ipc_freq.update(meta["ipc_codes"])
         cpc_freq.update(meta["cpc_codes"])
+        fi_freq.update(meta["fi_codes"])
+        ft_freq.update(meta["ft_codes"])
         items.append(SearchItem(**meta, score=round(score, 6)))
 
     return DBSearchResponse(
@@ -118,6 +128,8 @@ def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchRes
         code_freqs={
             "ipc": dict(ipc_freq),
             "cpc": dict(cpc_freq),
+            "fi": dict(fi_freq),
+            "ft": dict(ft_freq),
         },
     )
 

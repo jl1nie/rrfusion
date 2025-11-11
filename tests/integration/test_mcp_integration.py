@@ -7,6 +7,7 @@ from typing import AsyncIterator
 import pytest
 
 from rrfusion.config import Settings
+from rrfusion.mcp.backends import CIBackend, LaneBackendRegistry
 from rrfusion.mcp.service import MCPService
 from rrfusion.models import BlendRequest, PeekSnippetsRequest
 
@@ -14,7 +15,15 @@ from rrfusion.models import BlendRequest, PeekSnippetsRequest
 @asynccontextmanager
 async def service_context() -> AsyncIterator[MCPService]:
     settings = Settings()
-    service = MCPService(settings)
+    ci_backend = CIBackend(settings)
+    registry = LaneBackendRegistry(
+        settings,
+        overrides={
+            "fulltext": ci_backend,
+            "semantic": ci_backend,
+        },
+    )
+    service = MCPService(settings, backend_registry=registry)
     try:
         yield service
     finally:

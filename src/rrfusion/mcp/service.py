@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from typing import Any, Literal
 from uuid import uuid4
 
-import httpx
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
 
@@ -24,7 +24,6 @@ from ..models import (
     BlendRequest,
     BlendResponse,
     BlendRunInput,
-    DBSearchResponse,
     Filters,
     GetSnippetsRequest,
     MutateDelta,
@@ -35,12 +34,14 @@ from ..models import (
     PeekSnippetsResponse,
     ProvenanceResponse,
     RollupConfig,
+    SearchItem,
     SearchRequest,
     SearchToolResponse,
 )
 from ..snippets import build_snippet_item, cap_by_budget
 from ..storage import RedisStorage
 from ..utils import hash_query
+from .backends import LaneBackend, LaneBackendRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,35 @@ DEFAULT_TOP_M_PER_LANE = {"fulltext": 10000, "semantic": 10000}
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 
 
+def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
+    """Aggregate IPC/CPC/FI/FT frequencies from returned items."""
+
+    taxonomy_counters: dict[str, Counter[str]] = {
+        taxonomy: Counter() for taxonomy in ("ipc", "cpc", "fi", "ft")
+    }
+    for item in items:
+        taxonomy_counters["ipc"].update(item.ipc_codes)
+        taxonomy_counters["cpc"].update(item.cpc_codes)
+        taxonomy_counters["fi"].update(item.fi_codes)
+        taxonomy_counters["ft"].update(item.ft_codes)
+    return {taxonomy: dict(counter) for taxonomy, counter in taxonomy_counters.items()}
+
+
 class MCPService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        backend_registry: LaneBackendRegistry | None = None,
+    ) -> None:
         self.settings = settings
         self.redis = Redis.from_url(settings.redis_url)
         self.storage = RedisStorage(self.redis, settings)
-        self.http = httpx.AsyncClient(base_url=settings.db_stub_url, timeout=30.0)
+        self.backend_registry = backend_registry or LaneBackendRegistry(settings)
 
     async def close(self) -> None:
         try:
-            await self.http.aclose()
+            await self.backend_registry.close()
         finally:
             await self.redis.aclose()
 
@@ -94,10 +114,14 @@ class MCPService:
             rollup=rollup,
             budget_bytes=budget_bytes,
         )
-        response = await self.http.post(f"/search/{lane}", json=request.model_dump())
-        response.raise_for_status()
-        db_payload = DBSearchResponse.model_validate(response.json())
-        docs = [item.model_dump() for item in db_payload.items]
+        backend = self.backend_registry.get_backend(lane)
+        if not backend:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"lane {lane} unsupported",
+            )
+        db_payload = await backend.search(request, lane=lane)
+        docs = [item.model_dump(exclude_none=True) for item in db_payload.items]
         count_returned = len(docs)
         truncated = count_returned < request.top_k
         query_hash = hash_query(
@@ -115,7 +139,7 @@ class MCPService:
             "query_hash": query_hash,
         }
 
-        freq_summary = db_payload.code_freqs
+        freq_summary = db_payload.code_freqs or _code_freq_summary(db_payload.items)
         await self.storage.store_lane_run(
             run_id=run_id,
             lane=lane,
@@ -133,6 +157,25 @@ class MCPService:
             code_freqs=freq_summary,
             cursor=None,
         )
+
+    async def _fetch_snippets_from_backend(
+        self,
+        backend: LaneBackend,
+        lane: str | None,
+        *,
+        ids: list[str],
+        fields: list[str],
+        per_field_chars: dict[str, int],
+    ) -> dict[str, dict[str, str]]:
+        request = GetSnippetsRequest(
+            ids=ids,
+            fields=fields,
+            per_field_chars=per_field_chars or {},
+        )
+        try:
+            return await backend.fetch_snippets(request, lane=lane)
+        except NotImplementedError:
+            return {}
 
     # ------------------------------------------------------------------ #
     async def blend(
@@ -350,6 +393,33 @@ class MCPService:
         doc_ids = [doc_id for doc_id, _ in rows]
         doc_metadata = await self.storage.get_docs(doc_ids)
         logger.debug("peek_snippets hydrated %s docs with metadata", len(doc_metadata))
+
+        lane = meta.get("lane")
+        backend = self.backend_registry.get_backend(lane) if lane else None
+        fields = request.fields or ["title", "abst", "claim"]
+        per_field_chars = request.per_field_chars
+        missing_ids = [
+            doc_id
+            for doc_id in doc_ids
+            if not doc_metadata.get(doc_id)
+            or any(not doc_metadata[doc_id].get(field) for field in fields)
+        ]
+        if missing_ids and backend:
+            fetched = await self._fetch_snippets_from_backend(
+                backend=backend,
+                lane=lane,
+                ids=missing_ids,
+                fields=fields,
+                per_field_chars=per_field_chars,
+            )
+            if fetched:
+                docs_to_upsert: list[dict[str, str]] = []
+                for doc_id, payload in fetched.items():
+                    existing = doc_metadata.get(doc_id, {})
+                    merged = {**existing, **payload}
+                    doc_metadata[doc_id] = merged
+                    docs_to_upsert.append({"doc_id": doc_id, **payload})
+                await self.storage.upsert_docs(docs_to_upsert)
 
         items = [
             build_snippet_item(

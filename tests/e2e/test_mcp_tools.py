@@ -50,6 +50,16 @@ def _build_cli_env(redis_url: str, stub_max_results: int) -> dict[str, str]:
     env = os.environ.copy()
     env["REDIS_URL"] = redis_url
     env["STUB_MAX_RESULTS"] = str(stub_max_results)
+    env.setdefault("PATENTFIELD_URL", os.getenv("PATENTFIELD_URL", "http://rrfusion-db-stub:8080"))
+    env.setdefault("PATENTFIELD_SEARCH_PATH", os.getenv("PATENTFIELD_SEARCH_PATH", "/search"))
+    env.setdefault("PATENTFIELD_SNIPPETS_PATH", os.getenv("PATENTFIELD_SNIPPETS_PATH", "/snippets"))
+    env.setdefault("PATENTFIELD_API_KEY", os.getenv("PATENTFIELD_API_KEY", ""))
+    env.setdefault("CI_DB_STUB_URL", os.getenv("CI_DB_STUB_URL", "http://rrfusion-db-stub:8080"))
+    env.setdefault("CI_SEARCH_PATH", os.getenv("CI_SEARCH_PATH", "/search"))
+    env.setdefault("CI_SNIPPETS_PATH", os.getenv("CI_SNIPPETS_PATH", "/snippets"))
+    env.setdefault("WWRAG_URL", os.getenv("WWRAG_URL", "http://rrfusion-db-stub:8080"))
+    env.setdefault("WWRAG_SEARCH_PATH", os.getenv("WWRAG_SEARCH_PATH", "/search"))
+    env.setdefault("WWRAG_SNIPPETS_PATH", os.getenv("WWRAG_SNIPPETS_PATH", "/snippets"))
     src_path = Path(__file__).resolve().parents[2] / "src"
     pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (
