@@ -73,7 +73,12 @@ async def test_peek_snippets_flow_with_real_backends():
             offset=0,
             limit=50,
             fields=["title", "abst", "claim", "description"],
-            per_field_chars={"title": 120, "abst": 360, "claim": 360, "description": 600},
+            per_field_chars={
+                "title": 120,
+                "abst": 360,
+                "claim": 360,
+                "description": 600,
+            },
             budget_bytes=4096,
         )
         response = await service.peek_snippets(
@@ -104,12 +109,18 @@ async def test_search_lane_handles_thousands_of_docs():
 @pytest.mark.asyncio
 async def test_large_search_and_peek_budget_flow():
     async with service_context() as service:
-        fulltext = await service.search_lane("fulltext", q="budget stress query", top_k=5000)
-        semantic = await service.search_lane("semantic", q="budget stress query", top_k=5000)
+        fulltext = await service.search_lane(
+            "fulltext", q="budget stress query", top_k=5000
+        )
+        semantic = await service.search_lane(
+            "semantic", q="budget stress query", top_k=5000
+        )
 
         min_count = min(fulltext.count_returned, semantic.count_returned)
         if min_count < 4000:
-            pytest.skip("DB stub not configured for large-result scenarios (need >=4k hits)")
+            pytest.skip(
+                "DB stub not configured for large-result scenarios (need >=4k hits)"
+            )
 
         blend_request = BlendRequest(
             runs=[
@@ -128,7 +139,7 @@ async def test_large_search_and_peek_budget_flow():
             runs=blend_request.runs,
             weights=blend_request.weights,
             rrf_k=blend_request.rrf_k,
-            beta=blend_request.beta,
+            beta_fuse=blend_request.beta_fuse,
             family_fold=blend_request.family_fold,
             target_profile=blend_request.target_profile,
             top_m_per_lane=blend_request.top_m_per_lane,
@@ -140,7 +151,12 @@ async def test_large_search_and_peek_budget_flow():
             offset=0,
             limit=80,
             fields=["title", "abst", "claim", "description"],
-            per_field_chars={"title": 220, "abst": 520, "claim": 640, "description": 720},
+            per_field_chars={
+                "title": 220,
+                "abst": 520,
+                "claim": 640,
+                "description": 720,
+            },
             budget_bytes=20_480,
         )
         peek = await service.peek_snippets(
