@@ -196,8 +196,8 @@ class MCPService:
             )
         if params is None:
             if lane == "fulltext":
-            if not q:
-                raise HTTPException(
+                if not q:
+                    raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="query required for fulltext lane",
                     )
