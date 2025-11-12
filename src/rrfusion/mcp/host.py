@@ -11,19 +11,19 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from rrfusion.config import get_settings
+from rrfusion.mcp.recipes import HANDBOOK, TOOL_RECIPES
 from rrfusion.mcp.service import MCPService
 from rrfusion.models import (
     BlendResponse,
     BlendRunInput,
     Cond,
-    FulltextParams,
     MutateDelta,
     MutateResponse,
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
     SearchToolResponse,
-    SemanticParams,
+    SnippetField,
 )
 
 settings = get_settings()
@@ -127,247 +127,16 @@ def _require_service() -> MCPService:
 # Prompts
 # ============================
 
-_HANDBOOK = """# RRFusion MCP Handbook (v1.1)
+"""Handbook/recipe strings now live in rrfusion.mcp.recipes."""
 
-**Mission**: Maximize *effective* Fβ (default β=1) for prior-art retrieval using multi-lane search and code-aware fusion under no-gold-label conditions.  
-**Transport**: HTTP / streamable-http at `/{base_path}` (default `/mcp`).  
-**Auth**: Bearer token if configured.
-
-> Notes
-> - Lane raw scores are **incomparable**. Use **rank-based fusion (RRF)** as the primary method.  
-> - `beta_fuse` below controls **precision/recall trade-off in fusion**, not the Fβ metric itself.
-
----
-
-## 1. Pipeline (Agent-facing)
-1) Normalize & synonymize query (LLM; acronyms, phrases, negatives)
-2) Run lanes in parallel
-   - `search_fulltext` → **precision-skewed** keyword evidence; expand recall via synonyms & larger `top_k`
-   - `search_semantic` → embedding coverage with same filters to curb drift
-3) Fuse via `blend_frontier_codeaware` (RRF + code prior)
-4) Budget check with `peek_snippets` (head/match/mix)
-5) Shortlist then `get_snippets`
-6) If proxy-metrics unsatisfactory → `mutate_run` (weights / rrf_k / beta_fuse / filters)
-7) Persist with `get_provenance`
-
----
-
-## 2. Lane Tools
-
-### `search_fulltext`
-- **Args**: 
-  - `q: string`
-  - `filters?: { must?: Cond[]; should?: Cond[]; must_not?: Cond[] }`
-  - `top_k: int = 800`
-  - `budget_bytes: int = 4096`
-  - `seed?: int`, `trace_id?: string`
-- **Cond**: `{ field: "ipc|fi|cpc|pubyear|assignee|country", op: "in|range|eq|neq", value: any }`
-- **Tips**: Use field boosts server-side (claim > title > abst > desc). Keep `top_k` generous (200–1000), and mirror filters in semantic.
-
-### `search_semantic`
-- **Args**: same as `search_fulltext`
-- **Tips**: Keep `q` concise (≤256 chars). Apply same `filters` when drift risk exists.
-
----
-
-## 3. Fusion
-
-### `blend_frontier_codeaware`
-- **Args**:
-  - `runs: [{ lane: "fulltext|semantic", run_id: string }]`
-  - `weights?: { fulltext?: float, semantic?: float }`  (lane **rank** weights)
-  - `rrf_k: int = 60`
-  - `beta_fuse: float = 1.0`  ← higher → recall, lower → precision
-  - `family_fold: boolean = true`
-  - `target_profile?: { ipc|fi|cpc: { code: weight } }`
-  - `code_idf_mode?: "global"|"domain" = "global"`
-  - `top_m_per_lane?: int`
-  - `k_grid?: [int]`   // optional sweep
-  - `peek?: { limit?: int }`
-- **Code prior**:
-  - Let `idf_c = log(N / (1 + freq(c)))`
-  - Let query-side code weights be `w_q(c)` from PRF/LLM.
-  - Doc-side contribution: `s_code(d) = Σ_{c∈C_d} idf_c * w_q(c)`
-  - Final rank score ~ `RRF(rank)` adjusted by lane weights, then **re-ranked** by `s_code(d)` with a small mixing λ.
-  - When encoding `target_profile` for Japanese families, prefer FI coverage first and treat FT references as supporting signal; fall back to IPC/CPC only if FI/FT is absent or for non‑JP jurisdictions.
-
----
-
-## 4. Snippet Budgeting
-
-### `peek_snippets`
-- **Args**:
-  - `run_id`, `offset=0`, `limit=12`
-- `fields?: ["title","abst","claim","desc"]`
-  - `per_field_chars?: { field: int }`
-  - `claim_count=3`
-  - `strategy: "head"|"match"|"mix"`
-  - `budget_bytes=12288`
-- **Patterns**:
-- `head` → titles/absts
-  - `match` → query highlights focus
-  - `mix` → balanced
-
-### `get_snippets`
-- **Args**: `ids[]`, `fields?`, `per_field_chars?`, `seed?`
-- **Note**: Independent of fusion cursor; random access OK.
-
----
-
-## 5. Iterative Tuning
-
-### `mutate_run`
-- **Args**: 
-  - `run_id`
-  - `delta`: `{ weights?|rrf_k?|beta_fuse?|filters?|top_m_per_lane?|family_fold? }`
-- **Loop**: Adjust → re-peek → compare proxy P/R/Fβ at fixed K.
-
-### `get_provenance`
-- **Args**: `run_id`
-- **Returns**: inputs, filters, lane stats, fusion params (`weights, rrf_k, beta_fuse`), code prior snapshot, metrics, `seed`, `trace_id`.
-
----
-
-## 6. Metrics & Logging (No-gold regime)
-
-- **Emit**:  
-  - `lane.top_k`, `fuse.rrf_k`, `beta_fuse`, `hit@k`, `p@k`, `r@k`, `f_beta@k`, `diversity@k`
-- **Proxy definitions**:
-  - `p@k` ≔ cross-lane agreement ratio at K (RRF ∩ lane tops)
-  - `r@k` ≔ PRF 再検索での再出現率 at K
-  - `f_beta@k` ≔ above two combined as Fβ (β from Mission)
-  - `diversity@k` ≔ 1 − avg pairwise similarity (MMR 由来)
-
----
-
-## 7. Security
-- Never send PII/secret in queries.  
-- Server injects downstream API keys.  
-- Client supplies **Bearer** token only.  
-- Redact snippets beyond `budget_bytes`.
-
----
-
-"""
-
-_TOOL_RECIPES = """# Tool Recipes & Few-shot (v1.1)
-
-## search_fulltext — examples
-**Good**
-```json
-{
-  "q": "grant-free uplink HARQ process scheduling",
-  "filters": {
-    "must": [{"field":"ipc","op":"in","value":["H04W72/04","H04L1/18"]}],
-    "should": [{"field":"pubyear","op":"range","value":{"gte":2018}}],
-    "must_not": []
-  },
-  "top_k": 500
-}
-```
-
-**Good (phrase/near)**
-```json
-{
-  "q": "\"uplink grant-free\"~3 early HARQ feedback",
-  "filters": {"must":[{"field":"cpc","op":"in","value":["H04W72/12"]}]},
-  "top_k": 600
-}
-```
-
-**Bad**
-```json
-{"q":"HARQ","top_k":10}
-```
-
----
-
-## search_semantic — examples
-**Good**
-```json
-{
-  "q": "contention-based uplink, early HARQ feedback for URLLC",
-  "filters": {"must":[{"field":"cpc","op":"in","value":["H04W72/12"]}]},
-  "top_k": 400
-}
-```
-
----
-
-## blend_frontier_codeaware — examples
-**Equal-weight fuse**
-```json
-{
-  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
-  "rrf_k": 60,
-  "beta_fuse": 1.0,
-  "family_fold": true
-}
-```
-
-**Favor codes**
-```json
-{
-  "runs": [{"lane":"fulltext","run_id":"L1"}, {"lane":"semantic","run_id":"L2"}],
-  "target_profile": {"ipc":{"H04W72/04":1.2,"H04L1/18":1.0}},
-  "rrf_k": 50,
-  "beta_fuse": 0.9
-}
-```
-
----
-
-## peek_snippets — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "offset":0,
-  "limit":12,
-  "strategy":"mix",
-  "budget_bytes": 12288
-}
-```
-
----
-
-## get_snippets — examples
-```json
-{
-  "ids":["US2023XXXXXXA1","EPXXXXXXXB1"],
-  "fields":["title","abst","claim"],
-  "per_field_chars":{"claim":1200}
-}
-```
-
----
-
-## mutate_run — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "delta":{"weights":{"semantic":1.2,"fulltext":1.0},"rrf_k":50,"beta_fuse":1.2}
-}
-```
-
----
-
-## get_provenance — example
-```json
-{"run_id":"FUSION_123"}
-```
-
-"""
-
-
-# ============================
 @mcp.prompt(name="RRFusion MCP Handbook")
 def _prompt_handbook() -> str:
-    return _HANDBOOK.format(base_path="mcp")
+    return HANDBOOK.format(base_path="mcp")
 
 
 @mcp.prompt(name="Tool Recipes")
 def _prompt_recipes() -> str:
-    return _TOOL_RECIPES
+    return TOOL_RECIPES
 
 
 # ============================
@@ -377,66 +146,72 @@ def _prompt_recipes() -> str:
 
 @mcp.tool
 async def search_fulltext(
-    q: str,
+    query: str,
     filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
     top_k: int = 800,
     budget_bytes: int = 4096,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
     signature: search_fulltext(
-        q: str,
+        query: str,
         filters: list[Cond] | None = None,
+        fields: list[SnippetField] | None = None,
         top_k: int = 800,
         budget_bytes: int = 4096,
         trace_id: str | None = None,
     )
     prompts/list:
-    - "List high-recall patent families mentioning {q} with IPC filters {filters}"
-    - "List prior art using only keyword evidence for {q}"
+    - "List high-recall patent families mentioning {query} with IPC filters {filters}"
+    - "List prior art using only keyword evidence for {query}"
     prompts/get:
-    - "Get a lane run handle I can feed into fusion for {q}"
+    - "Get a lane run handle I can feed into fusion for {query}"
     """
-    params = FulltextParams(
-        query=q,
-        filters=filters or [],
+    return await _require_service().search_lane(
+        "fulltext",
+        query=query,
+        filters=filters,
+        fields=fields,
         top_k=top_k,
         budget_bytes=budget_bytes,
         trace_id=trace_id,
     )
-    return await _require_service().search_lane("fulltext", params=params)
 
 
 @mcp.tool
 async def search_semantic(
-    q: str,
+    text: str,
     filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
     top_k: int = 800,
     budget_bytes: int = 4096,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
     signature: search_semantic(
-        q: str,
+        text: str,
         filters: list[Cond] | None = None,
+        fields: list[SnippetField] | None = None,
         top_k: int = 800,
         budget_bytes: int = 4096,
         trace_id: str | None = None,
     )
     prompts/list:
-    - "List semantically similar inventions about {q}"
-    - "List embedding-driven hits that stay on-spec for {q}"
+    - "List semantically similar inventions about {text}"
+    - "List embedding-driven hits that stay on-spec for {text}"
     prompts/get:
-    - "Get the semantic lane handle so I can blend with run {q}"
+    - "Get the semantic lane handle so I can blend with run {text}"
     """
-    params = SemanticParams(
-        text=q,
-        filters=filters or [],
+    return await _require_service().search_lane(
+        "semantic",
+        text=text,
+        filters=filters,
+        fields=fields,
         top_k=top_k,
         budget_bytes=budget_bytes,
         trace_id=trace_id,
     )
-    return await _require_service().search_lane("semantic", params=params)
 
 
 @mcp.tool

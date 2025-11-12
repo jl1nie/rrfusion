@@ -42,8 +42,8 @@ def _stub_max_results() -> int:
 
 
 async def _ensure_runs(service: MCPService) -> tuple[str, str]:
-    fulltext = await service.search_lane("fulltext", q="integration query", top_k=200)
-    semantic = await service.search_lane("semantic", q="integration query", top_k=200)
+    fulltext = await service.search_lane("fulltext", query="integration query", top_k=200)
+    semantic = await service.search_lane("semantic", text="integration query", top_k=200)
     return fulltext.run_id_lane, semantic.run_id_lane
 
 
@@ -108,7 +108,7 @@ async def test_peek_snippets_flow_with_real_backends():
 @pytest.mark.asyncio
 async def test_get_publication_returns_full_fields():
     async with service_context() as service:
-        search_resp = await service.search_lane("fulltext", q="fulltext", top_k=1)
+        search_resp = await service.search_lane("fulltext", query="fulltext", top_k=1)
         assert search_resp.response.items, "search should yield docs"
         doc_id = search_resp.response.items[0].doc_id
 
@@ -128,7 +128,7 @@ async def test_get_publication_returns_full_fields():
 @pytest.mark.asyncio
 async def test_search_lane_handles_thousands_of_docs():
     async with service_context() as service:
-        response = await service.search_lane("fulltext", q="large search", top_k=5000)
+        response = await service.search_lane("fulltext", query="large search", top_k=5000)
         expected = min(5000, _stub_max_results())
         assert response.count_returned == expected
         assert response.run_id_lane
@@ -139,10 +139,10 @@ async def test_search_lane_handles_thousands_of_docs():
 async def test_large_search_and_peek_budget_flow():
     async with service_context() as service:
         fulltext = await service.search_lane(
-            "fulltext", q="budget stress query", top_k=5000
+            "fulltext", query="budget stress query", top_k=5000
         )
         semantic = await service.search_lane(
-            "semantic", q="budget stress query", top_k=5000
+            "semantic", text="budget stress query", top_k=5000
         )
 
         min_count = min(fulltext.count_returned, semantic.count_returned)
@@ -207,7 +207,7 @@ async def test_large_search_and_peek_budget_flow():
 @pytest.mark.asyncio
 async def test_snippet_identifier_fields_available():
     async with service_context() as service:
-        search_resp = await service.search_lane("fulltext", q="id fields", top_k=5)
+        search_resp = await service.search_lane("fulltext", query="id fields", top_k=5)
         doc_ids = [item.doc_id for item in search_resp.response.items[:3]]
         assert doc_ids, "search should return doc IDs for snippet validations"
 

@@ -40,9 +40,11 @@ from ..models import (
     PeekSnippetsRequest,
     PeekSnippetsResponse,
     ProvenanceResponse,
+    SEARCH_FIELDS_DEFAULT,
     SemanticParams,
     SearchItem,
     SearchToolResponse,
+    SnippetField,
 )
 from ..snippets import build_snippet_item, cap_by_budget
 from ..storage import RedisStorage
@@ -104,6 +106,7 @@ def _search_meta(lane: str, params: SearchParams) -> Meta:
         params={
             "query": getattr(params, "query", None) or getattr(params, "text", None),
             "filters": [cond.model_dump() for cond in params.filters],
+            "fields": getattr(params, "fields", None),
             "budget_bytes": params.budget_bytes,
             "include": params.include.model_dump(),
         },
@@ -181,9 +184,10 @@ class MCPService:
         lane: str,
         *,
         params: SearchParams | None = None,
-        q: str | None = None,
+        query: str | None = None,
         text: str | None = None,
         filters: list[Cond] | None = None,
+        fields: list[SnippetField] | None = None,
         top_k: int = 800,
         budget_bytes: int = 4096,
         trace_id: str | None = None,
@@ -195,30 +199,35 @@ class MCPService:
                 detail=f"lane {lane} unsupported",
             )
         if params is None:
+            requested_fields = fields or SEARCH_FIELDS_DEFAULT
             if lane == "fulltext":
-                if not q:
+                actual_query = query
+                if not actual_query:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="query required for fulltext lane",
                     )
                 # Prepare fulltext request with user query + filters and budget
                 params = FulltextParams(
-                    query=q,
+                    query=actual_query,
                     filters=filters or [],
+                    fields=requested_fields,
                     top_k=top_k,
                     budget_bytes=budget_bytes,
                     trace_id=trace_id,
                 )
             else:
-                if not text and not q:
+                actual_text = text
+                if not actual_text:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="text required for semantic lane",
                     )
                 # Prepare semantic request when lane is semantic
                 params = SemanticParams(
-                    text=text or q or "",
+                    text=actual_text,
                     filters=filters or [],
+                    fields=requested_fields,
                     top_k=top_k,
                     budget_bytes=budget_bytes,
                     trace_id=trace_id,

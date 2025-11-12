@@ -12,10 +12,32 @@ from rrfusion.models import (
     FulltextParams,
     GetPublicationRequest,
     GetSnippetsRequest,
+    SEARCH_FIELDS_DEFAULT,
     SemanticParams,
 )
 
 app = FastAPI(title="rrfusion-db-stub", version="0.1.0")
+
+COLUMN_FIELD_MAP: dict[str, str] = {
+    "title": "title",
+    "abstract": "abst",
+    "claims": "claim",
+    "description": "desc",
+    "app_doc_id": "app_doc_id",
+    "pub_id": "pub_id",
+    "exam_id": "exam_id",
+}
+
+
+def _columns_to_fields(columns: list[str] | None) -> list[str]:
+    if not columns:
+        return SEARCH_FIELDS_DEFAULT.copy()
+    fields: list[str] = []
+    for column in columns:
+        field = COLUMN_FIELD_MAP.get(column)
+        if field and field not in fields:
+            fields.append(field)
+    return fields or SEARCH_FIELDS_DEFAULT.copy()
 
 
 @app.get("/healthz")
@@ -33,6 +55,7 @@ async def search_lane(
         request = FulltextParams(
             query=query,
             filters=[],
+            fields=_columns_to_fields(request_body.get("columns")),
             top_k=request_body.get("limit", 800),
             budget_bytes=request_body.get("budget_bytes", 4096),
             trace_id=request_body.get("trace_id"),

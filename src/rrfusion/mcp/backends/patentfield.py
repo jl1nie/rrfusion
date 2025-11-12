@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+FIELD_COLUMN_MAP: dict[str, str] = {
+    "title": "title",
+    "abst": "abstract",
+    "claim": "claims",
+    "desc": "description",
+    "app_doc_id": "app_doc_id",
+    "pub_id": "pub_id",
+    "exam_id": "exam_id",
+}
+
+
 class PatentfieldBackend(HttpLaneBackend):
     """Call the Patentfield REST endpoint and return DBSearchResponse."""
 
@@ -36,24 +47,27 @@ class PatentfieldBackend(HttpLaneBackend):
             headers=headers,
         )
 
+    def _resolve_columns(self, requested: list[str]) -> list[str]:
+        columns = ["app_doc_id", "pub_id", "exam_id"]
+        for field in requested:
+            column = FIELD_COLUMN_MAP.get(field)
+            if column and column not in columns:
+                columns.append(column)
+        return columns
+
     def _build_search_payload(
         self, request: SearchParams, lane: str
     ) -> dict[str, object]:
         """Map MCP parameters to the Patentfield API."""
         query = getattr(request, "query", getattr(request, "text", ""))
+        columns = self._resolve_columns(
+            list(getattr(request, "fields", []))
+        )
         payload = {
             "search_type": "semantic" if lane == "semantic" else "fulltext",
             "q": query,
             "limit": request.top_k,
-            "columns": [
-                "app_doc_id",
-                "pub_id",
-                "exam_id",
-                "title",
-                "abstract",
-                "claims",
-                "description",
-            ],
+            "columns": columns,
             "feature": "word_weights",
         }
         logger.info("Patentfield search payload: %s", payload)

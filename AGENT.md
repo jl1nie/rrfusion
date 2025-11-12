@@ -156,7 +156,7 @@ Fetch top-k results from the DB stub, store them in Redis, and return handles on
 **Input**
 ```json
 {
-  "q": "string",
+  "query": "string",           // fulltext lane variant (wide/focused/hybrid)
   "filters": [
     { "lop": "and", "field": "ipc", "op": "in", "value": ["H04L"] }
   ],

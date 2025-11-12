@@ -64,15 +64,18 @@ async def _prepare_lane_runs(
     *,
     require_large: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    search_payload = {
-        "q": "fastmcp fusion scenario",
+    base_payload = {
         "top_k": cfg.stub_max_results,
         "budget_bytes": 4096,
         "filters": None,
     }
     lane_runs: dict[str, dict[str, Any]] = {}
     for lane in ("fulltext", "semantic"):
-        response = await _call_tool(client, f"search_{lane}", search_payload, timeout=cfg.timeout)
+        payload = {
+            **base_payload,
+            "query" if lane == "fulltext" else "text": "fastmcp fusion scenario",
+        }
+        response = await _call_tool(client, f"search_{lane}", payload, timeout=cfg.timeout)
         if require_large and response["count_returned"] < 2000:
             raise RuntimeError(f"{lane} lane returned only {response['count_returned']} docs")
         meta = await _get_run_meta(redis_client, response["run_id_lane"])

@@ -158,7 +158,7 @@ Because `cargo make` reuses the same commands locally and in CI, you can run `ca
 
 The MCP loop always starts with independent lane searches, continues with fusion/frontier exploration, and then spends snippet budget.
 
-1. Run both `search_fulltext` and `search_semantic` with identical query/filters to mint lane handles.
+1. Run both `search_fulltext` and `search_semantic` with identical query/filters to mint lane handles, choosing between `search_fulltext.wide`, `.focused`, or `.hybrid` to match your recall/precision trade-off before fusion.
 2. Feed the resulting `run_id_lane` values to `blend_frontier_codeaware` to decide which `k` frontier to review.
 3. Use `peek_snippets` sparingly to preview the fused ordering, then `get_snippets` for the short-listed doc IDs. When budgets should not trim the payload, call `get_publication` instead; it pulls the uncapped publication text via the backend (`id_type` selects `pub_id`, `app_doc_id`, or `exam_id`).
 4. When you need to branch on weights, RRF constants, or code targeting, call `mutate_run` instead of issuing new lane searches.
@@ -177,23 +177,25 @@ from rrfusion.mcp.host import mcp
 
 @mcp.tool
 async def search_fulltext(
-    q: str,
+    query: str,
     filters: Filters | None = None,
+    fields: list[str] | None = None,
     top_k: int = 1000,
     rollup: RollupConfig | None = None,
     budget_bytes: int = 4096,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_fulltext(query: str, filters: Filters | None = None, fields: list[str] | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
     prompts/list:
-    - "List high-recall patent families mentioning {q} with IPC filters {filters}"
-    - "List prior art using only keyword evidence for {q}"
+    - "List high-recall patent families mentioning {query} with IPC filters {filters}"
+    - "List prior art using only keyword evidence for {query}"
     prompts/get:
-    - "Get a lane run handle I can feed into fusion for {q}"
+    - "Get a lane run handle I can feed into fusion for {query}"
     """
 ```
 
-The full-text lane maximizes recall by leaning on raw keyword scoring from the DB stub. Use it whenever you adjust lexical filters or before adding semantic context, and always capture the `run_id_lane` it returns.
+The full-text lane maximizes recall by leaning on raw keyword scoring from the DB stub. Pick the lane variant you need (`search_fulltext.wide`, `.focused`, or `.hybrid`) before adding semantic context, and always capture the `run_id_lane` it returns.
+By default the lane returns `fields` = ["abst","title","claim"], so you only index the title/abstract/claims; add `"desc"` explicitly when you need longer descriptive passages.
 
 ### `search_semantic`
 
@@ -202,23 +204,25 @@ from rrfusion.mcp.host import mcp
 
 @mcp.tool
 async def search_semantic(
-    q: str,
+    text: str,
     filters: Filters | None = None,
+    fields: list[str] | None = None,
     top_k: int = 1000,
     rollup: RollupConfig | None = None,
     budget_bytes: int = 4096,
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_semantic(text: str, filters: Filters | None = None, fields: list[str] | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
     prompts/list:
-    - "List semantically similar inventions about {q}"
-    - "List embedding-driven hits that stay on-spec for {q}"
+    - "List semantically similar inventions about {text}"
+    - "List embedding-driven hits that stay on-spec for {text}"
     prompts/get:
-    - "Get the semantic lane handle so I can blend with run {q}"
+    - "Get the semantic lane handle so I can blend with run {text}"
     """
 ```
 
 This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
+Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
 
 ### `blend_frontier_codeaware`
 

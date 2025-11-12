@@ -17,6 +17,8 @@ SnippetField = Literal[
     "exam_id",
 ]
 
+SEARCH_FIELDS_DEFAULT: list[SnippetField] = ["abst", "title", "claim"]
+
 
 class Meta(BaseModel):
     lane: Lane | None = None
@@ -62,6 +64,9 @@ class FulltextParams(BaseModel):
     budget_bytes: int = 4096
     trace_id: str | None = None
     include: IncludeOpts = IncludeOpts()
+    fields: list[SnippetField] = Field(
+        default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
+    )
 
 
 class SemanticParams(BaseModel):
@@ -71,6 +76,9 @@ class SemanticParams(BaseModel):
     budget_bytes: int = 4096
     trace_id: str | None = None
     include: IncludeOpts = IncludeOpts()
+    fields: list[SnippetField] = Field(
+        default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
+    )
 
 
 class SearchToolResponse(BaseModel):
@@ -299,6 +307,7 @@ __all__ = [
     "BlendRequest",
     "PeekConfig",
     "BlendFrontierEntry",
-    "BlendResponse",
-    "MutateResponse",
+"BlendResponse",
+"MutateResponse",
+"SEARCH_FIELDS_DEFAULT",
 ]
