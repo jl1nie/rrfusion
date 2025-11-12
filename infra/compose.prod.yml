@@ -14,9 +14,10 @@ services:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - rrfusion-net
     volumes:
@@ -36,8 +37,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      rrfusion-redis:
-        condition: service_healthy
+      - rrfusion-redis
     networks:
       rrfusion-net:
         aliases:

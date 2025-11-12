@@ -10,11 +10,6 @@ services:
       - "${REDIS_MAX_MEMORY:-2gb}"
       - --maxmemory-policy
       - "${REDIS_MAXMEMORY_POLICY:-volatile-lru}"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
     networks:
       - rrfusion-test-net
     volumes:
@@ -30,19 +25,9 @@ services:
     container_name: rrfusion-tests-db-stub
     env_file: .env
     depends_on:
-      rrfusion-redis:
-        condition: service_healthy
+      - rrfusion-redis
     networks:
       - rrfusion-test-net
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')\"",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
 
   rrfusion-mcp:
     build:
@@ -59,10 +44,8 @@ services:
       - "${MCP_PORT:-3000}:${MCP_PORT:-3000}"
     command: ["python", "src/rrfusion/mcp/host.py"]
     depends_on:
-      rrfusion-redis:
-        condition: service_healthy
-      rrfusion-db-stub:
-        condition: service_healthy
+      - rrfusion-redis
+      - rrfusion-db-stub
     networks:
       rrfusion-test-net:
         aliases:
