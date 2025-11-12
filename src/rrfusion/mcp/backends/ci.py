@@ -15,4 +15,5 @@ class CIBackend(HttpLaneBackend):
             base_url=settings.ci_db_stub_url,
             search_path=settings.ci_search_path,
             snippets_path=settings.ci_snippets_path,
+            publications_path=settings.ci_publications_path,
         )

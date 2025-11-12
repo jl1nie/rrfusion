@@ -15,14 +15,15 @@ from rrfusion.mcp.service import MCPService
 from rrfusion.models import (
     BlendResponse,
     BlendRunInput,
-    Filters,
+    Cond,
+    FulltextParams,
     MutateDelta,
     MutateResponse,
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
-    RollupConfig,
     SearchToolResponse,
+    SemanticParams,
 )
 
 settings = get_settings()
@@ -121,6 +122,7 @@ def _require_service() -> MCPService:
         raise RuntimeError("MCP service is not initialized")
     return _service
 
+
 # ============================
 # Prompts
 # ============================
@@ -157,11 +159,10 @@ _HANDBOOK = """# RRFusion MCP Handbook (v1.1)
   - `q: string`
   - `filters?: { must?: Cond[]; should?: Cond[]; must_not?: Cond[] }`
   - `top_k: int = 800`
-  - `rollup?: { family_fold?: boolean = true }`
   - `budget_bytes: int = 4096`
   - `seed?: int`, `trace_id?: string`
 - **Cond**: `{ field: "ipc|fi|cpc|pubyear|assignee|country", op: "in|range|eq|neq", value: any }`
-- **Tips**: Use field boosts server-side (claims > title > abstract > desc). Keep `top_k` generous (200–1000), and mirror filters in semantic.
+- **Tips**: Use field boosts server-side (claim > title > abst > desc). Keep `top_k` generous (200–1000), and mirror filters in semantic.
 
 ### `search_semantic`
 - **Args**: same as `search_fulltext`
@@ -197,13 +198,13 @@ _HANDBOOK = """# RRFusion MCP Handbook (v1.1)
 ### `peek_snippets`
 - **Args**:
   - `run_id`, `offset=0`, `limit=12`
-  - `fields?: ["title","abstract","claims","desc"]`
+- `fields?: ["title","abst","claim","desc"]`
   - `per_field_chars?: { field: int }`
   - `claim_count=3`
   - `strategy: "head"|"match"|"mix"`
   - `budget_bytes=12288`
 - **Patterns**:
-  - `head` → titles/abstracts
+- `head` → titles/absts
   - `match` → query highlights focus
   - `mix` → balanced
 
@@ -333,8 +334,8 @@ _TOOL_RECIPES = """# Tool Recipes & Few-shot (v1.1)
 ```json
 {
   "ids":["US2023XXXXXXA1","EPXXXXXXXB1"],
-  "fields":["title","abstract","claims"],
-  "per_field_chars":{"claims":1200}
+  "fields":["title","abst","claim"],
+  "per_field_chars":{"claim":1200}
 }
 ```
 
@@ -356,6 +357,8 @@ _TOOL_RECIPES = """# Tool Recipes & Few-shot (v1.1)
 ```
 
 """
+
+
 # ============================
 @mcp.prompt(name="RRFusion MCP Handbook")
 def _prompt_handbook() -> str:
@@ -371,56 +374,69 @@ def _prompt_recipes() -> str:
 # Tools
 # ============================
 
+
 @mcp.tool
 async def search_fulltext(
     q: str,
-    filters: Filters | None = None,
-    top_k: int = 1000,
-    rollup: RollupConfig | None = None,
+    filters: list[Cond] | None = None,
+    top_k: int = 800,
     budget_bytes: int = 4096,
+    trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_fulltext(
+        q: str,
+        filters: list[Cond] | None = None,
+        top_k: int = 800,
+        budget_bytes: int = 4096,
+        trace_id: str | None = None,
+    )
     prompts/list:
     - "List high-recall patent families mentioning {q} with IPC filters {filters}"
     - "List prior art using only keyword evidence for {q}"
     prompts/get:
     - "Get a lane run handle I can feed into fusion for {q}"
     """
-    return await _require_service().search_lane(
-        "fulltext",
-        q=q,
-        filters=filters,
+    params = FulltextParams(
+        query=q,
+        filters=filters or [],
         top_k=top_k,
-        rollup=rollup,
         budget_bytes=budget_bytes,
+        trace_id=trace_id,
     )
+    return await _require_service().search_lane("fulltext", params=params)
 
 
 @mcp.tool
 async def search_semantic(
     q: str,
-    filters: Filters | None = None,
-    top_k: int = 1000,
-    rollup: RollupConfig | None = None,
+    filters: list[Cond] | None = None,
+    top_k: int = 800,
     budget_bytes: int = 4096,
+    trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(q: str, filters: Filters | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_semantic(
+        q: str,
+        filters: list[Cond] | None = None,
+        top_k: int = 800,
+        budget_bytes: int = 4096,
+        trace_id: str | None = None,
+    )
     prompts/list:
     - "List semantically similar inventions about {q}"
     - "List embedding-driven hits that stay on-spec for {q}"
     prompts/get:
     - "Get the semantic lane handle so I can blend with run {q}"
     """
-    return await _require_service().search_lane(
-        "semantic",
-        q=q,
-        filters=filters,
+    params = SemanticParams(
+        text=q,
+        filters=filters or [],
         top_k=top_k,
-        rollup=rollup,
         budget_bytes=budget_bytes,
+        trace_id=trace_id,
     )
+    return await _require_service().search_lane("semantic", params=params)
 
 
 @mcp.tool
@@ -490,7 +506,7 @@ async def peek_snippets(
     )
     prompts/list:
     - "List snippet previews for the top {limit} docs in fusion run {run_id}"
-    - "List concise abstracts for positions {offset}-{offset + limit}"
+    - "List concise absts for positions {offset}-{offset + limit}"
     prompts/get:
     - "Get the next peek_cursor so I can continue streaming run {run_id}"
     """
@@ -516,7 +532,7 @@ async def get_snippets(
     signature: get_snippets(ids: list[str], fields: list[str] | None = None, per_field_chars: dict[str, int] | None = None)
     prompts/list:
     - "List detailed snippets for the decision-ready doc IDs {ids}"
-    - "List claims plus abstracts for specific documents after shortlisting"
+    - "List claims plus absts for specific documents after shortlisting"
     prompts/get:
     - "Get the text payloads for ids {ids} without touching the fusion cursor"
     """
@@ -525,6 +541,23 @@ async def get_snippets(
         fields=fields,
         per_field_chars=per_field_chars,
     )
+
+
+@mcp.tool
+async def get_publication(
+    ids: list[str],
+    id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id",
+    fields: list[str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """
+    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","exam_id"], fields: list[str] | None = None)
+    prompts/list:
+    - "Retrieve the full public document for {ids} without truncation"
+    - "Show publication/app/exam IDs for {ids}"
+    prompts/get:
+    - "Get the full text for {ids} using {id_type}"
+    """
+    return await _require_service().get_publication(ids=ids, id_type=id_type, fields=fields)
 
 
 @mcp.tool

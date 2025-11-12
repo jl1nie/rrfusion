@@ -63,7 +63,7 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 | `MCP_EXTERNAL_NETWORK_ENABLED` | `false` | Set to `true` when connecting to an external network; leave `false` to use the stack’s private bridge. |
 | `RRF_K` | `60` | MCP constant |
 | `PEEK_MAX_DOCS` | `100` | Snippet count cap |
-| `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap (12 docs × title/abstract/claim 160/480/320 chars) |
+| `PEEK_BUDGET_BYTES` | `12288` | Snippet payload cap (12 docs × title/abst/claim 160/480/320 chars) |
 | `STUB_MAX_RESULTS` | `2000` | DB stub lane cap (raise to `10000` for load/E2E tests) |
 
 ### 2.2 Development workflow
@@ -120,7 +120,7 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
         "title": "...",
         "abst": "...",
         "claim": "...",
-        "description": "...",
+        "desc": "...",
         "ipc_codes": ["H04L"],
         "cpc_codes": ["H04L9/32"]
       }
@@ -132,6 +132,7 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
   }
   ```
   - `doc_id` values are deterministic random strings; `score` variance differs per lane.
+  - `doc_id` is treated as the publication number (`pub_id`) by the backend, so snippet fields that expose `pub_id` will echo the `doc_id` you received from the lane.
   - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
   Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...}, "claim_count": 3, "strategy": "head|match|mix" }`.  
@@ -156,16 +157,12 @@ Fetch top-k results from the DB stub, store them in Redis, and return handles on
 ```json
 {
   "q": "string",
-  "filters": {
-    "date_from": "YYYY-MM-DD?",
-    "date_to": "YYYY-MM-DD?",
-    "ipc": ["string"]?,
-    "cpc": ["string"]?,
-    "assignee": ["string"]?
-  },
+  "filters": [
+    { "lop": "and", "field": "ipc", "op": "in", "value": ["H04L"] }
+  ],
   "top_k": 10000,
-  "rollup": { "ipc_level": 4, "cpc_level": "main_group" },
-  "budget_bytes": 4096
+  "budget_bytes": 4096,
+  "trace_id": "string"
 }
 ```
 
@@ -241,8 +238,16 @@ Return snippets for a run, honoring doc count + byte budgets.
   "run_id": "string",
   "offset": 0,
   "limit": 20,
-  "fields": ["title","abst","claim","description"],
-  "per_field_chars": { "title":120, "abst":360, "claim":280, "description":480 },
+  "fields": ["title","abst","claim","desc","app_doc_id","pub_id","exam_id"],
+  "per_field_chars": {
+    "title":120,
+    "abst":360,
+    "claim":280,
+    "desc":480,
+    "app_doc_id":64,
+    "pub_id":64,
+    "exam_id":64
+  },
   "claim_count": 3,
   "strategy": "head" | "match" | "mix",
   "budget_bytes": 12288
@@ -252,12 +257,29 @@ Return snippets for a run, honoring doc count + byte budgets.
 **Output**
 ```json
 {
-  "items": [
-    { "id":"123", "title":"...", "abst":"...", "claim":"...", "description":"..." }
+  "run_id": "string",
+  "snippets": [
+    {
+      "id":"123",
+      "fields": {
+        "title":"...",
+        "abst":"...",
+        "claim":"...",
+        "desc":"...",
+        "app_doc_id":"APP476",
+        "pub_id":"123",
+        "exam_id":"EXAM476"
+      }
+    }
   ],
-  "used_bytes": 11800,
-  "truncated": false,
-  "peek_cursor": "string"
+  "meta": {
+    "used_bytes": 11800,
+    "truncated": false,
+    "peek_cursor": "string",
+    "total_docs": 120,
+    "retrieved": 20,
+    "returned": 12
+  }
 }
 ```
 
@@ -265,6 +287,23 @@ Return snippets for a run, honoring doc count + byte budgets.
 - Stub milestone: request snippets from DB stub per doc ID and enforce caps client-side.
 - Algorithm milestone: favor cached snippets in Redis; if missing, backfill via stub. Budget enforcement stays the same.
 - Defaults: 12 docs / `["title","abst","claim"]` / 160・480・320 文字構成、総 12 KB 以内になるよう自動調整。`per_field_chars` や `budget_bytes` を増やしてもまずはタイトルと抄録を優先してフィットさせ、どうしても入らない場合は最小構成 (タイトルのみ 等) で 1 件返すフォールバックを行う。詳細確認が必要なら `limit` を小さく刻むか `get_snippets` を使用する。
+
+---
+
+### 5.4 `get_publication`
+Fetch the full publication payload (no byte budget applied). Use `id_type` to declare whether the provided identifiers are `pub_id`, `app_doc_id`, or `exam_id`.
+
+**Input**
+```json
+{ "ids": ["DOC1"], "id_type": "pub_id", "fields": ["title","abst","desc","app_doc_id","pub_id","exam_id"] }
+```
+
+**Output**
+```json
+{ "DOC1": { "title":"...", "abst":"...", "desc":"...", "app_doc_id":"APP123", "pub_id":"DOC1", "exam_id":"EXAM001" } }
+```
+
+Hold this tool for detail views when budgets would otherwise trim the text; backend adapters may fetch/cached full payloads as needed but the MCP host does not persist them in Redis.
 
 ---
 

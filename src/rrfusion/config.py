@@ -28,13 +28,16 @@ class Settings(BaseSettings):
     patentfield_search_path: str = Field("/search", alias="PATENTFIELD_SEARCH_PATH")
     patentfield_snippets_path: str = Field("/snippets", alias="PATENTFIELD_SNIPPETS_PATH")
     patentfield_api_key: str | None = Field(default=None, alias="PATENTFIELD_API_KEY")
+    patentfield_publications_path: str = Field("/publications", alias="PATENTFIELD_PUBLICATIONS_PATH")
     wwrag_url: str = Field("http://localhost:8090", alias="WWRAG_URL")
     wwrag_search_path: str = Field("/search", alias="WWRAG_SEARCH_PATH")
     wwrag_api_key: str | None = Field(default=None, alias="WWRAG_API_KEY")
     wwrag_snippets_path: str = Field("/snippets", alias="WWRAG_SNIPPETS_PATH")
+    wwrag_publications_path: str = Field("/publications", alias="WWRAG_PUBLICATIONS_PATH")
     ci_db_stub_url: str = Field("http://rrfusion-db-stub:8080", alias="CI_DB_STUB_URL")
     ci_search_path: str = Field("/search", alias="CI_SEARCH_PATH")
     ci_snippets_path: str = Field("/snippets", alias="CI_SNIPPETS_PATH")
+    ci_publications_path: str = Field("/publications", alias="CI_PUBLICATIONS_PATH")
 
     model_config = SettingsConfigDict(
         env_prefix="",

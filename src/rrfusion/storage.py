@@ -51,6 +51,7 @@ class RedisStorage:
     ) -> None:
         """Persist lane docs, per-doc metadata, freq summary, and run metadata."""
 
+        # Stage 1: put scores into a sorted set keyed by query hash + lane
         lane_key = self.lane_key(query_hash, lane)
         data_ttl = self.settings.data_ttl_hours * 3600
         snippet_ttl = self.settings.snippet_ttl_hours * 3600
@@ -65,13 +66,17 @@ class RedisStorage:
 
         pipe.expire(lane_key, data_ttl)
 
+        # Stage 2: cache document metadata for snippet retrieval
         for doc in docs:
             doc_key = self.doc_key(doc["doc_id"])
             doc_payload = {
                 "title": doc.get("title", ""),
                 "abst": doc.get("abst", ""),
                 "claim": doc.get("claim", ""),
-                "description": doc.get("description", ""),
+                "desc": doc.get("desc", ""),
+                "app_doc_id": doc.get("app_doc_id", ""),
+                "pub_id": doc.get("pub_id", ""),
+                "exam_id": doc.get("exam_id", ""),
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
                 "fi_codes": json.dumps(doc.get("fi_codes", [])),
@@ -80,6 +85,7 @@ class RedisStorage:
             pipe.hset(doc_key, mapping=doc_payload)
             pipe.expire(doc_key, snippet_ttl)
 
+        # Stage 3: persist taxonomy frequencies for mining
         freq_key = self.freq_key(run_id, lane)
         pipe.hset(
             freq_key,
@@ -90,6 +96,7 @@ class RedisStorage:
         )
         pipe.expire(freq_key, data_ttl)
 
+        # Stage 4: index run metadata so we can later mutate / peek
         run_key = self.run_key(run_id)
         run_meta = {
             **metadata,
@@ -116,7 +123,10 @@ class RedisStorage:
                 "title": doc.get("title", ""),
                 "abst": doc.get("abst", ""),
                 "claim": doc.get("claim", ""),
-                "description": doc.get("description", ""),
+                "desc": doc.get("desc", ""),
+                "app_doc_id": doc.get("app_doc_id", ""),
+                "pub_id": doc.get("pub_id", ""),
+                "exam_id": doc.get("exam_id", ""),
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
                 "fi_codes": json.dumps(doc.get("fi_codes", [])),
@@ -176,13 +186,32 @@ class RedisStorage:
                 "title": payload.get("title", ""),
                 "abst": payload.get("abst", ""),
                 "claim": payload.get("claim", ""),
-                "description": payload.get("description", ""),
+                "desc": payload.get("desc", ""),
+                "app_doc_id": payload.get("app_doc_id", ""),
+                "pub_id": payload.get("pub_id", ""),
+                "exam_id": payload.get("exam_id", ""),
                 "ipc_codes": json.loads(payload.get("ipc_codes", "[]")),
                 "cpc_codes": json.loads(payload.get("cpc_codes", "[]")),
                 "fi_codes": json.loads(payload.get("fi_codes", "[]")),
                 "ft_codes": json.loads(payload.get("ft_codes", "[]")),
             }
         return docs
+
+    async def get_freq_summary(
+        self, run_id: str, lane: str
+    ) -> dict[str, dict[str, int]] | None:
+        data = await self.redis.hgetall(self.freq_key(run_id, lane))
+        if not data:
+            return None
+        summary: dict[str, dict[str, int]] = {}
+        for taxonomy in ("ipc", "cpc"):
+            raw = data.get(taxonomy)
+            if not raw:
+                summary[taxonomy] = {}
+                continue
+            value = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            summary[taxonomy] = json.loads(value)
+        return summary
 
     async def zslice(
         self,

@@ -7,7 +7,15 @@ import os
 import random
 from collections import Counter
 
-from ..models import DBSearchResponse, GetSnippetsRequest, SearchRequest, SearchItem
+from ..models import (
+    DBSearchResponse,
+    FulltextParams,
+    GetPublicationRequest,
+    GetSnippetsRequest,
+    Meta,
+    SemanticParams,
+    SearchItem,
+)
 from ..utils import random_doc_id, truncate_field
 
 WORDS = [
@@ -87,12 +95,18 @@ def _doc_meta(doc_id: str) -> dict:
     abst = _paragraph(rng, sentences=2, words=10)
     claim = _paragraph(rng, sentences=1, words=14)
     description = _paragraph(rng, sentences=4, words=12)
+    app_doc_id = f"APP{doc_id[-6:].upper()}"
+    pub_id = doc_id
+    exam_id = f"EXAM{doc_id[-5:].upper()}"
     return {
         "doc_id": doc_id,
         "title": title,
         "abst": abst,
         "claim": claim,
-        "description": description,
+        "desc": description,
+        "app_doc_id": app_doc_id,
+        "pub_id": pub_id,
+        "exam_id": exam_id,
         "ipc_codes": ipc_codes,
         "cpc_codes": cpc_codes,
         "fi_codes": fi_codes,
@@ -100,9 +114,12 @@ def _doc_meta(doc_id: str) -> dict:
     }
 
 
-def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchResponse:
+def generate_search_results(
+    request: FulltextParams | SemanticParams, *, lane: str
+) -> DBSearchResponse:
     limit = min(request.top_k, MAX_RESULTS)
-    rng = _seed(f"{lane}:{request.q}:{limit}")
+    query = request.query if isinstance(request, FulltextParams) else request.text
+    rng = _seed(f"{lane}:{query}:{limit}")
     seen: set[str] = set()
     items: list[SearchItem] = []
     ipc_freq: Counter[str] = Counter()
@@ -131,6 +148,17 @@ def generate_search_results(request: SearchRequest, *, lane: str) -> DBSearchRes
             "fi": dict(fi_freq),
             "ft": dict(ft_freq),
         },
+        meta=Meta(
+            lane=lane,
+            top_k=request.top_k,
+            params={
+                "query": getattr(request, "query", None)
+                or getattr(request, "text", None),
+                "filters": [cond.model_dump() for cond in request.filters],
+                "budget_bytes": request.budget_bytes,
+            },
+            trace_id=request.trace_id,
+        ),
     )
 
 
@@ -147,4 +175,21 @@ def snippets_from_request(request: GetSnippetsRequest) -> dict[str, dict[str, st
     return response
 
 
-__all__ = ["generate_search_results", "snippets_from_request"]
+def publications_from_request(
+    request: GetPublicationRequest,
+) -> dict[str, dict[str, str]]:
+    response: dict[str, dict[str, str]] = {}
+    for doc_id in request.ids:
+        meta = _doc_meta(doc_id)
+        payload: dict[str, str] = {}
+        for field in request.fields:
+            payload[field] = meta.get(field, "")
+        response[doc_id] = payload
+    return response
+
+
+__all__ = [
+    "generate_search_results",
+    "snippets_from_request",
+    "publications_from_request",
+]

@@ -81,12 +81,12 @@ async def test_peek_snippets_flow_with_real_backends():
             run_id=run_id,
             offset=0,
             limit=50,
-            fields=["title", "abst", "claim", "description"],
+            fields=["title", "abst", "claim", "desc"],
             per_field_chars={
                 "title": 120,
                 "abst": 360,
                 "claim": 360,
-                "description": 600,
+                "desc": 600,
             },
             budget_bytes=4096,
         )
@@ -99,9 +99,29 @@ async def test_peek_snippets_flow_with_real_backends():
             budget_bytes=peek_req.budget_bytes,
         )
 
-        assert response.items, "integration peek should return docs"
-        assert response.peek_cursor is not None
-        assert response.used_bytes > 0
+        assert response.snippets, "integration peek should return docs"
+        assert response.meta.peek_cursor is not None
+        assert response.meta.used_bytes > 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_publication_returns_full_fields():
+    async with service_context() as service:
+        search_resp = await service.search_lane("fulltext", q="fulltext", top_k=1)
+        assert search_resp.response.items, "search should yield docs"
+        doc_id = search_resp.response.items[0].doc_id
+
+        publication = await service.get_publication(
+            ids=[doc_id],
+            id_type="pub_id",
+            fields=["title", "abst", "desc", "app_doc_id", "pub_id", "exam_id"],
+        )
+        snippet = publication.get(doc_id, {})
+        assert snippet.get("pub_id") == doc_id
+        assert snippet.get("app_doc_id"), "app_doc_id should appear in publication"
+        assert snippet.get("exam_id"), "exam_id should appear in publication"
+        assert snippet.get("desc"), "Full description should be present"
 
 
 @pytest.mark.integration
@@ -159,12 +179,12 @@ async def test_large_search_and_peek_budget_flow():
             run_id=fusion.run_id,
             offset=0,
             limit=80,
-            fields=["title", "abst", "claim", "description"],
+            fields=["title", "abst", "claim", "desc"],
             per_field_chars={
                 "title": 220,
                 "abst": 520,
                 "claim": 640,
-                "description": 720,
+                "desc": 720,
             },
             budget_bytes=20_480,
         )
@@ -177,7 +197,28 @@ async def test_large_search_and_peek_budget_flow():
             budget_bytes=peek_request.budget_bytes,
         )
 
-        assert len(peek.items) >= 10
-        assert peek.used_bytes >= 8000
-        assert peek.truncated is True
-        assert peek.peek_cursor is not None
+        assert len(peek.snippets) >= 10
+        assert peek.meta.used_bytes >= 8000
+        assert peek.meta.truncated is True
+        assert peek.meta.peek_cursor is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_snippet_identifier_fields_available():
+    async with service_context() as service:
+        search_resp = await service.search_lane("fulltext", q="id fields", top_k=5)
+        doc_ids = [item.doc_id for item in search_resp.response.items[:3]]
+        assert doc_ids, "search should return doc IDs for snippet validations"
+
+        snippets = await service.get_snippets(
+            ids=doc_ids,
+            fields=["app_doc_id", "pub_id", "exam_id"],
+            per_field_chars={"app_doc_id": 32, "pub_id": 32, "exam_id": 32},
+        )
+
+        for doc_id in doc_ids:
+            snippet = snippets.get(doc_id, {})
+            assert snippet.get("pub_id") == doc_id
+            assert snippet.get("app_doc_id"), "app_doc_id should be populated"
+            assert snippet.get("exam_id"), "exam_id should be populated"

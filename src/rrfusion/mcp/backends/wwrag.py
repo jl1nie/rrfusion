@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ...config import Settings
-from ...models import DBSearchResponse, GetSnippetsRequest, SearchRequest
-from .base import HttpLaneBackend
+from ...models import DBSearchResponse, GetSnippetsRequest
+from .base import HttpLaneBackend, SearchParams
 
 
 class WWRagBackend(HttpLaneBackend):
@@ -19,10 +19,11 @@ class WWRagBackend(HttpLaneBackend):
             base_url=settings.wwrag_url,
             search_path=settings.wwrag_search_path,
             snippets_path=settings.wwrag_snippets_path,
+            publications_path=settings.wwrag_publications_path,
             headers=headers,
         )
 
-    def _build_search_payload(self, request: SearchRequest, lane: str) -> dict[str, object]:
+    def _build_search_payload(self, request: SearchParams, lane: str) -> dict[str, object]:
         """Build WWRag-specific search body."""
         return request.model_dump()
 
@@ -36,7 +37,7 @@ class WWRagBackend(HttpLaneBackend):
         """Build the snippet request body expected by WWRag."""
         return request.model_dump()
 
-    async def search(self, request: SearchRequest, lane: str) -> DBSearchResponse:
+    async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
         payload = self._build_search_payload(request, lane)
         response = await self.http.post(f"{self.search_path}/{lane}", json=payload)
         response.raise_for_status()

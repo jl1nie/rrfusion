@@ -24,18 +24,24 @@ from ..models import (
     BlendRequest,
     BlendResponse,
     BlendRunInput,
-    Filters,
+    Cond,
+    DBSearchResponse,
+    FulltextParams,
+    GetPublicationRequest,
     GetSnippetsRequest,
+    IncludeOpts,
+    Meta,
     MutateDelta,
     MutateRequest,
     MutateResponse,
     PeekConfig,
+    PeekMeta,
+    PeekSnippet,
     PeekSnippetsRequest,
     PeekSnippetsResponse,
     ProvenanceResponse,
-    RollupConfig,
+    SemanticParams,
     SearchItem,
-    SearchRequest,
     SearchToolResponse,
 )
 from ..snippets import build_snippet_item, cap_by_budget
@@ -45,18 +51,28 @@ from .backends import LaneBackend, LaneBackendRegistry
 
 logger = logging.getLogger(__name__)
 
-FIELD_ORDER = ["title", "abst", "claim", "description"]
+FIELD_ORDER = ["title", "abst", "claim", "desc", "app_doc_id", "pub_id", "exam_id"]
 FIELD_DEFAULT_CHARS = {
     "title": 160,
     "abst": 480,
     "claim": 320,
-    "description": 400,
+    "desc": 400,
+    "app_doc_id": 96,
+    "pub_id": 96,
+    "exam_id": 96,
 }
 FIELD_MIN_CHARS = {
     "title": 80,
     "abst": 240,
     "claim": 160,
-    "description": 200,
+    "desc": 200,
+    "app_doc_id": 32,
+    "pub_id": 32,
+    "exam_id": 32,
+}
+SNIPPET_FIELDS = FIELD_ORDER.copy()
+SNIPPET_DEFAULT_PER_FIELD = {
+    field: FIELD_DEFAULT_CHARS.get(field, 120) for field in SNIPPET_FIELDS
 }
 
 DEFAULT_WEIGHTS = {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5}
@@ -76,6 +92,69 @@ def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
         taxonomy_counters["fi"].update(item.fi_codes)
         taxonomy_counters["ft"].update(item.ft_codes)
     return {taxonomy: dict(counter) for taxonomy, counter in taxonomy_counters.items()}
+
+
+SearchParams = FulltextParams | SemanticParams
+
+
+def _search_meta(lane: str, params: SearchParams) -> Meta:
+    return Meta(
+        lane=lane,
+        top_k=params.top_k,
+        params={
+            "query": getattr(params, "query", None) or getattr(params, "text", None),
+            "filters": [cond.model_dump() for cond in params.filters],
+            "budget_bytes": params.budget_bytes,
+            "include": params.include.model_dump(),
+        },
+        trace_id=params.trace_id,
+    )
+
+
+def _build_search_item(
+    doc_id: str,
+    score: float,
+    doc_meta: dict[str, Any],
+    include: IncludeOpts,
+) -> SearchItem:
+    """Construct a lean SearchItem honoring include flags."""
+    ipc_codes = doc_meta.get("ipc_codes") if include.codes else None
+    cpc_codes = doc_meta.get("cpc_codes") if include.codes else None
+    fi_codes = doc_meta.get("fi_codes") if include.codes else None
+    ft_codes = doc_meta.get("ft_codes") if include.codes else None
+    return SearchItem(
+        doc_id=doc_id,
+        score=score if include.scores else None,
+        ipc_codes=ipc_codes,
+        cpc_codes=cpc_codes,
+        fi_codes=fi_codes,
+        ft_codes=ft_codes,
+    )
+
+
+async def _collect_lane_items(
+    storage: RedisStorage,
+    run_id: str,
+    lane: str,
+    top_k: int,
+    include: IncludeOpts,
+) -> tuple[list[SearchItem], dict[str, dict[str, int]] | None]:
+    meta = await storage.get_run_meta(run_id)
+    if not meta:
+        return [], {}
+    lane_key = meta.get("lane_key")
+    if not lane_key:
+        return [], {}
+    stop = max(top_k - 1, 0)
+    docs = await storage.zslice(lane_key, 0, stop, desc=True)
+    doc_ids = [doc_id for doc_id, _ in docs]
+    doc_metadata = await storage.get_docs(doc_ids)
+    items: list[SearchItem] = []
+    for doc_id, score in docs:
+        metadata = doc_metadata.get(doc_id, {})
+        items.append(_build_search_item(doc_id, score, metadata, include))
+    freq_summary = await storage.get_freq_summary(run_id, lane) if include.code_freqs else None
+    return items, freq_summary
 
 
 class MCPService:
@@ -101,42 +180,81 @@ class MCPService:
         self,
         lane: str,
         *,
-        q: str,
-        filters: Filters | None = None,
-        top_k: int = 1000,
-        rollup: RollupConfig | None = None,
+        params: SearchParams | None = None,
+        q: str | None = None,
+        text: str | None = None,
+        filters: list[Cond] | None = None,
+        top_k: int = 800,
         budget_bytes: int = 4096,
+        trace_id: str | None = None,
     ) -> SearchToolResponse:
-        request = SearchRequest(
-            q=q,
-            filters=filters,
-            top_k=top_k,
-            rollup=rollup,
-            budget_bytes=budget_bytes,
-        )
         backend = self.backend_registry.get_backend(lane)
         if not backend:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"lane {lane} unsupported",
             )
-        db_payload = await backend.search(request, lane=lane)
+        if params is None:
+            if lane == "fulltext":
+            if not q:
+                raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="query required for fulltext lane",
+                    )
+                # Prepare fulltext request with user query + filters and budget
+                params = FulltextParams(
+                    query=q,
+                    filters=filters or [],
+                    top_k=top_k,
+                    budget_bytes=budget_bytes,
+                    trace_id=trace_id,
+                )
+            else:
+                if not text and not q:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="text required for semantic lane",
+                    )
+                # Prepare semantic request when lane is semantic
+                params = SemanticParams(
+                    text=text or q or "",
+                    filters=filters or [],
+                    top_k=top_k,
+                    budget_bytes=budget_bytes,
+                    trace_id=trace_id,
+                )
+        db_payload = await backend.search(params, lane=lane)
+        # hydrate lane results into dictionaries for caching and snippet fetching
         docs = [item.model_dump(exclude_none=True) for item in db_payload.items]
+        backend = self.backend_registry.get_backend(lane)
+        if backend and docs:
+            snippet_ids = [doc["doc_id"] for doc in docs]
+            fetched_snippets = await self._fetch_snippets_from_backend(
+                backend,
+                lane,
+                ids=snippet_ids,
+                fields=SNIPPET_FIELDS,
+                per_field_chars=SNIPPET_DEFAULT_PER_FIELD,
+            )
+            for doc in docs:
+                doc.update(fetched_snippets.get(doc["doc_id"], {}))
+        # compute stats for the run
         count_returned = len(docs)
-        truncated = count_returned < request.top_k
+        truncated = count_returned < params.top_k
+        filters_payload = [cond.model_dump() for cond in params.filters]
         query_hash = hash_query(
-            request.q,
-            request.filters.model_dump() if request.filters else None,
+            getattr(params, "query", getattr(params, "text", "")),
+            filters_payload or None,
         )
         run_id = f"{lane}-{uuid4().hex[:8]}"
         metadata = {
-            "query": request.q,
-            "filters": request.filters.model_dump() if request.filters else {},
-            "rollup": request.rollup.model_dump() if request.rollup else {},
-            "top_k": request.top_k,
+            "query": getattr(params, "query", getattr(params, "text", "")),
+            "filters": filters_payload,
+            "top_k": params.top_k,
             "count_returned": count_returned,
             "truncated": truncated,
             "query_hash": query_hash,
+            "budget_bytes": params.budget_bytes,
         }
 
         freq_summary = db_payload.code_freqs or _code_freq_summary(db_payload.items)
@@ -149,9 +267,15 @@ class MCPService:
             freq_summary=freq_summary,
         )
 
+        response = DBSearchResponse(
+            items=db_payload.items,
+            code_freqs=freq_summary,
+            meta=_search_meta(lane, params),
+        )
         return SearchToolResponse(
             lane=lane,
             run_id_lane=run_id,
+            response=response,
             count_returned=count_returned,
             truncated=truncated,
             code_freqs=freq_summary,
@@ -370,8 +494,18 @@ class MCPService:
 
         limit = min(request.limit, self.settings.peek_max_docs)
         if limit <= 0:
+            total_docs = await self.redis.zcard(key)
             return PeekSnippetsResponse(
-                items=[], used_bytes=0, truncated=False, peek_cursor=None
+                run_id=request.run_id,
+                snippets=[],
+                meta=PeekMeta(
+                    used_bytes=0,
+                    truncated=False,
+                    peek_cursor=None,
+                    total_docs=total_docs,
+                    retrieved=0,
+                    returned=0,
+                ),
             )
 
         start = request.offset
@@ -463,11 +597,24 @@ class MCPService:
             returned,
         )
 
+        snippets_payload = [
+            PeekSnippet(
+                id=item["id"],
+                fields={k: v for k, v in item.items() if k != "id"},
+            )
+            for item in capped
+        ]
         return PeekSnippetsResponse(
-            items=capped,
-            used_bytes=used_bytes,
-            truncated=truncated,
-            peek_cursor=cursor,
+            run_id=request.run_id,
+            snippets=snippets_payload,
+            meta=PeekMeta(
+                used_bytes=used_bytes,
+                truncated=truncated,
+                peek_cursor=cursor,
+                total_docs=total_docs,
+                retrieved=retrieved,
+                returned=returned,
+            ),
         )
 
     # ------------------------------------------------------------------ #
@@ -485,6 +632,28 @@ class MCPService:
             request_kwargs["per_field_chars"] = per_field_chars
         request = GetSnippetsRequest(**request_kwargs)
         doc_metadata = await self.storage.get_docs(request.ids)
+        backend = self.backend_registry.get_backend("fulltext")
+        missing_ids = []
+        for doc_id in request.ids:
+            snippet = doc_metadata.get(doc_id, {})
+            if not snippet or any(not snippet.get(field) for field in request.fields):
+                missing_ids.append(doc_id)
+        if missing_ids and backend:
+            fetched = await self._fetch_snippets_from_backend(
+                backend=backend,
+                lane="fulltext",
+                ids=missing_ids,
+                fields=request.fields,
+                per_field_chars=request.per_field_chars,
+            )
+            if fetched:
+                docs_to_upsert: list[dict[str, Any]] = []
+                for doc_id, payload in fetched.items():
+                    existing = doc_metadata.get(doc_id, {})
+                    merged = {**existing, **payload}
+                    doc_metadata[doc_id] = merged
+                    docs_to_upsert.append({"doc_id": doc_id, **payload})
+                await self.storage.upsert_docs(docs_to_upsert)
         response: dict[str, dict[str, str]] = {}
         for doc_id in request.ids:
             snippet = build_snippet_item(
@@ -496,6 +665,25 @@ class MCPService:
             snippet.pop("id", None)
             response[doc_id] = snippet
         return response
+
+    async def get_publication(
+        self,
+        *,
+        ids: list[str],
+        id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id",
+        fields: list[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        request_kwargs: dict[str, Any] = {
+            "ids": ids,
+            "id_type": id_type,
+        }
+        if fields is not None:
+            request_kwargs["fields"] = fields
+        request = GetPublicationRequest(**request_kwargs)
+        backend = self.backend_registry.get_backend("fulltext")
+        if not backend:
+            raise HTTPException(status_code=500, detail="no backend configured")
+        return await backend.fetch_publication(request, lane="fulltext")
 
     # ------------------------------------------------------------------ #
     async def mutate_run(self, *, run_id: str, delta: MutateDelta) -> MutateResponse:
@@ -585,11 +773,10 @@ class MCPService:
         meta = await self.storage.get_run_meta(run_id)
         if not meta:
             raise HTTPException(status_code=404, detail="run not found")
-        recipe = meta.get("recipe", {})
         return ProvenanceResponse(
-            recipe=recipe,
-            parent=meta.get("parent"),
-            history=meta.get("history", []),
+            run_id=run_id,
+            meta=meta,
+            lineage=meta.get("history", []),
         )
 
 

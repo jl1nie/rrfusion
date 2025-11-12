@@ -109,3 +109,9 @@ script = [
     "cargo make integration",
     "cargo make e2e"
 ]
+
+[tasks.logs]
+description = "Tail logs for the CI stack services"
+script = [
+    "bash -c 'set -a && source infra/.env && set +a && docker compose -f infra/compose.ci.yml logs --follow rrfusion-redis rrfusion-db-stub rrfusion-mcp rrfusion-tests'"
+]

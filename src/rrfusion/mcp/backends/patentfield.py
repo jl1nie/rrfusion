@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+
+import httpx
+
 from ...config import Settings
-from ...models import DBSearchResponse, GetSnippetsRequest, SearchRequest
-from .base import HttpLaneBackend
+from ...models import (
+    DBSearchResponse,
+    GetPublicationRequest,
+    GetSnippetsRequest,
+    Meta,
+    SearchItem,
+)
+from .base import HttpLaneBackend, SearchParams
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class PatentfieldBackend(HttpLaneBackend):
@@ -19,16 +32,59 @@ class PatentfieldBackend(HttpLaneBackend):
             base_url=settings.patentfield_url,
             search_path=settings.patentfield_search_path,
             snippets_path=settings.patentfield_snippets_path,
+            publications_path=settings.patentfield_publications_path,
             headers=headers,
         )
 
-    def _build_search_payload(self, request: SearchRequest, lane: str) -> dict[str, object]:
-        """Translate MCP search request into Patentfield payload."""
-        return request.model_dump()
+    def _build_search_payload(
+        self, request: SearchParams, lane: str
+    ) -> dict[str, object]:
+        """Map MCP parameters to the Patentfield API."""
+        query = getattr(request, "query", getattr(request, "text", ""))
+        payload = {
+            "search_type": "semantic" if lane == "semantic" else "fulltext",
+            "q": query,
+            "limit": request.top_k,
+            "columns": [
+                "app_doc_id",
+                "pub_id",
+                "exam_id",
+                "title",
+                "abstract",
+                "claims",
+                "description",
+            ],
+            "feature": "word_weights",
+        }
+        logger.info("Patentfield search payload: %s", payload)
+        return payload
 
-    def _parse_search_response(self, payload: dict[str, object]) -> DBSearchResponse:
+    def _parse_search_response(
+        self, payload: dict[str, object], request: SearchParams, lane: str
+    ) -> DBSearchResponse:
         """Convert Patentfield JSON into `DBSearchResponse`."""
-        return DBSearchResponse.model_validate(payload)
+        hits = payload.get("results") or payload.get("items") or []
+        items = []
+        for hit in hits:
+            doc_id = hit.get("pub_id") or hit.get("doc_id") or hit.get("app_doc_id")
+            if not doc_id:
+                continue
+            items.append(
+                SearchItem(
+                    doc_id=doc_id,
+                    score=float(hit.get("score", 0.0)),
+                    ipc_codes=hit.get("ipc_codes", []),
+                    cpc_codes=hit.get("cpc_codes", []),
+                    fi_codes=hit.get("fi_codes", []),
+                    ft_codes=hit.get("ft_codes", []),
+                )
+            )
+        meta = Meta(
+            lane=lane if lane in ("fulltext", "semantic") else "fulltext",
+            top_k=request.top_k,
+            params={"query": getattr(request, "query", getattr(request, "text", ""))},
+        )
+        return DBSearchResponse(items=items, code_freqs=None, meta=meta)
 
     def _build_snippets_payload(
         self, request: GetSnippetsRequest, lane: str | None
@@ -36,16 +92,72 @@ class PatentfieldBackend(HttpLaneBackend):
         """Prepare snippet request body for Patentfield."""
         return request.model_dump()
 
-    async def search(self, request: SearchRequest, lane: str) -> DBSearchResponse:
+    def _parse_snippet_response(
+        self, payload: dict[str, object], requested_fields: list[str]
+    ) -> dict[str, dict[str, str]]:
+        hits = payload.get("results") or payload.get("items") or []
+        result: dict[str, dict[str, str]] = {}
+        for hit in hits:
+            doc_id = hit.get("pub_id") or hit.get("doc_id") or hit.get("app_doc_id")
+            if not doc_id:
+                continue
+            row: dict[str, str] = {}
+            for field in requested_fields:
+                if field == "pub_id":
+                    row[field] = doc_id
+                else:
+                    row[field] = hit.get(field, "")
+            result[doc_id] = row
+        return result
+
+    async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
         payload = self._build_search_payload(request, lane)
-        response = await self.http.post(f"{self.search_path}/{lane}", json=payload)
-        response.raise_for_status()
-        return self._parse_search_response(response.json())
+        try:
+            response = await self.http.post(f"{self.search_path}/{lane}", json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Patentfield search returned %s", exc.response.status_code)
+            if exc.response.status_code == 404:
+                return DBSearchResponse(items=[], code_freqs=None, meta=Meta(lane=lane))
+            raise
+        logger.info("Patentfield search status: %s", response.status_code)
+        return self._parse_search_response(response.json(), request, lane)
 
     async def fetch_snippets(
         self, request: GetSnippetsRequest, lane: str | None = None
     ) -> dict[str, dict[str, str]]:
         payload = self._build_snippets_payload(request, lane)
-        response = await self.http.post(self.snippets_path, json=payload)
-        response.raise_for_status()
-        return response.json()
+        logger.info("Patentfield snippets payload: %s", payload)
+        try:
+            response = await self.http.post(self.snippets_path, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Patentfield snippets status: %s", exc.response.status_code)
+            if exc.response.status_code == 404:
+                return {}
+            raise
+        logger.info("Patentfield snippets status: %s", response.status_code)
+        return self._parse_snippet_response(response.json(), request.fields)
+
+    async def fetch_publication(
+        self, request: GetPublicationRequest, lane: str | None = None
+    ) -> dict[str, dict[str, str]]:
+        if not request.ids:
+            return {}
+        name = request.ids[0]
+        params = {"id_type": request.id_type}
+        if request.fields:
+            params["columns"] = ",".join(request.fields)
+        logger.info("Patentfield publication GET: %s params=%s", name, params)
+        try:
+            response = await self.http.get(
+                f"{self.publications_path}/{name}", params=params
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Patentfield publication status: %s", exc.response.status_code)
+            if exc.response.status_code == 404:
+                return {}
+            raise
+        logger.info("Patentfield publication status: %s", response.status_code)
+        return {name: response.json()}
