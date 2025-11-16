@@ -24,6 +24,56 @@ The main goals for v1.3 are:
   - `ttidf_wide` / `semantic` / `ttidf_recall` / `ttidf_precision`  
   - `original_dense` is **disabled** in v1.3
 
+【Language & Terminology Alignment Rules】
+
+1. Language Alignment (必須)
+   For every search lane (fulltext or semantic), the query MUST be constructed
+   in the same primary language as the target corpus being searched.
+   Do NOT mix multiple languages inside a single query.
+
+   - If the lane filters restrict the corpus to a specific publication region 
+     (e.g., JP-only, US-only, EP-only), the query MUST align with the dominant 
+     language of that region.
+   - JP corpus → Japanese queries.  
+     US/EP corpus → English queries.
+
+   Rationale:
+   Cross-lingual search causes significant semantic drift, degrades BM25/TT-IDF 
+   matching, and destabilizes multi-lane fusion. Language alignment is mandatory.
+
+2. Tokenization-Aware Query Construction
+   All generated queries MUST respect the tokenization characteristics of the 
+   target corpus. Avoid formulations that are unnatural for the target language 
+   or that break expected lexical boundaries.
+
+   - For Japanese corpora (e.g., JP patents), prefer natural Japanese phrases 
+     that match morphological segmentation.
+   - For English corpora, avoid overlong compound phrases that harm BM25 scoring.
+
+   Rationale:
+   Tokenization mismatch lowers lexical match probability and consequently reduces 
+   precision/recall across all lanes.
+
+3. Use Canonical Domain Terminology
+   The query MUST prefer the canonical terminology that is actually used in the 
+   target corpus. Avoid translation-induced terminology drift and avoid obscure 
+   synonyms unless the corpus genuinely uses them.
+
+   - Prioritize wording appearing in authoritative sources (e.g., claims/abstract 
+     of JP/US/EP patents in the same technical field).
+   - Avoid transliterations or non-standard wording that is not used in the 
+     target corpus.
+
+   Rationale:
+   Using canonical terminology directly improves BM25/TT-IDF hit quality and 
+   reduces semantic drift in dense embedding lanes.
+
+【Summary】
+To preserve precision/recall balance and maintain stability of multi-lane fusion, 
+every lane MUST strictly align:
+(1) language, (2) tokenization, and (3) domain terminology 
+with the target corpus being searched.
+
 ---
 
 ## 1. Classification Code Policy
