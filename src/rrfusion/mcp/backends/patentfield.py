@@ -8,6 +8,7 @@ import httpx
 
 from ...config import Settings
 from ...models import (
+    Cond,
     DBSearchResponse,
     GetPublicationRequest,
     GetSnippetsRequest,
@@ -28,6 +29,16 @@ FIELD_COLUMN_MAP: dict[str, str] = {
     "app_doc_id": "app_doc_id",
     "pub_id": "pub_id",
     "exam_id": "exam_id",
+}
+
+FIELD_FILTER_MAP: dict[str, str] = {
+    "ipc": "ipc",
+    "cpc": "cpc",
+    "fi": "fi",
+    "ft": "ft",
+    "pubyear": "pubyear",
+    "assignee": "assignee",
+    "country": "country",
 }
 
 
@@ -55,6 +66,21 @@ class PatentfieldBackend(HttpLaneBackend):
                 columns.append(column)
         return columns
 
+    def _build_conditions(self, filters: list["Cond"] | None) -> list[dict[str, object]] | None:
+        if not filters:
+            return None
+        conditions: list[dict[str, object]] = []
+        for cond in filters:
+            key = FIELD_FILTER_MAP.get(cond.field, cond.field)
+            entry: dict[str, object] = {"key": key, "lop": cond.lop, "op": cond.op}
+            if cond.op == "range" and isinstance(cond.value, (list, tuple)) and len(cond.value) == 2:
+                entry["q1"] = cond.value[0]
+                entry["q2"] = cond.value[1]
+            else:
+                entry["q"] = cond.value
+            conditions.append(entry)
+        return conditions
+
     def _build_search_payload(
         self, request: SearchParams, lane: str
     ) -> dict[str, object]:
@@ -70,6 +96,14 @@ class PatentfieldBackend(HttpLaneBackend):
             "columns": columns,
             "feature": "word_weights",
         }
+        if request.filters:
+            conditions = self._build_conditions(request.filters)
+            if conditions:
+                payload["conditions"] = conditions
+        if getattr(request, "budget_bytes", None) is not None:
+            payload["budget_bytes"] = getattr(request, "budget_bytes")
+        if getattr(request, "trace_id", None):
+            payload["trace_id"] = getattr(request, "trace_id")
         logger.info("Patentfield search payload: %s", payload)
         return payload
 
@@ -98,7 +132,30 @@ class PatentfieldBackend(HttpLaneBackend):
             top_k=request.top_k,
             params={"query": getattr(request, "query", getattr(request, "text", ""))},
         )
-        return DBSearchResponse(items=items, code_freqs=None, meta=meta)
+        freqs = self._aggregate_code_summary(items)
+        return DBSearchResponse(items=items, code_freqs=freqs, meta=meta)
+
+    def _aggregate_code_summary(
+        self, items: list[SearchItem]
+    ) -> dict[str, dict[str, int]]:
+        freqs: dict[str, dict[str, int]] = {
+            "ipc": {},
+            "cpc": {},
+            "fi": {},
+            "ft": {},
+        }
+        for item in items:
+            for taxonomy, codes in (
+                ("ipc", item.ipc_codes),
+                ("cpc", item.cpc_codes),
+                ("fi", item.fi_codes),
+                ("ft", item.ft_codes),
+            ):
+                if not codes:
+                    continue
+                for code in codes:
+                    freqs[taxonomy][code] = freqs[taxonomy].get(code, 0) + 1
+        return freqs
 
     def _build_snippets_payload(
         self, request: GetSnippetsRequest, lane: str | None
@@ -119,8 +176,9 @@ class PatentfieldBackend(HttpLaneBackend):
             for field in requested_fields:
                 if field == "pub_id":
                     row[field] = doc_id
-                else:
-                    row[field] = hit.get(field, "")
+                    continue
+                column = FIELD_COLUMN_MAP.get(field, field)
+                row[field] = hit.get(column, "")
             result[doc_id] = row
         return result
 

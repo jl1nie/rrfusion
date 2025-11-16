@@ -177,3 +177,12 @@ def test_mutate_requires_existing_run_cli(
 ) -> None:
     env = _build_cli_env(redis_url, stub_max_results)
     _run_cli_scenario(base_url, env, "mutate-missing-run")
+
+
+def test_freq_snapshot_cli(
+    base_url: str,
+    redis_url: str,
+    stub_max_results: int,
+) -> None:
+    env = _build_cli_env(redis_url, stub_max_results)
+    _run_cli_scenario(base_url, env, "freq-snapshot")

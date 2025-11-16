@@ -82,7 +82,16 @@ The tests automatically talk to `http://mcp:3000/mcp/...` inside the Compose net
 
    ```bash
    docker compose -f infra/compose.stub.yml run --rm rrfusion-tests \
-     python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
+   python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large
+
+6. Verify that lane frequency snapshots keep new FI/FT buckets populated. The freshly added `freq-snapshot` scenario queries each lane’s `freq_key` and asserts that the FI/FT hashes are present and non-empty:
+
+   ```bash
+   docker compose -f infra/compose.stub.yml run --rm rrfusion-tests \
+     python -m rrfusion.scripts.run_fastmcp_e2e --scenario freq-snapshot
+   ```
+
+   The CLI e2e tests now mirror this check via `tests/e2e/test_mcp_tools.py::test_freq_snapshot_cli`, and the README’s MCP prompt/recipes view lists FI/FT in the fusion target profile guidance.
 
 As a convenience, `scripts/run_e2e.sh` brings the Compose stub stack up, runs the Pytest E2E suite, and tears the stack back down with the correct MCP/DB host names. Run it from the repo root (`bash scripts/run_e2e.sh`) instead of repeating the Compose commands manually.
    ```
@@ -132,7 +141,7 @@ If you prefer to orchestrate via `cargo make`, the provided `Makefile.toml` defi
 1. `cargo make lint` — run `flake8` inside the CLI image.
 2. `cargo make unit` — run annotated unit tests (`pytest -m unit`) inside the CLI image.
 3. `cargo make integration` — start the CI stack (`infra/compose.ci.yml`) via `start-ci`, run `pytest -m integration`, and shut it down.
-4. `cargo make e2e` — start the CI stack (`infra/compose.ci.yml`) via `start-ci`, run `pytest -m e2e`, and shut it down.
+4. `cargo make e2e` — start the CI stack (`infra/compose.ci.yml`) via `start-ci`, run `pytest -m e2e`, and shut it down (the E2E suite now includes `test_freq_snapshot_cli` to ensure FI/FT freq hashes are materialized).
 5. `cargo make ci` — sequentially runs lint, unit, integration, and e2e under a single invocation.
 
 For production-like validation you can also call `cargo make start-prod`/`cargo make stop-prod`, which spin up/down `infra/compose.prod.yml` (Redis + MCP) using the same `.env` so the host port and service variables stay consistent.
@@ -178,14 +187,14 @@ from rrfusion.mcp.host import mcp
 @mcp.tool
 async def search_fulltext(
     query: str,
-    filters: Filters | None = None,
-    fields: list[str] | None = None,
-    top_k: int = 1000,
-    rollup: RollupConfig | None = None,
+    filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
+    top_k: int = 800,
     budget_bytes: int = 4096,
+    trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(query: str, filters: Filters | None = None, fields: list[str] | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None)
     prompts/list:
     - "List high-recall patent families mentioning {query} with IPC filters {filters}"
     - "List prior art using only keyword evidence for {query}"
@@ -205,14 +214,14 @@ from rrfusion.mcp.host import mcp
 @mcp.tool
 async def search_semantic(
     text: str,
-    filters: Filters | None = None,
-    fields: list[str] | None = None,
-    top_k: int = 1000,
-    rollup: RollupConfig | None = None,
+    filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
+    top_k: int = 800,
     budget_bytes: int = 4096,
+    trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(text: str, filters: Filters | None = None, fields: list[str] | None = None, top_k: int = 1000, rollup: RollupConfig | None = None, budget_bytes: int = 4096)
+    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None)
     prompts/list:
     - "List semantically similar inventions about {text}"
     - "List embedding-driven hits that stay on-spec for {text}"

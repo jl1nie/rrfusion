@@ -140,8 +140,34 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
             raise AssertionError("fusion returned empty ranking")
         if not fusion["frontier"]:
             raise AssertionError("frontier missing entries")
-        if not fusion["freqs_topk"]["ipc"]:
+        freqs = fusion["freqs_topk"]
+        if not freqs["ipc"]:
             raise AssertionError("IPC freqs missing in fusion response")
+        if not freqs["fi"]:
+            raise AssertionError("FI freqs missing in fusion response")
+        if not freqs["ft"]:
+            raise AssertionError("FT freqs missing in fusion response")
+
+    await redis_client.aclose()
+
+
+async def scenario_freq_snapshot(cfg: RunnerConfig) -> None:
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        lane_runs = await _prepare_lane_runs(client, redis_client, cfg, require_large=False)
+        for lane, data in lane_runs.items():
+            freq_key = data["meta"].get("freq_key")
+            if not freq_key:
+                raise AssertionError(f"{lane} run missing freq_key")
+            payload = await redis_client.hgetall(freq_key)
+            if b"fi" not in payload or b"ft" not in payload:
+                raise AssertionError(f"{lane} freq summary missing FI/FT keys")
+            fi_values = json.loads(payload[b"fi"]) if payload[b"fi"] else {}
+            ft_values = json.loads(payload[b"ft"]) if payload[b"ft"] else {}
+            if fi_values == {} and ft_values == {}:
+                raise AssertionError(f"{lane} freq summary missing FI and FT data")
 
     await redis_client.aclose()
 
@@ -398,6 +424,8 @@ async def run(cfg: RunnerConfig) -> None:
         await scenario_search_counts(cfg)
     elif cfg.scenario == "blend-frontier":
         await scenario_blend_frontier(cfg)
+    elif cfg.scenario == "freq-snapshot":
+        await scenario_freq_snapshot(cfg)
     elif cfg.scenario == "peek-multi-cycle":
         await scenario_peek_multi_cycle(cfg)
     elif cfg.scenario == "snippets-missing-id":
@@ -440,6 +468,7 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
         choices=[
             "search-counts",
             "blend-frontier",
+            "freq-snapshot",
             "peek-pagination",
             "peek-single",
             "peek-large",

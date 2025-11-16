@@ -8,6 +8,7 @@ from rrfusion.db_stub.generator import (
     publications_from_request,
 )
 from rrfusion.models import (
+    Cond,
     DBSearchResponse,
     FulltextParams,
     GetPublicationRequest,
@@ -40,6 +41,35 @@ def _columns_to_fields(columns: list[str] | None) -> list[str]:
     return fields or SEARCH_FIELDS_DEFAULT.copy()
 
 
+def _conditions_to_filters(conditions: list[dict[str, object]] | None) -> list[Cond]:
+    if not conditions:
+        return []
+    inverse_column_map = {value: key for key, value in COLUMN_FIELD_MAP.items()}
+    condition_filters: list[Cond] = []
+    for cond in conditions:
+        key = cond.get("key")
+        field = inverse_column_map.get(key, key)
+        lop = cond.get("lop") or "and"
+        op = cond.get("op") or "in"
+        value = cond.get("q")
+        if value is None and "q1" in cond:
+            value = [cond.get("q1"), cond.get("q2")]
+        if value is None:
+            continue
+        try:
+            condition_filters.append(
+                Cond(
+                    lop=lop,
+                    field=field,
+                    op=op,
+                    value=value,
+                )
+            )
+        except ValueError:
+            continue
+    return condition_filters
+
+
 @app.get("/healthz")
 async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
@@ -50,11 +80,13 @@ async def search_lane(
     request_body: dict[str, object],
     lane: str = Path(..., pattern="^(fulltext|semantic)$"),
 ) -> DBSearchResponse:
+    conditions = request_body.get("conditions")
+    filters = _conditions_to_filters(conditions if isinstance(conditions, list) else None)
     if "search_type" in request_body:
         query = request_body.get("q", "")
         request = FulltextParams(
             query=query,
-            filters=[],
+            filters=filters,
             fields=_columns_to_fields(request_body.get("columns")),
             top_k=request_body.get("limit", 800),
             budget_bytes=request_body.get("budget_bytes", 4096),
@@ -62,8 +94,12 @@ async def search_lane(
         )
     elif lane == "fulltext":
         request = FulltextParams.model_validate(request_body)
+        if filters:
+            request.filters = [*request.filters, *filters]
     else:
         request = SemanticParams.model_validate(request_body)
+        if filters:
+            request.filters = [*request.filters, *filters]
     return generate_search_results(request, lane=lane)
 
 

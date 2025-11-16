@@ -372,6 +372,8 @@ class MCPService:
             doc_id: {
                 "ipc": meta.get("ipc_codes", []),
                 "cpc": meta.get("cpc_codes", []),
+                "fi": meta.get("fi_codes", []),
+                "ft": meta.get("ft_codes", []),
             }
             for doc_id, meta in doc_metadata.items()
         }

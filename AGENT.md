@@ -73,6 +73,7 @@ Read from `infra/.env` (copy `infra/env.example` if you need defaults).
 - Full-stack verification: `docker compose -f infra/compose.ci.yml exec -T rrfusion-tests pytest -m e2e` (dockerized Redis + stub + MCP must be running; set `STUB_MAX_RESULTS=10000` to exercise 10k-result lanes).
 - FastMCP streamable HTTP の長大レスポンステストは pytest 外のスクリプトで実行する:  
   `docker compose -f infra/compose.ci.yml exec -T rrfusion-tests python -m rrfusion.scripts.run_fastmcp_e2e --scenario peek-large`
+- 新しい `freq-snapshot` シナリオは各レーンの `freq_key` を検証し、FI/FT まで含む周波数ハッシュが存在していることを確認します。E2E CLI からは `python -m rrfusion.scripts.run_fastmcp_e2e --scenario freq-snapshot` で呼び出せます。
 - Local services:
   ```bash
   uv run uvicorn apps.db_stub.app:app --host 0.0.0.0 --port 8080
@@ -97,7 +98,7 @@ The same service layout is captured in `infra/compose.ci.yml`, which `cargo make
   - Member: `doc_id` (uint64/string).  
   - Score: stub phase → raw score; algorithm phase → `w_lane / (rrf_k + rank)`.
 - **Fusion ZSET** `z:rrf:{run_id}` via `ZUNIONSTORE ... WEIGHTS 1 ...`.
-- **Code freq hashes** `h:freq:{run_id}:{lane}`: store compact IPC/CPC counts (top-N).
+- **Code freq hashes** `h:freq:{run_id}:{lane}`: store compact IPC/CPC/FI/FT counts (top-N). The new `freq-snapshot` E2E scenario and CLI test inspect these hashes to confirm the FI/FT buckets are populated before fusion runs are mutated.
 - **Run metadata** `h:run:{run_id}`: JSON payload describing recipe, parent, lineage, source lanes, and snapshot info.
 - **Doc/snippet cache** `h:doc:{doc_id}` (+ optional `h:doc2fam`). TTLs: lane/fusion/freq/run 24h, snippets 72h.
 
@@ -156,11 +157,11 @@ Fetch top-k results from the DB stub, store them in Redis, and return handles on
 **Input**
 ```json
 {
-  "query": "string",           // fulltext lane variant (wide/focused/hybrid)
+  "query": "string",           // fulltext lane variant (wide/focused/hybrid); semantic lane uses the `text` field instead
   "filters": [
     { "lop": "and", "field": "ipc", "op": "in", "value": ["H04L"] }
   ],
-  "top_k": 10000,
+  "top_k": 800,
   "budget_bytes": 4096,
   "trace_id": "string"
 }
@@ -171,16 +172,21 @@ Fetch top-k results from the DB stub, store them in Redis, and return handles on
 {
   "lane": "fulltext" | "semantic",
   "run_id_lane": "string",
-  "count_returned": 10000,
+  "count_returned": 800,
   "truncated": true,
-  "code_freqs": { "ipc": {"H04L":12}, "cpc": {"H04L9/32":6} },
+  "code_freqs": {
+    "ipc": {"H04L":12},
+    "cpc": {"H04L9/32":6},
+    "fi": {"H04L1/00":5},
+    "ft": {"432":5}
+  },
   "cursor": "string"
 }
 ```
 
 **Implementation notes**
 - Stub milestone: use raw stub scores, store them directly, and return metadata.
-- Algorithm milestone: store RRF-ready scores (`w_lane/(rrf_k + rank)`), and persist code freqs + doc caches for later fusion.
+- Algorithm milestone: store RRF-ready scores (`w_lane/(rrf_k + rank)`), and persist code freqs (IPC/CPC/FI/FT) + doc caches for later fusion. `filters` are flattened `Cond` lists, `fields` are `SnippetField`s, and `trace_id` can be set for tracing.
 
 ---
 
@@ -198,7 +204,7 @@ Perform RRF fusion with optional code awareness and frontier reporting.
   "rrf_k": 60,
   "beta": 1.0,
   "family_fold": true,
-  "target_profile": { "ipc": {"H04L": 0.7, "H04W": 0.3} },
+  "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },
   "top_m_per_lane": { "fulltext": 10000, "semantic": 10000 },
   "k_grid": [10,20,30,40,50,80,100,150,200],
   "peek": {
@@ -216,7 +222,12 @@ Perform RRF fusion with optional code awareness and frontier reporting.
   "run_id": "string",
   "pairs_top": [["123456789", 0.913], ["..."]],
   "frontier": [{"k": 50, "P_star": 0.62, "R_star": 0.55, "F_beta_star": 0.58}],
-  "freqs_topk": { "ipc": {"H04L": 22}, "cpc": {"H04L9/32": 11} },
+  "freqs_topk": {
+    "ipc": {"H04L": 22},
+    "cpc": {"H04L9/32": 11},
+    "fi": {"H04L1/00": 8},
+    "ft": {"432": 5}
+  },
   "contrib": { "123456789": {"recall":0.4,"semantic":0.4,"code":0.2} },
   "recipe": { "weights": {...}, "rrf_k": 60, "beta": 1.0, "family_fold": true, "snapshot": "..." },
   "peek_samples": [ { "id":"123456789", "title":"...", "abst":"..." } ]
@@ -226,6 +237,7 @@ Perform RRF fusion with optional code awareness and frontier reporting.
 **Implementation notes**
 - Stub milestone: run RRF in Python, generate a mocked frontier (e.g., random relevance prior), store fusion results in Redis for consistency.
 - Algorithm milestone: use Redis `ZUNIONSTORE`, apply code-aware adjustments (§6), compute true frontier proxies, family fold, and contribution shares. Include lineage metadata for reproducibility.
+- Implementation note: `target_profile` now accepts IPC/CPC/FI/FT maps, so the fusion run also captures FI/FT frequencies in `freqs_topk`. The new `freq-snapshot` scenario validates those hashes before peek/mutate steps.
 
 ---
 

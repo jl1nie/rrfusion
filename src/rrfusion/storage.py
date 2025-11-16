@@ -92,6 +92,8 @@ class RedisStorage:
             mapping={
                 "ipc": json.dumps(freq_summary.get("ipc", {})),
                 "cpc": json.dumps(freq_summary.get("cpc", {})),
+                "fi": json.dumps(freq_summary.get("fi", {})),
+                "ft": json.dumps(freq_summary.get("ft", {})),
             },
         )
         pipe.expire(freq_key, data_ttl)
@@ -203,8 +205,13 @@ class RedisStorage:
         data = await self.redis.hgetall(self.freq_key(run_id, lane))
         if not data:
             return None
+        if data and isinstance(next(iter(data.keys())), bytes):
+            decoded_data = {
+                key.decode("utf-8"): value for key, value in data.items()
+            }
+            data = decoded_data
         summary: dict[str, dict[str, int]] = {}
-        for taxonomy in ("ipc", "cpc"):
+        for taxonomy in ("ipc", "cpc", "fi", "ft"):
             raw = data.get(taxonomy)
             if not raw:
                 summary[taxonomy] = {}

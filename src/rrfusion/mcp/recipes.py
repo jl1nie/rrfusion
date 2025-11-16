@@ -7,7 +7,7 @@
 HANDBOOK = '''
 # RRFusion MCP Handbook (v1.2, multi-lane)
 
-**Mission**: Maximize *effective* Fβ (default β=1) for prior-art retrieval using **multi-lane search** (fulltext-wide / fulltext-focused / fulltext-hybrid / semantic) and **code-aware fusion** under no-gold-label conditions.  
+**Mission**: Maximize *effective* Fβ (default β=1) for prior-art retrieval using **multi-lane search** (keyword-driven fulltext runs + a semantic lane) and **code-aware fusion** under no-gold-label conditions.  
 **Transport**: HTTP / streamable-http at `/{base_path}` (default `/mcp`).  
 **Auth**: Bearer token if configured.
 
@@ -41,7 +41,7 @@ HANDBOOK = '''
   - `fields?: list[SnippetField]` (same options as `get_publication.fields`, default `["abst","title","claim"]`; add `"desc"` only when you need description text)
   - `top_k: int = 800`
   - `budget_bytes: int = 4096`
-  - `seed?: int`, `trace_id?: string`
+  - `trace_id?: string`
 - **Cond**: `{ lop: "and|or|not", field: "ipc|fi|cpc|pubyear|assignee|country", op: "in|range|eq|neq", value: any }`
 - **Tips**: Use field boosts server-side (claim > title > abst > desc). Keep `top_k` generous (200–1000), and mirror filters in semantic.
 
@@ -55,22 +55,21 @@ HANDBOOK = '''
 
 ### `blend_frontier_codeaware`
 - **Args**:
-  - `runs: [{ lane: "fulltext-wide|fulltext-focused|fulltext-hybrid|semantic", run_id: string }]`
-  - `weights?: { fulltext-wide?: float, fulltext-focused?: float, fulltext-hybrid?: float, semantic?: float }` (lane **rank** weights)
+  - `runs: [{ lane: "fulltext|semantic|original_dense", run_id: string }]` (fulltext lane can originate from wide/focused/hybrid prompts)
+  - `weights?: { fulltext?: float, semantic?: float, original_dense?: float }` (lane **rank** weights)
   - `rrf_k: int = 60`
   - `beta_fuse: float = 1.0`  ← higher → recall, lower → precision
   - `family_fold: boolean = true`
-  - `target_profile?: { ipc|fi|cpc: { code: weight } }`
-  - `code_idf_mode?: "global"|"domain" = "global"`
-  - `top_m_per_lane?: int`
+  - `target_profile?: { ipc|fi|cpc|ft: { code: weight } }`
+  - `top_m_per_lane?: dict[str, int]`
   - `k_grid?: [int]`   // optional sweep
-  - `peek?: { limit?: int }`
+  - `peek?: { count?: int, fields?: list[str], per_field_chars?: dict[str, int], budget_bytes?: int }`
 - **Code prior**:
   - Let `idf_c = log(N / (1 + freq(c)))`
   - Let query-side code weights be `w_q(c)` from PRF/LLM.
   - Doc-side contribution: `s_code(d) = Σ_{c∈C_d} idf_c * w_q(c)`
   - Final rank score ~ `RRF(rank)` adjusted by lane weights, then **re-ranked** by `s_code(d)` with a small mixing λ.
-  - When encoding `target_profile` for Japanese families, prefer FI coverage first and treat FT references as supporting signal; fall back to IPC/CPC only if FI/FT is absent or for non-JP jurisdictions.
+  - When encoding `target_profile` for Japanese families, prefer FI/FT coverage (File Index / Fターム) first and treat IPC/CPC as supporting signals; fall back to IPC/CPC only if FI/FT is absent or for non-JP jurisdictions.
 
 ---
 
@@ -79,18 +78,18 @@ HANDBOOK = '''
 ### `peek_snippets`
 - **Args**:
   - `run_id`, `offset=0`, `limit=12`
-- `fields?: ["title","abst","claim","desc"]`
+  - `fields?: ["title","abst","claim","desc"]`
   - `per_field_chars?: { field: int }`
   - `claim_count=3`
   - `strategy: "head"|"match"|"mix"`
   - `budget_bytes=12288`
 - **Patterns**:
-- `head` → titles/absts
+  - `head` → titles/absts
   - `match` → query highlights focus
   - `mix` → balanced
 
 ### `get_snippets`
-- **Args**: `ids[]`, `fields?`, `per_field_chars?`, `seed?`
+- **Args**: `ids[]`, `fields?`, `per_field_chars?`
 - **Note**: Independent of fusion cursor; random access OK.
 
 ---
@@ -100,12 +99,12 @@ HANDBOOK = '''
 ### `mutate_run`
 - **Args**: 
   - `run_id`
-  - `delta`: `{ weights?|rrf_k?|beta_fuse?|filters?|top_m_per_lane?|family_fold? }`
+  - `delta`: `{ weights?|rrf_k?|beta_fuse?|lambda_code?|gate?|mmr?|limit? }`
 - **Loop**: Adjust → re-peek → compare proxy P/R/Fβ at fixed K.
 
 ### `get_provenance`
 - **Args**: `run_id`
-- **Returns**: inputs, filters, lane stats, fusion params (`weights, rrf_k, beta_fuse`), code prior snapshot, metrics, `seed`, `trace_id`.
+- **Returns**: stored metadata for fusion runs (inputs, fusion recipe, metrics, lineage), including IPC/CPC/FI/FT frequency snapshots for sampling.
 
 ---
 
@@ -196,9 +195,9 @@ TOOL_RECIPES = '''
 ```json
 {
   "runs": [
-    {"lane":"fulltext-wide","run_id":"FT_WIDE"},
-    {"lane":"fulltext-focused","run_id":"FT_FOC"},
-    {"lane":"fulltext-hybrid","run_id":"FT_HYB"},
+    {"lane":"fulltext","run_id":"FT_WIDE"},
+    {"lane":"fulltext","run_id":"FT_FOC"},
+    {"lane":"fulltext","run_id":"FT_HYB"},
     {"lane":"semantic","run_id":"SEM"}
   ],
   "rrf_k": 60,
@@ -211,9 +210,9 @@ TOOL_RECIPES = '''
 ```json
 {
   "runs": [
-    {"lane":"fulltext-wide","run_id":"FT_WIDE"},
-    {"lane":"fulltext-focused","run_id":"FT_FOC"},
-    {"lane":"fulltext-hybrid","run_id":"FT_HYB"},
+    {"lane":"fulltext","run_id":"FT_WIDE"},
+    {"lane":"fulltext","run_id":"FT_FOC"},
+    {"lane":"fulltext","run_id":"FT_HYB"},
     {"lane":"semantic","run_id":"SEM"}
   ],
   "target_profile": {"ipc":{"H04W72/04":1.2,"H04L1/18":1.0}},
@@ -252,7 +251,7 @@ TOOL_RECIPES = '''
 ```json
 {
   "run_id":"FUSION_123",
-  "delta":{"weights":{"fulltext-focused":1.2,"semantic":1.1},"rrf_k":50,"beta_fuse":0.9}
+  "delta":{"weights":{"fulltext":1.2,"semantic":1.1},"rrf_k":50,"beta_fuse":0.9}
 }
 ```
 
