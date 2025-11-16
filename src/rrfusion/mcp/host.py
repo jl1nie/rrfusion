@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import Any, AsyncIterator, Literal
 
 from fastmcp import FastMCP
@@ -124,6 +125,23 @@ def _require_service() -> MCPService:
     return _service
 
 
+def _elapsed_ms(start: float) -> int:
+    return max(0, int((perf_counter() - start) * 1000))
+
+
+def _record_tool_timing(response: Any, took_ms: int) -> None:
+    if isinstance(response, SearchToolResponse):
+        response.response.meta.took_ms = took_ms
+    elif isinstance(response, PeekSnippetsResponse):
+        response.meta.took_ms = took_ms
+    elif isinstance(response, BlendResponse):
+        response.meta["took_ms"] = took_ms
+    elif isinstance(response, MutateResponse):
+        response.meta["took_ms"] = took_ms
+    elif isinstance(response, ProvenanceResponse):
+        response.meta["took_ms"] = took_ms
+
+
 # ============================
 # Prompts
 # ============================
@@ -169,7 +187,8 @@ async def search_fulltext(
     prompts/get:
     - "Get a lane run handle I can feed into fusion for {query}"
     """
-    return await _require_service().search_lane(
+    start = perf_counter()
+    response = await _require_service().search_lane(
         "fulltext",
         query=query,
         filters=filters,
@@ -178,6 +197,8 @@ async def search_fulltext(
         budget_bytes=budget_bytes,
         trace_id=trace_id,
     )
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.tool
@@ -207,7 +228,8 @@ async def search_semantic(
     - "Get the semantic lane handle so I can blend with run {text}"
     """
     lane = "semantic" if semantic_style == "default" else "original_dense"
-    return await _require_service().search_lane(
+    start = perf_counter()
+    response = await _require_service().search_lane(
         lane,
         text=text,
         filters=filters,
@@ -217,6 +239,8 @@ async def search_semantic(
         trace_id=trace_id,
         semantic_style=semantic_style,
     )
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.tool
@@ -249,7 +273,8 @@ async def blend_frontier_codeaware(
     prompts/get:
     - "Get a fusion run_id with frontier stats so I can peek snippets for {runs}"
     """
-    return await _require_service().blend(
+    start = perf_counter()
+    response = await _require_service().blend(
         runs=runs,
         weights=weights,
         rrf_k=rrf_k,
@@ -260,6 +285,8 @@ async def blend_frontier_codeaware(
         k_grid=k_grid,
         peek=peek,
     )
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.tool
@@ -290,7 +317,8 @@ async def peek_snippets(
     prompts/get:
     - "Get the next peek_cursor so I can continue streaming run {run_id}"
     """
-    return await _require_service().peek_snippets(
+    start = perf_counter()
+    response = await _require_service().peek_snippets(
         run_id=run_id,
         offset=offset,
         limit=limit,
@@ -300,6 +328,8 @@ async def peek_snippets(
         strategy=strategy,
         budget_bytes=budget_bytes,
     )
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.tool
@@ -350,7 +380,10 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     prompts/get:
     - "Get a fresh run_id derived from {run_id} with updated weights/filters"
     """
-    return await _require_service().mutate_run(run_id=run_id, delta=delta)
+    start = perf_counter()
+    response = await _require_service().mutate_run(run_id=run_id, delta=delta)
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.tool
@@ -363,7 +396,10 @@ async def get_provenance(run_id: str) -> ProvenanceResponse:
     prompts/get:
     - "Get parent/history handles so I can audit or reproduce run {run_id}"
     """
-    return await _require_service().provenance(run_id)
+    start = perf_counter()
+    response = await _require_service().provenance(run_id)
+    _record_tool_timing(response, _elapsed_ms(start))
+    return response
 
 
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)

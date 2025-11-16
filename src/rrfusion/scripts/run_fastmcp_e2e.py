@@ -57,6 +57,11 @@ def _make_client(cfg: RunnerConfig) -> MCPClient:
     )
 
 
+def _assert_took_ms(value: int | None, label: str) -> None:
+    if value is None or not isinstance(value, int) or value < 0:
+        raise AssertionError(f"{label} missing valid timing metadata took_ms={value}")
+
+
 async def _prepare_lane_runs(
     client: MCPClient,
     redis_client: Redis,
@@ -76,6 +81,8 @@ async def _prepare_lane_runs(
             "query" if lane == "fulltext" else "text": "fastmcp fusion scenario",
         }
         response = await _call_tool(client, f"search_{lane}", payload, timeout=cfg.timeout)
+        search_meta = response["response"]["meta"]
+        _assert_took_ms(search_meta.get("took_ms"), f"{lane} search")
         if require_large and response["count_returned"] < 2000:
             raise RuntimeError(f"{lane} lane returned only {response['count_returned']} docs")
         meta = await _get_run_meta(redis_client, response["run_id_lane"])
@@ -108,6 +115,8 @@ async def _prepare_fusion_run(
         "peek": None,
     }
     fusion = await _call_tool(client, "blend_frontier_codeaware", blend_payload, timeout=cfg.timeout)
+    fusion_meta = fusion.get("meta", {})
+    _assert_took_ms(fusion_meta.get("took_ms"), "fusion run")
     return fusion
 
 
@@ -120,6 +129,8 @@ async def scenario_search_counts(cfg: RunnerConfig) -> None:
         expected_count = min(cfg.stub_max_results, cfg.stub_max_results)
         for lane, data in lane_runs.items():
             payload = data["response"]
+            payload_meta = payload["response"]["meta"]
+            _assert_took_ms(payload_meta.get("took_ms"), f"{lane} search counts")
             if payload["count_returned"] != expected_count:
                 raise AssertionError(f"{lane} lane returned unexpected size {payload['count_returned']}")
             if payload["code_freqs"]["ipc"] == {} or payload["code_freqs"]["cpc"] == {}:
@@ -147,6 +158,7 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
             raise AssertionError("FI freqs missing in fusion response")
         if not freqs["ft"]:
             raise AssertionError("FT freqs missing in fusion response")
+        _assert_took_ms(fusion.get("meta", {}).get("took_ms"), "blend frontier")
 
     await redis_client.aclose()
 
@@ -188,6 +200,7 @@ async def scenario_peek_multi_cycle(cfg: RunnerConfig) -> None:
             )
             if not peek["snippets"]:
                 raise AssertionError("peek returned empty items")
+            _assert_took_ms(peek.get("meta", {}).get("took_ms"), "peek multi cycle")
             peeked += len(peek["snippets"])
         info = await redis_client.info("memory")
         if info.get("used_memory", 0) <= 0:
@@ -253,6 +266,7 @@ async def scenario_peek_large(cfg: RunnerConfig) -> None:
         }
         peek = await _call_tool(client, "peek_snippets", peek_payload, timeout=cfg.timeout)
         meta = peek.get("meta") or {}
+        _assert_took_ms(meta.get("took_ms"), "peek large")
 
         if len(peek["snippets"]) < 10:
             raise AssertionError(f"Peek returned too few items: {len(peek['snippets'])}")
@@ -286,6 +300,7 @@ async def scenario_peek_single(cfg: RunnerConfig) -> None:
         if cursor is None:
             raise AssertionError("First page missing cursor")
         logger.debug("peek-single items=%s cursor=%s", len(first["snippets"]), cursor)
+        _assert_took_ms(first.get("meta", {}).get("took_ms"), "peek single")
 
     await redis_client.aclose()
 
@@ -310,6 +325,7 @@ async def scenario_peek_pagination(cfg: RunnerConfig) -> None:
         if cursor is None:
             raise AssertionError("First page missing cursor")
         cursor_int = int(cursor)
+        _assert_took_ms(first.get("meta", {}).get("took_ms"), "peek pagination first page")
 
         second = await _call_tool(
             client,
@@ -322,6 +338,7 @@ async def scenario_peek_pagination(cfg: RunnerConfig) -> None:
         second_cursor = second.get("meta", {}).get("peek_cursor")
         if second_cursor is not None and int(second_cursor) < cursor_int:
             raise AssertionError("Cursor did not advance as expected")
+        _assert_took_ms(second.get("meta", {}).get("took_ms"), "peek pagination second page")
 
         budget_third = await _call_tool(
             client,
@@ -339,6 +356,7 @@ async def scenario_peek_pagination(cfg: RunnerConfig) -> None:
         tight_cursor = budget_third.get("meta", {}).get("peek_cursor")
         if tight_cursor is not None:
             logger.debug("tight budget returned cursor=%s (allowed)", tight_cursor)
+        _assert_took_ms(budget_third.get("meta", {}).get("took_ms"), "peek pagination budget page")
 
     await redis_client.aclose()
 
@@ -390,6 +408,7 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             raise AssertionError("mutate_run did not echo semantic weight delta")
         if mutation["recipe"]["delta"].get("beta_fuse") != 0.8:
             raise AssertionError("mutate_run delta missing beta_fuse")
+        _assert_took_ms(mutation.get("meta", {}).get("took_ms"), "mutate run")
 
         provenance = await _call_tool(
             client,
@@ -405,6 +424,7 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             raise AssertionError("Parent run missing from provenance history")
         if meta.get("recipe", {}).get("beta_fuse") != 0.8:
             raise AssertionError("Provenance recipe beta_fuse mismatch")
+        _assert_took_ms(meta.get("took_ms"), "provenance")
 
     await redis_client.aclose()
 
@@ -430,6 +450,7 @@ async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
         params = meta.get("params", {})
         if params.get("semantic_style") != "original_dense":
             raise AssertionError("stored run metadata missing semantic_style flag")
+        _assert_took_ms(response["response"]["meta"].get("took_ms"), "semantic style dense search")
 
     await redis_client.aclose()
 

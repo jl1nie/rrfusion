@@ -578,6 +578,21 @@ handbook assumes the following callable tools.
   Budgeted snippet access for quick review (`peek`) and deeper per-doc
   extraction (`get`).
 
+## Timing metadata
+
+Every structured MCP response now records the wall-clock millis required to
+fulfill the request:
+
+- `search_fulltext` / `search_semantic` and `get_provenance` set the duration on
+  `response.meta.took_ms`.  
+- `blend_frontier_codeaware` / `mutate_run` expose it inside their `meta`
+  dictionary.  
+- `peek_snippets` stores it on `meta.took_ms`.
+
+Raise telemetry alerts or log durations by reading the `took_ms` fields so the
+calling agent can compare lane/fusion/peek/mutate latency even when the MCC
+service is hosted behind FastMCP.
+
 - `mutate_run`  
   Explores variations in lane weights, `rrf_k`, `beta_fuse`, and other
   fusion-level deltas.

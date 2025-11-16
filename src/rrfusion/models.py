@@ -155,6 +155,7 @@ class PeekMeta(BaseModel):
     total_docs: int
     retrieved: int
     returned: int
+    took_ms: int | None = None
 
 
 class PeekSnippetsResponse(BaseModel):
@@ -271,12 +272,14 @@ class BlendResponse(BaseModel):
     contrib: dict[str, dict[str, float]]
     recipe: dict[str, Any]
     peek_samples: list[dict[str, Any]]
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class MutateResponse(BaseModel):
     new_run_id: str
     frontier: list[BlendFrontierEntry]
     recipe: dict[str, Any]
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [
@@ -311,7 +314,7 @@ __all__ = [
     "BlendRequest",
     "PeekConfig",
     "BlendFrontierEntry",
-"BlendResponse",
-"MutateResponse",
-"SEARCH_FIELDS_DEFAULT",
+    "BlendResponse",
+    "MutateResponse",
+    "SEARCH_FIELDS_DEFAULT",
 ]

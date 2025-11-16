@@ -163,6 +163,15 @@ REDIS_MAXMEMORY_POLICY=volatile-lru
 
 Because `cargo make` reuses the same commands locally and in CI, you can run `cargo make ci` on your workstation to exercise the whole stack exactly as GitHub Actions would.
 
+## Tool timing metadata
+
+All MCP tools that return structured responses now capture the wall-clock milliseconds it took to fulfill the request.  
+- `search_fulltext` / `search_semantic` and `provenance` embed the duration in `response.meta.took_ms`.  
+- `blend_frontier_codeaware` / `mutate_run` place `took_ms` inside the `meta` dictionary they return.  
+- `peek_snippets` exposes it on `meta.took_ms`.
+
+The integration suite (`tests/integration/test_mcp_integration.py`) and CLI-driven E2E runner (`tests/e2e/test_mcp_tools.py` plus `src/rrfusion/scripts/run_fastmcp_e2e.py`) assert this metadata is present, so you can safely rely on those fields when instrumenting agent telemetry or alerting.
+
 ## Usage Workflow
 
 The MCP loop always starts with independent lane searches, continues with fusion/frontier exploration, and then spends snippet budget.

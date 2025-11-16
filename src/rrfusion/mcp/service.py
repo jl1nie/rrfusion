@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
+from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -110,6 +111,10 @@ def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
 SearchParams = FulltextParams | SemanticParams
 
 
+def _elapsed_ms(start: float) -> int:
+    return max(0, int((perf_counter() - start) * 1000))
+
+
 def _search_meta(lane: str, params: SearchParams) -> Meta:
     meta_params: dict[str, Any] = {
         "query": getattr(params, "query", None) or getattr(params, "text", None),
@@ -208,6 +213,7 @@ class MCPService:
         trace_id: str | None = None,
         semantic_style: SemanticStyle = "default",
     ) -> SearchToolResponse:
+        start = perf_counter()
         backend = self.backend_registry.get_backend(lane)
         if not backend:
             raise HTTPException(
@@ -303,7 +309,7 @@ class MCPService:
             code_freqs=freq_summary,
             meta=meta,
         )
-        return SearchToolResponse(
+        response = SearchToolResponse(
             lane=lane,
             run_id_lane=run_id,
             response=response,
@@ -312,6 +318,8 @@ class MCPService:
             code_freqs=freq_summary,
             cursor=None,
         )
+        response.response.meta.took_ms = _elapsed_ms(start)
+        return response
 
     async def _fetch_snippets_from_backend(
         self,
@@ -347,6 +355,7 @@ class MCPService:
         peek: PeekConfig | None = None,
         parent_meta: dict[str, Any] | None = None,
     ) -> BlendResponse:
+        start = perf_counter()
         if not runs:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="runs required"
@@ -477,7 +486,7 @@ class MCPService:
             },
         )
 
-        return BlendResponse(
+        response = BlendResponse(
             run_id=run_id,
             pairs_top=ordered[:max_k],
             frontier=frontier,
@@ -486,6 +495,8 @@ class MCPService:
             recipe=recipe,
             peek_samples=peek_samples,
         )
+        response.meta["took_ms"] = _elapsed_ms(start)
+        return response
 
     # ------------------------------------------------------------------ #
     async def peek_snippets(
@@ -526,6 +537,7 @@ class MCPService:
             raise HTTPException(status_code=400, detail="run missing sorted set key")
 
         limit = min(request.limit, self.settings.peek_max_docs)
+        timing_start = perf_counter()
         if limit <= 0:
             total_docs = await self.redis.zcard(key)
             return PeekSnippetsResponse(
@@ -538,10 +550,11 @@ class MCPService:
                     total_docs=total_docs,
                     retrieved=0,
                     returned=0,
+                    took_ms=_elapsed_ms(timing_start),
                 ),
             )
 
-        start = request.offset
+        slice_start = request.offset
         stop = request.offset + limit - 1
         budget_limit = min(request.budget_bytes, self.settings.peek_budget_bytes)
         effective_chars = _coerce_field_char_limits(
@@ -551,11 +564,11 @@ class MCPService:
             "peek_snippets run=%s key=%s offset=%s limit=%s budget=%s",
             request.run_id,
             key,
-            start,
+            slice_start,
             limit,
             budget_limit,
         )
-        rows = await self.storage.zslice(key, start, stop, desc=True)
+        rows = await self.storage.zslice(key, slice_start, stop, desc=True)
         logger.debug("peek_snippets fetched %s rows from %s", len(rows), key)
         doc_ids = [doc_id for doc_id, _ in rows]
         doc_metadata = await self.storage.get_docs(doc_ids)
@@ -647,6 +660,7 @@ class MCPService:
                 total_docs=total_docs,
                 retrieved=retrieved,
                 returned=returned,
+                took_ms=_elapsed_ms(timing_start),
             ),
         )
 
@@ -720,6 +734,7 @@ class MCPService:
 
     # ------------------------------------------------------------------ #
     async def mutate_run(self, *, run_id: str, delta: MutateDelta) -> MutateResponse:
+        start = perf_counter()
         request = MutateRequest(run_id=run_id, delta=delta)
         meta = await self.storage.get_run_meta(request.run_id)
         if not meta or meta.get("run_type") != "fusion":
@@ -795,21 +810,25 @@ class MCPService:
             new_meta["recipe"] = recipe_meta
             await self.storage.set_run_meta(response.run_id, new_meta)
 
-        return MutateResponse(
+        response = MutateResponse(
             new_run_id=response.run_id,
             frontier=response.frontier,
             recipe=response.recipe,
         )
+        response.meta["took_ms"] = _elapsed_ms(start)
+        return response
 
     # ------------------------------------------------------------------ #
     async def provenance(self, run_id: str) -> ProvenanceResponse:
+        start = perf_counter()
         meta = await self.storage.get_run_meta(run_id)
         if not meta:
             raise HTTPException(status_code=404, detail="run not found")
+        meta_with_timing = {**meta, "took_ms": _elapsed_ms(start)}
         return ProvenanceResponse(
             run_id=run_id,
-            meta=meta,
-            lineage=meta.get("history", []),
+            meta=meta_with_timing,
+            lineage=meta_with_timing.get("history", []),
         )
 
 
