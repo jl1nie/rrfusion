@@ -186,3 +186,12 @@ def test_freq_snapshot_cli(
 ) -> None:
     env = _build_cli_env(redis_url, stub_max_results)
     _run_cli_scenario(base_url, env, "freq-snapshot")
+
+
+def test_semantic_style_dense_cli(
+    base_url: str,
+    redis_url: str,
+    stub_max_results: int,
+) -> None:
+    env = _build_cli_env(redis_url, stub_max_results)
+    _run_cli_scenario(base_url, env, "semantic-style-dense")

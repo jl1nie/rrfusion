@@ -78,7 +78,7 @@ async def healthcheck() -> dict[str, str]:
 @app.post("/search/{lane}", response_model=DBSearchResponse)
 async def search_lane(
     request_body: dict[str, object],
-    lane: str = Path(..., pattern="^(fulltext|semantic)$"),
+    lane: str = Path(..., pattern="^(fulltext|semantic|original_dense)$"),
 ) -> DBSearchResponse:
     conditions = request_body.get("conditions")
     filters = _conditions_to_filters(conditions if isinstance(conditions, list) else None)

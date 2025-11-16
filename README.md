@@ -211,6 +211,8 @@ By default the lane returns `fields` = ["abst","title","claim"], so you only ind
 ```python
 from rrfusion.mcp.host import mcp
 
+from typing import Literal
+
 @mcp.tool
 async def search_semantic(
     text: str,
@@ -219,9 +221,10 @@ async def search_semantic(
     top_k: int = 800,
     budget_bytes: int = 4096,
     trace_id: str | None = None,
+    semantic_style: Literal["default", "original_dense"] = "default",
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None)
+    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
     prompts/list:
     - "List semantically similar inventions about {text}"
     - "List embedding-driven hits that stay on-spec for {text}"
@@ -232,6 +235,7 @@ async def search_semantic(
 
 This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
 Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
+Set `semantic_style="original_dense"` if you need the dedicated dense-vector lane (shorter input, dense scoring) while `semantic_style="default"` keeps the regular BM25-like pipeline.
 
 ### `blend_frontier_codeaware`
 

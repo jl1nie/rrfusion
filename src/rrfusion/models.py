@@ -6,7 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Lane = Literal["fulltext", "semantic"]
+Lane = Literal["fulltext", "semantic", "original_dense"]
+SemanticStyle = Literal["default", "original_dense"]
 SnippetField = Literal[
     "title",
     "abst",
@@ -79,6 +80,7 @@ class SemanticParams(BaseModel):
     fields: list[SnippetField] = Field(
         default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
     )
+    semantic_style: SemanticStyle = "default"
 
 
 class SearchToolResponse(BaseModel):
@@ -109,7 +111,7 @@ class MMRConfig(BaseModel):
 class FusionParams(BaseModel):
     runs: list[FusionRun]
     weights: dict[Lane, float] = Field(
-        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0}
+        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0, "original_dense": 1.0}
     )
     rrf_k: int = 60
     beta_fuse: float = 1.0
@@ -231,13 +233,15 @@ class BlendRunInput(BaseModel):
 
 class BlendRequest(BaseModel):
     runs: list[BlendRunInput]
-    weights: dict[str, float] = Field(default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0})
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0, "original_dense": 1.0}
+    )
     rrf_k: int = 60
     beta_fuse: float = 1.0
     family_fold: bool = True
     target_profile: dict[str, dict[str, float]] = Field(default_factory=dict)
     top_m_per_lane: dict[str, int] = Field(
-        default_factory=lambda: {"fulltext": 10000, "semantic": 10000}
+        default_factory=lambda: {"fulltext": 10000, "semantic": 10000, "original_dense": 10000}
     )
     k_grid: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50, 80, 100])
     peek: PeekConfig | None = None

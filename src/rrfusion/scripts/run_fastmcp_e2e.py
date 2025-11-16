@@ -409,6 +409,31 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
     await redis_client.aclose()
 
 
+async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        payload = {
+            "text": "dense lane smoke test",
+            "top_k": 50,
+            "budget_bytes": 4096,
+            "semantic_style": "original_dense",
+            "filters": None,
+        }
+        response = await _call_tool(client, "search_semantic", payload, timeout=cfg.timeout)
+        if response.get("lane") != "original_dense":
+            raise AssertionError("semantic_style request did not route to original_dense lane")
+        if response.get("count_returned", 0) == 0:
+            raise AssertionError("original_dense lane returned no docs")
+        meta = await _get_run_meta(redis_client, response["run_id_lane"])
+        params = meta.get("params", {})
+        if params.get("semantic_style") != "original_dense":
+            raise AssertionError("stored run metadata missing semantic_style flag")
+
+    await redis_client.aclose()
+
+
 async def run(cfg: RunnerConfig) -> None:
     if cfg.scenario == "peek-large":
         await scenario_peek_large(cfg)
@@ -432,6 +457,8 @@ async def run(cfg: RunnerConfig) -> None:
         await scenario_snippets_missing_id(cfg)
     elif cfg.scenario == "mutate-missing-run":
         await scenario_mutate_missing_run(cfg)
+    elif cfg.scenario == "semantic-style-dense":
+        await scenario_semantic_style_dense(cfg)
     else:
         raise ValueError(f"Unknown scenario: {cfg.scenario}")
 
@@ -477,6 +504,7 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
             "snippets-missing-id",
             "mutate-chain",
             "mutate-missing-run",
+            "semantic-style-dense",
         ],
         default="peek-large",
         help="Scenario to execute",

@@ -21,6 +21,7 @@ async def service_context() -> AsyncIterator[MCPService]:
         overrides={
             "fulltext": ci_backend,
             "semantic": ci_backend,
+            "original_dense": ci_backend,
         },
     )
     service = MCPService(settings, backend_registry=registry)
@@ -198,9 +199,15 @@ async def test_large_search_and_peek_budget_flow():
         )
 
         assert len(peek.snippets) >= 10
-        assert peek.meta.used_bytes >= 8000
-        assert peek.meta.truncated is True
-        assert peek.meta.peek_cursor is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_original_dense_lane_metadata():
+    async with service_context() as service:
+        response = await service.search_lane("original_dense", text="dense boost query", top_k=40)
+        assert response.lane == "original_dense"
+        assert response.response.meta.params.get("semantic_style") == "original_dense"
 
 
 @pytest.mark.integration

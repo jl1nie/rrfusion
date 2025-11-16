@@ -42,6 +42,7 @@ from ..models import (
     ProvenanceResponse,
     SEARCH_FIELDS_DEFAULT,
     SemanticParams,
+    SemanticStyle,
     SearchItem,
     SearchToolResponse,
     SnippetField,
@@ -77,8 +78,18 @@ SNIPPET_DEFAULT_PER_FIELD = {
     field: FIELD_DEFAULT_CHARS.get(field, 120) for field in SNIPPET_FIELDS
 }
 
-DEFAULT_WEIGHTS = {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5}
-DEFAULT_TOP_M_PER_LANE = {"fulltext": 10000, "semantic": 10000}
+DEFAULT_WEIGHTS = {
+    "recall": 1.0,
+    "precision": 1.0,
+    "semantic": 1.0,
+    "original_dense": 1.0,
+    "code": 0.5,
+}
+DEFAULT_TOP_M_PER_LANE = {
+    "fulltext": 10000,
+    "semantic": 10000,
+    "original_dense": 10000,
+}
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 
 
@@ -100,16 +111,20 @@ SearchParams = FulltextParams | SemanticParams
 
 
 def _search_meta(lane: str, params: SearchParams) -> Meta:
+    meta_params: dict[str, Any] = {
+        "query": getattr(params, "query", None) or getattr(params, "text", None),
+        "filters": [cond.model_dump() for cond in params.filters],
+        "fields": getattr(params, "fields", None),
+        "budget_bytes": params.budget_bytes,
+        "include": params.include.model_dump(),
+    }
+    semantic_style = getattr(params, "semantic_style", None)
+    if semantic_style is not None:
+        meta_params["semantic_style"] = semantic_style
     return Meta(
         lane=lane,
         top_k=params.top_k,
-        params={
-            "query": getattr(params, "query", None) or getattr(params, "text", None),
-            "filters": [cond.model_dump() for cond in params.filters],
-            "fields": getattr(params, "fields", None),
-            "budget_bytes": params.budget_bytes,
-            "include": params.include.model_dump(),
-        },
+        params=meta_params,
         trace_id=params.trace_id,
     )
 
@@ -191,6 +206,7 @@ class MCPService:
         top_k: int = 800,
         budget_bytes: int = 4096,
         trace_id: str | None = None,
+        semantic_style: SemanticStyle = "default",
     ) -> SearchToolResponse:
         backend = self.backend_registry.get_backend(lane)
         if not backend:
@@ -198,6 +214,9 @@ class MCPService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"lane {lane} unsupported",
             )
+        if lane == "original_dense":
+            semantic_style = "original_dense"
+
         if params is None:
             requested_fields = fields or SEARCH_FIELDS_DEFAULT
             if lane == "fulltext":
@@ -231,6 +250,7 @@ class MCPService:
                     top_k=top_k,
                     budget_bytes=budget_bytes,
                     trace_id=trace_id,
+                    semantic_style=semantic_style,
                 )
         db_payload = await backend.search(params, lane=lane)
         # hydrate lane results into dictionaries for caching and snippet fetching
@@ -266,6 +286,8 @@ class MCPService:
             "budget_bytes": params.budget_bytes,
         }
 
+        meta = _search_meta(lane, params)
+        metadata["params"] = meta.params
         freq_summary = db_payload.code_freqs or _code_freq_summary(db_payload.items)
         await self.storage.store_lane_run(
             run_id=run_id,
@@ -279,7 +301,7 @@ class MCPService:
         response = DBSearchResponse(
             items=db_payload.items,
             code_freqs=freq_summary,
-            meta=_search_meta(lane, params),
+            meta=meta,
         )
         return SearchToolResponse(
             lane=lane,

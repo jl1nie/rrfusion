@@ -23,6 +23,7 @@ from rrfusion.models import (
     PeekSnippetsResponse,
     ProvenanceResponse,
     SearchToolResponse,
+    SemanticStyle,
     SnippetField,
 )
 
@@ -187,6 +188,7 @@ async def search_semantic(
     top_k: int = 800,
     budget_bytes: int = 4096,
     trace_id: str | None = None,
+    semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse:
     """
     signature: search_semantic(
@@ -196,6 +198,7 @@ async def search_semantic(
         top_k: int = 800,
         budget_bytes: int = 4096,
         trace_id: str | None = None,
+        semantic_style: Literal["default", "original_dense"] = "default",
     )
     prompts/list:
     - "List semantically similar inventions about {text}"
@@ -203,14 +206,16 @@ async def search_semantic(
     prompts/get:
     - "Get the semantic lane handle so I can blend with run {text}"
     """
+    lane = "semantic" if semantic_style == "default" else "original_dense"
     return await _require_service().search_lane(
-        "semantic",
+        lane,
         text=text,
         filters=filters,
         fields=fields,
         top_k=top_k,
         budget_bytes=budget_bytes,
         trace_id=trace_id,
+        semantic_style=semantic_style,
     )
 
 
