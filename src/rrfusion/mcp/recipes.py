@@ -4,262 +4,345 @@
 # - TOOL_RECIPES
 # """
 
-HANDBOOK = '''
-# RRFusion MCP Handbook (v1.2, multi-lane)
+HANDBOOK = r"""
+# RRFusion MCP Handbook (v1.3, multi-lane + code-aware)
 
-**Mission**: Maximize *effective* Fβ (default β=1) for prior-art retrieval using **multi-lane search** (keyword-driven fulltext runs + a semantic lane) and **code-aware fusion** under no-gold-label conditions.  
-**Transport**: HTTP / streamable-http at `/{base_path}` (default `/mcp`).  
-**Auth**: Bearer token if configured.
+**Goal**  
+Maximize *effective* Fβ (default β = 1, configurable) for prior-art style
+search under no-gold-label conditions, by combining:
+
+- LLM-driven query normalization & feature extraction
+- Multi-lane retrieval (fulltext BM25-style, TT-IDF variants, dense semantic)
+- Code-aware fusion using FI / FT / CPC / IPC frequency profiles
+- Rank-based fusion (RRF) + Fβ-oriented frontier tuning
+
+Transport: HTTP / `streamable-http` at `/{base_path}` (default `/mcp`).  
+Auth: Bearer token if configured.
 
 > Notes
-> - Lane raw scores are **incomparable**. Use **rank-based fusion (RRF)** as the primary method.  
-> - `beta_fuse` below controls **precision/recall trade-off in fusion**, not the Fβ metric itself.
+> - Lane raw scores are **incomparable** → always use **rank-based fusion (RRF)**.
+> - `beta_fuse` in fusion controls recall/precision bias **inside the fusion
+>   step**, not the external evaluation metric Fβ.
+> - The MCP interface exposes only *flat* filters (`and|or|not`). Precision /
+>   recall behaviour is controlled via **query structure** (OR/phrase/NEAR,
+>   field boosts, etc.), not via explicit `must/should` parameters.
 
 ---
 
-## 1. Pipeline (Agent-facing)
-1) Normalize & synonymize query (LLM; acronyms, phrases, negatives)
-2) Run lanes in parallel (**multi-lane**)
-   - `search_fulltext.wide` → broad keyword recall (builds initial pool)
-   - `search_fulltext.focused` → constrained keywords / phrase / NEAR to sharpen precision
-   - `search_fulltext.hybrid` → mixed logic (OR expansion + MUST/SHOULD) for balance
-   - `search_semantic` → embedding coverage with shared filters to curb drift
-3) Fuse via `blend_frontier_codeaware` (RRF + code prior)
-4) Budget check with `peek_snippets` (head/match/mix)
-5) Shortlist then `get_snippets`
-6) If proxy-metrics unsatisfactory → `mutate_run` (weights / rrf_k / beta_fuse / filters)
-7) Persist with `get_provenance`
+## 1. Classification codes (FI / FT / CPC / IPC)
+
+### 1.1 Allowed combinations
+
+To keep the technical field definition clean, **do not mix code systems**.
+Use exactly one of the following patterns per query / run:
+
+1. **JP (domestic)**
+   - Use **FI as the primary classification**.
+   - Optionally combine with **FT** when a functional/technical
+     (function-oriented) cut is needed.
+   - Use: **FI主体 + FT併用**（FI main, FT auxiliary）.
+
+2. **US / WO**
+   - Use **CPC only**, *or*
+   - Use **IPC only**.
+   - Do **not** mix CPC and IPC in the same run.
+
+3. **Prohibited combinations**
+   - FI/FT × CPC/IPC の混在は禁止:
+     - FI + CPC, FI + IPC, FT + CPC, FT + IPC などは使用しない。
+
+### 1.2 How codes are used
+
+- Codes are primarily used to:
+  - define the **technical field** of the query; and
+  - support **code-aware fusion** via `target_profile` in
+    `blend_frontier_codeaware`.
+- Code-based filters (`filters`) must remain **flat**:
+  - `lop: "and|or|not"`, `field: "fi|ft|cpc|ipc"`, `value: "..."`.
+- You may:
+  - define a *broad* code scope for wide/fulltext/semantic lanes; and
+  - define a *tighter* scope for TT-IDF style narrow lanes.
+- Code constraints are **available** to all lanes (fulltext, TT-IDF,
+  semantic), but are **not mandatory** on every query. The agent may
+  choose per lane whether code-constraining helps or hurts recall.
 
 ---
 
-## 2. Lane Tools
+## 2. Lane architecture (v1.3)
 
-### `search_fulltext`
-- **Args**: 
-  - `query: string`
-  - `filters?: list[Cond]` (each `Cond` owns `lop`=`and|or|not`) – server honors the flat clause list; `must/should` groups are not enforced
-  - `fields?: list[SnippetField]` (same options as `get_publication.fields`, default `["abst","title","claim"]`; add `"desc"` only when you need description text)
-  - `top_k: int = 800`
-  - `budget_bytes: int = 4096`
-  - `trace_id?: string`
-- **Cond**: `{ lop: "and|or|not", field: "ipc|fi|cpc|pubyear|assignee|country", op: "in|range|eq|neq", value: any }`
-- **Tips**: Use field boosts server-side (claim > title > abst > desc). Keep `top_k` generous (200–1000), and mirror filters in semantic.
+### 2.1 Core lanes (fixed)
 
-### `search_semantic`
-- **Args**: (replace `query` with `text`), other args same as `search_fulltext`
-- **Tips**: Keep `text` concise (≤256 chars). Apply the **same `filters`** when drift risk exists.
+v1.3 assumes a **semi-fixed multi-lane** design. The following lanes
+are considered **core** and should exist for almost all queries:
 
----
+1. `fulltext_wide`
+   - Fulltext BM25-style retrieval.
+   - Wide OR over feature terms + synonym expansions.
+   - Minimal structural constraints.
+   - May or may not use code constraints, depending on the task.
 
-## 3. Fusion
+2. `semantic`
+   - Dense semantic retrieval via `search_semantic`.
+   - Short, focused text (< 1024 chars for semantic, <256 chars for original_dense) summarizing the query intent.
+   - May optionally be code-constrained when semantic drift risk is high.
 
-### `blend_frontier_codeaware`
-- **Args**:
-  - `runs: [{ lane: "fulltext|semantic|original_dense", run_id: string }]` (fulltext lane can originate from wide/focused/hybrid prompts)
-  - `weights?: { fulltext?: float, semantic?: float, original_dense?: float }` (lane **rank** weights)
-  - `rrf_k: int = 60`
-  - `beta_fuse: float = 1.0`  ← higher → recall, lower → precision
-  - `family_fold: boolean = true`
-  - `target_profile?: { ipc|fi|cpc|ft: { code: weight } }`
-  - `top_m_per_lane?: dict[str, int]`
-  - `k_grid?: [int]`   // optional sweep
-  - `peek?: { count?: int, fields?: list[str], per_field_chars?: dict[str, int], budget_bytes?: int }`
-- **Code prior**:
-  - Let `idf_c = log(N / (1 + freq(c)))`
-  - Let query-side code weights be `w_q(c)` from PRF/LLM.
-  - Doc-side contribution: `s_code(d) = Σ_{c∈C_d} idf_c * w_q(c)`
-  - Final rank score ~ `RRF(rank)` adjusted by lane weights, then **re-ranked** by `s_code(d)` with a small mixing λ.
-  - When encoding `target_profile` for Japanese families, prefer FI/FT coverage (File Index / Fターム) first and treat IPC/CPC as supporting signals; fall back to IPC/CPC only if FI/FT is absent or for non-JP jurisdictions.
+3. `ttidf_recall`
+   - Fulltext TT-IDF style lane tuned for **high recall** within the right
+     technical field.
+   - Uses feature terms + synonyms with relatively generous OR structure.
+   - Typically **code-constrained** using FI/FT/CPC/IPC.
 
----
+4. `ttidf_precision`
+   - Fulltext TT-IDF lane tuned for **higher precision**:
+     - multi-word terms kept as units where possible,
+     - more phrase / NEAR usage,
+     - stronger claim-field emphasis.
+   - Typically uses the same code scope as `ttidf_recall`.
 
-## 4. Snippet Budgeting
+These four lanes form the **standard backbone** for Fβ-oriented fusion.
 
-### `peek_snippets`
-- **Args**:
-  - `run_id`, `offset=0`, `limit=12`
-  - `fields?: ["title","abst","claim","desc"]`
-  - `per_field_chars?: { field: int }`
-  - `claim_count=3`
-  - `strategy: "head"|"match"|"mix"`
-  - `budget_bytes=12288`
-- **Patterns**:
-  - `head` → titles/absts
-  - `match` → query highlights focus
-  - `mix` → balanced
+> `original_dense`  
+> A legacy/original-dense lane may exist in the implementation, but is
+> **disabled in v1.3**. Keep the code for forward-compatibility, but do
+> not use it in recipes or in `blend_frontier_codeaware` inputs.
 
-### `get_snippets`
-- **Args**: `ids[]`, `fields?`, `per_field_chars?`
-- **Note**: Independent of fusion cursor; random access OK.
+### 2.2 Optional specialized lanes
 
----
+In addition to the core lanes, the agent **may propose** extra specialized
+lanes when justified by the query. These still reuse the existing MCP tools
+(`search_fulltext`, `search_semantic`) and do not require API changes. Examples:
 
-## 5. Iterative Tuning
+- `claim_only_fulltext`
+  - Fulltext search restricted to claim fields.
+  - Useful when structural/claim language is crucial.
 
-### `mutate_run`
-- **Args**: 
-  - `run_id`
-  - `delta`: `{ weights?|rrf_k?|beta_fuse?|lambda_code?|gate?|mmr?|limit? }`
-- **Loop**: Adjust → re-peek → compare proxy P/R/Fβ at fixed K.
+- `title_abstract_boosted`
+  - Fulltext lane with strong boosts on title/abstract.
+  - Good for quick “landscape / overview” style tasks.
 
-### `get_provenance`
-- **Args**: `run_id`
-- **Returns**: stored metadata for fusion runs (inputs, fusion recipe, metrics, lineage), including IPC/CPC/FI/FT frequency snapshots for sampling.
+- `near_phrase_heavy`
+  - Fulltext lane heavy on phrase/NEAR operator usage.
+  - Useful when exact local configurations matter.
+
+Guidelines:
+
+- Keep the number of lanes **small and meaningful** (typically 4–6).
+- Adding many similar lanes tends to **hurt** fusion quality and complexity.
+- Fusion is rank-based; lanes should carry **diverse signals**, not nearly
+  identical ones.
 
 ---
 
-## 6. Metrics & Logging (No-gold regime)
+## 3. High-level pipeline (agent-facing, v1.3)
 
-- **Emit**:  
-  - `lane.top_k`, `fuse.rrf_k`, `beta_fuse`, `hit@k`, `p@k`, `r@k`, `f_beta@k`, `diversity@k`
-- **Proxy definitions**:
-  - `p@k` ≔ cross-lane agreement ratio at K (RRF ∩ lane tops)
-  - `r@k` ≔ PRF 再検索での再出現率 at K
-  - `f_beta@k` ≔ above two combined as Fβ (β from Mission)
-  - `diversity@k` ≔ 1 − avg pairwise similarity (MMR 由来)
+This section describes the intended *logical* pipeline. It does not change
+the MCP function signatures.
 
----
+### Step 1: Normalize, extract features, expand synonyms
 
-## 7. Security
-- Never send PII/secret in queries.  
-- Server injects downstream API keys.  
-- Client supplies **Bearer** token only.  
-- Redact snippets beyond `budget_bytes`.
+Given a natural-language search intent (problem/solution, key claim, etc.),
+the agent should:
 
----
+1. Normalize text (remove boilerplate, clarify what is in/out of scope).
+2. Extract **technical feature terms**:
+   - Identify claim-level functional blocks (feature A/B/C...).
+   - Keep important multi-word terms as units (e.g. “light-emitting element”).
+3. Build synonym/paraphrase clusters per feature:
+   - apparatus/device/mechanism, supply/feed/provide, etc.
+4. Construct a **query profile** (agent-side object) that includes:
+   - `feature_terms`
+   - `synonym_clusters`
+   - `negative_hints`
+   - optional hints for fields (claims vs desc).
 
-*Build: 2025-11-12T22:24:22*
+This query profile is reused across all lanes.
 
-'''
+### Step 2: Wide multi-lane recall (initial pool)
 
-TOOL_RECIPES = '''
-# Tool Recipes & Few-shot (v1.2, multi-lane)
+Goal: obtain a **wide but meaningful** candidate pool.
 
-## search_fulltext — examples
-**Wide (recall-oriented)**
-```json
-{
-  "query": "uplink AND (HARQ OR \"early feedback\")",
-  "filters": [
-    {"lop":"and","field":"ipc","op":"in","value":["H04W72/04","H04L1/18"]}
-  ],
-  "fields": ["abst","title","claim"],
-  "top_k": 800
-}
-```
+- Run `fulltext_wide` lane:
+  - `search_fulltext` with a wide BM25-style recipe.
+  - Use generous OR over feature terms and synonyms.
+  - Use only minimal flat `filters` (years, language, doc_type, etc.).
+- Run `semantic` lane in parallel:
+  - `search_semantic` with a concise intent summary.
+  - Optionally apply the same flat filters if drift is a concern.
+- (Optional) run additional wide variants if needed.
 
-**Focused (precision-oriented)**
-```json
-{
-  "query": "\"uplink grant-free\"~3 NEAR/10 (early feedback OR URLLC)",
-  "filters": [
-    {"lop":"and","field":"cpc","op":"in","value":["H04W72/12"]}
-  ],
-  "fields": ["abst","title","claim"],
-  "top_k": 400
-}
-```
+The result is one or more `run_id` values representing the **wide pool**.
 
-**Hybrid (balanced)**
-```json
-{
-  "query": "uplink AND (\"grant-free\" OR \"non-scheduled\") AND (HARQ OR feedback)",
-  "filters": [],
-  "fields": ["abst","title","claim"],
-  "top_k": 600
-}
-```
+### Step 3: Learn a code frequency profile (FI / FT / CPC / IPC)
 
-**Bad**
-```json
-{"query":"HARQ","top_k":10}
-```
+Goal: determine the **dominant technical field(s)**.
 
----
+For each wide `run_id`:
 
-## search_semantic — examples
-**Default**
-```json
-{
-  "text": "contention-based uplink with early HARQ feedback for URLLC",
-  "filters": [{"lop":"and","field":"cpc","op":"in","value":["H04W72/12"]}],
-  "fields": ["abst","title","claim"],
-  "top_k": 500
-}
-```
+1. Call `get_provenance` to obtain:
+   - code frequency snapshots for `fi`, `ft`, `cpc`, `ipc` (if available),
+   - family information and other diagnostics.
+2. From these, build a **code frequency profile**:
+   - Top codes (high frequency, high specificity).
+   - Down-weight noisy / off-topic codes.
+   - Optionally normalize with global frequencies (IDF-like).
+3. Derive a `target_profile` candidate:
+   - `{ code: weight }` per taxonomy (FI/FT or CPC or IPC, not mixed).
+4. Optionally derive **code-based filters** for subsequent runs:
+   - Flat filters such as `field="fi"` and `value="F-term code..."`.
+   - Apply them to TT-IDF lanes and, if helpful, to fulltext/semantic lanes.
 
----
+### Step 4: Code-aware TT-IDF lanes (recall + precision)
 
-## blend_frontier_codeaware — examples
-**Equal-weight fuse**
-```json
-{
-  "runs": [
-    {"lane":"fulltext","run_id":"FT_WIDE"},
-    {"lane":"fulltext","run_id":"FT_FOC"},
-    {"lane":"fulltext","run_id":"FT_HYB"},
-    {"lane":"semantic","run_id":"SEM"}
-  ],
-  "rrf_k": 60,
-  "beta_fuse": 1.0,
-  "family_fold": true
-}
-```
+Goal: run TT-IDF style lanes **within the right technical field**.
 
-**Favor codes**
-```json
-{
-  "runs": [
-    {"lane":"fulltext","run_id":"FT_WIDE"},
-    {"lane":"fulltext","run_id":"FT_FOC"},
-    {"lane":"fulltext","run_id":"FT_HYB"},
-    {"lane":"semantic","run_id":"SEM"}
-  ],
-  "target_profile": {"ipc":{"H04W72/04":1.2,"H04L1/18":1.0}},
-  "rrf_k": 50,
-  "beta_fuse": 0.9
-}
-```
+Using the query profile (Step 1) and code profile (Step 3):
 
----
+- `ttidf_recall`:
+  - Fulltext TT-IDF lane for **high recall**.
+  - Wide OR over feature terms/synonyms.
+  - Typically code-constrained using FI/FT (JP) or CPC/IPC (US/WO).
+- `ttidf_precision`:
+  - Fulltext TT-IDF lane for **higher precision**:
+    - more phrase/NEAR usage,
+    - claim-biased field behaviour,
+    - stricter combinations of terms.
 
-## peek_snippets — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "offset":0,
-  "limit":12,
-  "strategy":"mix",
-  "budget_bytes": 12288
-}
-```
+Additional specialized lanes (e.g. claim-only) may be added when needed,
+but the default is at least the two TT-IDF lanes above.
 
----
+### Step 5: Code-aware fusion (RRF + Fβ-oriented tuning)
 
-## get_snippets — examples
-```json
-{
-  "ids":["US2023XXXXXXA1","EPXXXXXXXB1"],
-  "fields":["title","abst","claim"],
-  "per_field_chars":{"claim":1200}
-}
-```
+Goal: fuse all relevant lanes into a single ranking aligned with Fβ.
 
----
+Use `blend_frontier_codeaware` with:
 
-## mutate_run — examples
-```json
-{
-  "run_id":"FUSION_123",
-  "delta":{"weights":{"fulltext":1.2,"semantic":1.1},"rrf_k":50,"beta_fuse":0.9}
-}
-```
+- `runs`: a list of `{ lane, run_id }` from:
+  - `fulltext_wide`,
+  - `semantic`,
+  - `ttidf_recall`,
+  - `ttidf_precision`,
+  - and any optional lanes used for the query.
+- `weights`: lane-level weights (to be tuned via `mutate_run`).
+- `rrf_k`: RRF parameter (tail behaviour).
+- `beta_fuse`: fusion-level bias toward recall vs precision.
+- `target_profile`: code frequency–derived `{ code: weight }` map.
+- `family_fold`: how to fold patent families in the result.
 
----
+The result is a fused `run_id` acting as the **main candidate list**.
 
-## get_provenance — example
-```json
-{"run_id":"FUSION_123"}
-```
+### Step 6: Snippet budgeting & review
 
-'''
+- Use `peek_snippets` on the fused `run_id` to:
+  - preview top items with a small `budget_bytes`,
+  - choose a strategy (`head|match|mix`),
+  - adjust per-field budgets and claim counts.
+- Use `get_snippets` for deeper analysis on selected `doc_ids` with
+  a larger budget and feed those snippets to downstream LLM agents.
+
+### Step 7: Frontier tuning & provenance
+
+- Use `mutate_run` to explore variations around a good fused run:
+  - adjust lane `weights`, `rrf_k`, `beta_fuse`,
+  - add/remove lanes,
+  - observe impact on recall/precision proxies.
+- Use `get_provenance` to capture:
+  - code distributions,
+  - lane contributions,
+  - configuration snapshots.
+- Promote successful settings to **named recipes** for future reuse.
+
+"""
+
+RECIPES= r"""
+# RRFusion MCP recipes (v1.3)
+
+This section gives high-level guidance on how to instantiate the pipeline
+described in the v1.3 handbook using the existing MCP tools, without
+changing their signatures.
+
+## Core tools
+
+- `search_fulltext`  
+  Fulltext / TT-IDF / BM25-style lanes. Different lanes are implemented
+  via different *recipes* (query structure, field boosts, filters).
+
+- `search_semantic`  
+  Dense semantic lane (`semantic`).
+
+- `blend_frontier_codeaware`  
+  Rank-based fusion with code-aware priors and Fβ-oriented tuning.
+
+- `peek_snippets`, `get_snippets`  
+  Snippet budgeting for human/LLM review.
+
+- `mutate_run`  
+  Explore variations in lane weights, `rrf_k`, `beta_fuse`, etc.
+
+- `get_provenance`  
+  Inspect runs, including FI/FT/CPC/IPC frequency snapshots.
+
+## Example lane recipes (conceptual)
+
+These are *conceptual*; adapt to your own query-builder implementation.
+
+### Lane: fulltext_wide
+
+- Base: `search_fulltext`
+- Fields: title, abstract, claims, description.
+- Query:
+  - OR over feature terms and synonyms,
+  - may include simple phrase operators but no heavy NEAR.
+- Filters:
+  - years, doc_type, language,
+  - optional broad code scope (`fi` or `cpc`/`ipc` depending on region).
+- Use: Step 2 (wide pool) and as one input to fusion.
+
+### Lane: semantic
+
+- Base: `search_semantic`
+- Input text: 1–3 sentences summarising the core technical idea.
+- Filters:
+  - same coarse constraints as `fulltext_wide` if needed.
+- Use: Step 2 (wide pool) and as one input to fusion.
+
+### Lane: ttidf_recall
+
+- Base: `search_fulltext`
+- Query:
+  - TT-IDF style scoring,
+  - wide OR over feature terms/synonyms,
+  - multi-word terms recognized but not overly constrained.
+- Filters:
+  - **code-constrained** by FI (JP) or CPC/IPC (US/WO).
+- Use: Step 4, recall-oriented lane.
+
+### Lane: ttidf_precision
+
+- Base: `search_fulltext`
+- Query:
+  - TT-IDF style scoring,
+  - more phrase/NEAR usage,
+  - stronger claim-field emphasis.
+- Filters:
+  - same code scope as `ttidf_recall`.
+- Use: Step 4, precision-oriented lane.
+
+### Optional lanes (examples)
+
+- `claim_only_fulltext`: same as `ttidf_precision` but claims-only fields.
+- `title_abstract_boosted`: strong boosts on title/abstract for overview.
+- `near_phrase_heavy`: more aggressive use of phrase/NEAR operators.
+
+## Fusion recipe (blend_frontier_codeaware)
+
+- Inputs:
+  - `runs`: list of `{ lane, run_id }` including all lanes used.
+  - `weights`: initial lane weights (e.g. `fulltext_wide=1.0`,
+    `semantic=1.0`, `ttidf_recall=1.0`, `ttidf_precision=1.2`).
+  - `rrf_k`: e.g. 60–120 depending on desired tail contribution.
+  - `beta_fuse`: >1 for recall bias, <1 for precision bias.
+  - `target_profile`: FI/FT/CPC/IPC prior derived from wide pool.
+  - `family_fold`: configuration for family folding.
+- Tuning:
+  - Use `mutate_run` to explore variations and lock in good defaults.
+"""
