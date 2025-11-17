@@ -285,6 +285,9 @@ async def blend_frontier_codeaware(
 
 Fusion consumes multiple lane handles, applies RRF plus optional code-aware boosts, and returns the final ranking with a `frontier` summary. Reuse the `run_id` it emits for snippet peeks, provenance, or further mutation.
 
+> **Note:** The `family_fold` flag is currently recorded in the recipe but
+> no active code applies family folding, so set it without expecting grouping to happen.
+
 ### `peek_snippets`
 
 ```python

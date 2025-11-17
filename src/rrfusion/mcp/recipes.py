@@ -439,6 +439,8 @@ with Fβ preferences, leveraging classification codes as priors.
   - `family_fold`:
     - Parameters controlling how patent families are folded or grouped in
       the final ranking.
+    > **Note:** Family folding is currently disabled in the code; the flag is
+    > stored for bookkeeping but no grouping is performed during fusion.
 
 The output is a fused `run_id` that serves as the **main candidate list**
 for human review and downstream LLM agents.
@@ -671,7 +673,9 @@ These are *conceptual*; adapt to your own query-builder implementation.
   - `rrf_k`: e.g. 60–120 depending on desired tail contribution.
   - `beta_fuse`: >1 for recall bias, <1 for precision bias.
   - `target_profile`: FI/FT/CPC/IPC prior derived from wide pool.
-  - `family_fold`: configuration for family folding.
+- `family_fold`: configuration for family folding.
+  > **Note:** Setting `family_fold` currently only records the preference; the
+  > fusion implementation does not collapse families yet.
 - Tuning:
   - Use `mutate_run` to explore variations and lock in good defaults.
 """
