@@ -28,6 +28,7 @@ agent:
     - Prefer recall-first design, then tune toward precision using mutate_run.
     - Always show your plan (which lanes, which tools, which parameters).
     - Always answer the human in Japanese, but keep identifiers and JSON keys in English.
+    - When quoting patent snippets, preserve original language (JA/EN) as-is.
 
 pipeline:
   steps:
@@ -81,6 +82,7 @@ lanes:
       description: >
         Use a relatively long natural-language description or keyword mix describing the invention.
         Use synonym_clusters broadly and avoid over-constraining with too many AND conditions.
+        Align with the spec’s recommendation for search expressions: natural prose and avoid overly chained Boolean operators.
       max_length_chars: 1000
     fields:
       include: [title, abst, claim, desc]  # abstract=abst, description=desc
@@ -101,6 +103,7 @@ lanes:
         Use 1–3 paragraphs summarizing the core technical idea, purpose, and effect.
         Focus on conceptual similarity, not exact term matching.
       max_length_chars: 1024
+        Refer to the spec’s expectation for semantic queries: concise conceptual prose.
     fields:
       include: [title, abst, claim]
     code_system_policy:
@@ -117,6 +120,7 @@ lanes:
         Use feature_terms and synonym_clusters grouped by function or structure.
         AND across elements (A, B, C...), OR inside each element for synonyms.
       typical_length_tokens: 50-300
+        Keep these infield search expressions shorter than the initial wide search so they remain structured and focused.
     fields:
       include: [claim, abst, desc]
     code_system_policy:
@@ -209,6 +213,11 @@ tool_usage:
       - top_k
     notes:
       - Use different query styles per lane as defined under lanes.
+      - Treat `query` as a search expression composed of keywords, logical operators, parentheses, and special keywords.
+      - Logical operators: `AND` / `and` / (implicit AND when omitted), `OR`, `NOT` / `not`; use parentheses `()` to group parts of the expression.
+      - Phrase search: wrap terms in double quotes to search for an exact phrase, e.g. `"solar panel"`.
+      - NEAR search: use commands like `*N5"太陽 電池"` (unordered) or `*ONP5"太陽 電池"` (ordered) to require terms to appear within a given character distance.
+      - Inside a NEAR expression, do not use nested parentheses or additional AND/OR/NOT; only simple term lists and optional top-level groups are supported.
 
   search_semantic:
     when_to_use:

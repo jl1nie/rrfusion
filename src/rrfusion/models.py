@@ -32,7 +32,7 @@ class Meta(BaseModel):
 
 class Cond(BaseModel):
     lop: Literal["and", "or", "not"]
-    field: Literal["ipc", "fi", "cpc", "pubyear", "assignee", "country"]
+    field: Literal["ipc", "fi", "cpc", "pubyear", "assignee", "country", "ft"]
     op: Literal["in", "range", "eq", "neq"]
     value: Any
 
