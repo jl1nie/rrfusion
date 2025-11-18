@@ -12,7 +12,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from rrfusion.config import get_settings
-from rrfusion.mcp.recipes import HANDBOOK, TOOL_RECIPES
 from rrfusion.mcp.service import MCPService
 from rrfusion.models import (
     BlendResponse,
@@ -146,18 +145,6 @@ def _record_tool_timing(response: Any, took_ms: int) -> None:
 # Prompts
 # ============================
 
-"""Handbook/recipe strings now live in rrfusion.mcp.recipes."""
-
-@mcp.prompt(name="RRFusion MCP Handbook")
-def _prompt_handbook() -> str:
-    return HANDBOOK.format(base_path="mcp")
-
-
-@mcp.prompt(name="Tool Recipes")
-def _prompt_recipes() -> str:
-    return TOOL_RECIPES
-
-
 # ============================
 # Tools
 # ============================
@@ -173,19 +160,43 @@ async def search_fulltext(
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(
-        query: str,
-        filters: list[Cond] | None = None,
-        fields: list[SnippetField] | None = None,
-        top_k: int = 800,
-        budget_bytes: int = 4096,
-        trace_id: str | None = None,
-    )
-    prompts/list:
-    - "List high-recall patent families mentioning {query} with IPC filters {filters}"
-    - "List prior art using only keyword evidence for {query}"
-    prompts/get:
-    - "Get a lane run handle I can feed into fusion for {query}"
+    summary: Run lexical full-text search over patent documents using TT-IDF/BM25-style scoring.
+    when_to_use:
+      - Use in the wide_search step for the fulltext lane.
+      - Use when you need high-recall keyword-based candidates before fusion.
+    arguments:
+      query:
+        type: string
+        required: true
+        description: Search expression describing the technical idea in the corpus language.
+      filters:
+        type: list[Cond]
+        required: false
+        description: Optional structured filters (e.g., years, jurisdictions, classification codes).
+      fields:
+        type: list[SnippetField]
+        required: false
+        description: Which text sections to index/return; defaults to ["abst","title","claim"].
+      top_k:
+        type: int
+        required: false
+        description: Maximum number of hits to retrieve for this lane (typically up to 800).
+      budget_bytes:
+        type: int
+        required: false
+        description: Byte budget for snippet materialization in this lane run.
+      trace_id:
+        type: string
+        required: false
+        description: Optional identifier to correlate this lane run in logs/telemetry.
+    constraints:
+      - Query must be non-empty and written in the primary language of the target corpus.
+      - Keep top_k within reasonable limits to avoid unnecessary latency.
+    returns:
+      run_id_lane:
+        description: Handle for this fulltext lane run, to be used in fusion, peek_snippets, and provenance.
+      notes:
+        - Response also includes lane-level code frequencies and timing metadata in response.meta.took_ms.
     """
     start = perf_counter()
     response = await _require_service().search_lane(
@@ -212,20 +223,47 @@ async def search_semantic(
     semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(
-        text: str,
-        filters: list[Cond] | None = None,
-        fields: list[SnippetField] | None = None,
-        top_k: int = 800,
-        budget_bytes: int = 4096,
-        trace_id: str | None = None,
-        semantic_style: Literal["default", "original_dense"] = "default",
-    )
-    prompts/list:
-    - "List semantically similar inventions about {text}"
-    - "List embedding-driven hits that stay on-spec for {text}"
-    prompts/get:
-    - "Get the semantic lane handle so I can blend with run {text}"
+    summary: Run semantic-style search based on a natural language description.
+    when_to_use:
+      - Use in the wide_search step for the semantic lane.
+      - Use when you need concept-level similarity beyond exact keyword matches.
+    arguments:
+      text:
+        type: string
+        required: true
+        description: Natural language description of the technical idea (1–3 paragraphs).
+      filters:
+        type: list[Cond]
+        required: false
+        description: Restrict by years, jurisdictions, languages, or other metadata fields.
+      fields:
+        type: list[SnippetField]
+        required: false
+        description: Which text sections to return in lane snippets; defaults to ["abst","title","claim"].
+      top_k:
+        type: int
+        required: false
+        description: Number of top results to retrieve (typically up to 800).
+      budget_bytes:
+        type: int
+        required: false
+        description: Byte budget for snippet materialization in this lane run.
+      trace_id:
+        type: string
+        required: false
+        description: Optional identifier to correlate this lane run in logs/telemetry.
+      semantic_style:
+        type: '"default" | "original_dense"'
+        required: false
+        description: Internal implementation selector; "default" is the standard setting.
+    constraints:
+      - Text must be written in the primary language of the target corpus.
+      - semantic_style must be "default" for this deployment; "original_dense" is disabled in v1.3.
+    returns:
+      run_id_lane:
+        description: ID of this semantic search run, to be used in fusion, peek_snippets, and provenance.
+      notes:
+        - Results include doc_id, score, and code information for downstream fusion and analysis.
     """
     lane = "semantic" if semantic_style == "default" else "original_dense"
     start = perf_counter()
@@ -249,29 +287,57 @@ async def blend_frontier_codeaware(
     weights: dict[str, float] | None = None,
     rrf_k: int = 60,
     beta_fuse: float = 1.0,
-    family_fold: bool = True,
     target_profile: dict[str, dict[str, float]] | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,
     peek: PeekConfig | None = None,
 ) -> BlendResponse:
     """
-    signature: blend_frontier_codeaware(
-        runs: list[BlendRunInput],
-        weights: dict[str, float] | None = None,
-        rrf_k: int = 60,
-        beta_fuse: float = 1.0,
-        family_fold: bool = True,
-        target_profile: dict[str, dict[str, float]] | None = None,
-        top_m_per_lane: dict[str, int] | None = None,
-        k_grid: list[int] | None = None,
-        peek: PeekConfig | None = None,
-    )
-    prompts/list:
-    - "List the best fusion frontier balancing recall and precision for {runs}"
-    - "List fused rankings that favor IPC {target_profile}"
-    prompts/get:
-    - "Get a fusion run_id with frontier stats so I can peek snippets for {runs}"
+    summary: Fuse multiple lane runs with RRF and optional code-aware boosts, returning a frontier summary.
+    when_to_use:
+      - Use after obtaining lane run handles from search_fulltext and/or search_semantic.
+      - Use when you need a single fused ranking plus precision/recall-style frontier metrics.
+    arguments:
+      runs:
+        type: list[BlendRunInput]
+        required: true
+        description: Lane/run_id pairs referencing existing lane search runs.
+      weights:
+        type: dict[str, float]
+        required: false
+        description: Lane weight map keyed by physical lanes and code (e.g., {"fulltext":1.0,"semantic":0.8,"code":0.5}).
+      rrf_k:
+        type: int
+        required: false
+        description: RRF tail parameter controlling contribution from deeper ranks (default 60).
+      beta_fuse:
+        type: float
+        required: false
+        description: F-beta-like bias for frontier computation (>1 for recall, <1 for precision).
+      target_profile:
+        type: dict[str, dict[str, float]]
+        required: false
+        description: Code prior by taxonomy (e.g., {"ipc":{"H04L":0.7}, "fi":{"H04L1/00":1.0}}) for code-aware boosts.
+      top_m_per_lane:
+        type: dict[str, int]
+        required: false
+        description: Maximum docs to read per lane before fusion.
+      k_grid:
+        type: list[int]
+        required: false
+        description: K values at which to compute the frontier summary (P_star, R_star, F_beta_star).
+      peek:
+        type: PeekConfig
+        required: false
+        description: Optional inline peek configuration to sample a few top fused snippets.
+    constraints:
+      - Each run in runs must reference an existing lane run_id with compatible filters.
+      - At least one lane run is required; otherwise fusion cannot proceed.
+    returns:
+      run_id:
+        description: Fusion run identifier; use it with peek_snippets, mutate_run, and get_provenance.
+      notes:
+        - Response includes pairs_top (ranking), frontier stats, code frequency summaries, and contribution breakdowns.
     """
     start = perf_counter()
     response = await _require_service().blend(
@@ -279,7 +345,6 @@ async def blend_frontier_codeaware(
         weights=weights,
         rrf_k=rrf_k,
         beta_fuse=beta_fuse,
-        family_fold=family_fold,
         target_profile=target_profile,
         top_m_per_lane=top_m_per_lane,
         k_grid=k_grid,
@@ -297,25 +362,50 @@ async def peek_snippets(
     fields: list[str] | None = None,
     per_field_chars: dict[str, int] | None = None,
     claim_count: int = 3,
-    strategy: Literal["head", "match", "mix"] = "head",
     budget_bytes: int = 12_288,
 ) -> PeekSnippetsResponse:
     """
-    signature: peek_snippets(
-        run_id: str,
-        offset: int = 0,
-        limit: int = 12,
-        fields: list[str] | None = None,
-        per_field_chars: dict[str, int] | None = None,
-        claim_count: int = 3,
-        strategy: Literal["head","match","mix"] = "head",
-        budget_bytes: int = 12288,
-    )
-    prompts/list:
-    - "List snippet previews for the top {limit} docs in fusion run {run_id}"
-    - "List concise absts for positions {offset}-{offset + limit}"
-    prompts/get:
-    - "Get the next peek_cursor so I can continue streaming run {run_id}"
+    summary: Return budgeted snippet previews for a lane or fusion run.
+    when_to_use:
+      - Use after fusion (or lane search) when you need to inspect a slice of the ranking.
+      - Use when you must respect a strict byte budget for snippet previews.
+    arguments:
+      run_id:
+        type: string
+        required: true
+        description: Lane or fusion run identifier whose ranking you want to peek.
+      offset:
+        type: int
+        required: false
+        description: Zero-based starting position in the ranking.
+      limit:
+        type: int
+        required: false
+        description: Maximum number of documents to consider from offset (capped by peek_max_docs).
+      fields:
+        type: list[string]
+        required: false
+        description: Fields to include in snippets; defaults to ["title","abst","claim"] when omitted.
+      per_field_chars:
+        type: dict[string,int]
+        required: false
+        description: Per-field character limits before byte budgeting is applied.
+      claim_count:
+        type: int
+        required: false
+        description: Reserved for future strategies based on claim subsets (currently advisory).
+      budget_bytes:
+        type: int
+        required: false
+        description: Global JSON byte budget for all returned snippets combined.
+    constraints:
+      - Effective limit is min(limit, PEEK_MAX_DOCS); large windows may be truncated by budget_bytes.
+      - If no items fit within the budget, a single minimal fallback snippet may be returned.
+    returns:
+      snippets:
+        description: List of snippet objects with id and per-field text, plus meta including peek_cursor and used_bytes.
+      notes:
+        - Use meta.peek_cursor to request the next slice; stop when it becomes null.
     """
     start = perf_counter()
     response = await _require_service().peek_snippets(
@@ -325,7 +415,6 @@ async def peek_snippets(
         fields=fields,
         per_field_chars=per_field_chars,
         claim_count=claim_count,
-        strategy=strategy,
         budget_bytes=budget_bytes,
     )
     _record_tool_timing(response, _elapsed_ms(start))
@@ -339,12 +428,30 @@ async def get_snippets(
     per_field_chars: dict[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
-    signature: get_snippets(ids: list[str], fields: list[str] | None = None, per_field_chars: dict[str, int] | None = None)
-    prompts/list:
-    - "List detailed snippets for the decision-ready doc IDs {ids}"
-    - "List claims plus absts for specific documents after shortlisting"
-    prompts/get:
-    - "Get the text payloads for ids {ids} without touching the fusion cursor"
+    summary: Fetch detailed snippets for a selected set of document IDs.
+    when_to_use:
+      - Use after you have shortlisted specific doc_ids from a ranking.
+      - Use when you need richer snippets than peek_snippets provides for final review or export.
+    arguments:
+      ids:
+        type: list[string]
+        required: true
+        description: Document identifiers to fetch snippets for (typically pub_id values from rankings).
+      fields:
+        type: list[string]
+        required: false
+        description: Fields to include in the snippet payload; defaults to ["title","abst","claim"].
+      per_field_chars:
+        type: dict[string,int]
+        required: false
+        description: Per-field character caps; larger than peek_snippets when you need more context.
+    constraints:
+      - This call does not paginate; keep ids size modest to avoid large payloads.
+    returns:
+      snippets:
+        description: Mapping from doc_id to a dict of {field: text} snippets.
+      notes:
+        - Use this for decision-ready docs; for uncapped full publications, prefer get_publication.
     """
     return await _require_service().get_snippets(
         ids=ids,
@@ -360,12 +467,30 @@ async def get_publication(
     fields: list[str] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
-    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","exam_id"], fields: list[str] | None = None)
-    prompts/list:
-    - "Retrieve the full public document for {ids} without truncation"
-    - "Show publication/app/exam IDs for {ids}"
-    prompts/get:
-    - "Get the full text for {ids} using {id_type}"
+    summary: Retrieve uncapped publication-level fields for one or more documents.
+    when_to_use:
+      - Use when snippet budgets would hide important detail (e.g., full description).
+      - Use when you need canonical identifiers (pub_id/app_doc_id/exam_id) in the payload.
+    arguments:
+      ids:
+        type: list[string]
+        required: true
+        description: Identifiers whose publication records you want to fetch.
+      id_type:
+        type: '"pub_id" | "app_doc_id" | "exam_id"'
+        required: false
+        description: Which identifier namespace the ids list refers to (defaults to "pub_id").
+      fields:
+        type: list[string]
+        required: false
+        description: Publication fields to return; omit to use a sensible default set including desc and IDs.
+    constraints:
+      - This call bypasses snippet byte budgets; use selectively for deep dives, not wide scans.
+    returns:
+      publications:
+        description: Mapping from requested identifier to a dict of publication-level fields.
+      notes:
+        - Use get_publication for a small set of key docs when you need their full context.
     """
     return await _require_service().get_publication(ids=ids, id_type=id_type, fields=fields)
 
@@ -373,12 +498,27 @@ async def get_publication(
 @mcp.tool
 async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
     """
-    signature: mutate_run(run_id: str, delta: MutateDelta)
-    prompts/list:
-    - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
-    - "List frontier deltas after tightening beta_fuse/rrf_k on run {run_id}"
-    prompts/get:
-    - "Get a fresh run_id derived from {run_id} with updated weights/filters"
+    summary: Recompute a fusion run with updated blending parameters while reusing cached lane results.
+    when_to_use:
+      - Use after a successful fusion when you want to explore alternative weights or RRF constants.
+      - Use when you need a new frontier variant without repeating lane searches.
+    arguments:
+      run_id:
+        type: string
+        required: true
+        description: Fusion run identifier to mutate.
+      delta:
+        type: MutateDelta
+        required: true
+        description: Replacement values for weights, rrf_k, and/or beta_fuse to apply to the stored recipe.
+    constraints:
+      - Delta fields overwrite the stored recipe values; they are not interpreted as +/- offsets.
+      - The referenced run_id must point to an existing fusion run, not a lane run.
+    returns:
+      new_run_id:
+        description: Identifier of the newly computed fusion run with updated parameters.
+      notes:
+        - Response includes the new frontier, updated recipe (with delta recorded), and timing metadata.
     """
     start = perf_counter()
     response = await _require_service().mutate_run(run_id=run_id, delta=delta)
@@ -389,12 +529,22 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 @mcp.tool
 async def get_provenance(run_id: str) -> ProvenanceResponse:
     """
-    signature: get_provenance(run_id: str)
-    prompts/list:
-    - "List the recipe parameters that produced fusion run {run_id}"
-    - "List the historical lineage for run {run_id}"
-    prompts/get:
-    - "Get parent/history handles so I can audit or reproduce run {run_id}"
+    summary: Inspect the stored recipe and lineage metadata for a given run.
+    when_to_use:
+      - Use when you need to audit how a lane or fusion run was produced.
+      - Use before mutating or reproducing a run so you can reuse its configuration.
+    arguments:
+      run_id:
+        type: string
+        required: true
+        description: Lane or fusion run identifier whose provenance you want to inspect.
+    constraints:
+      - The run_id must exist in storage; otherwise an error is returned.
+    returns:
+      provenance:
+        description: Object containing the stored recipe, parent, and history fields for the run.
+      notes:
+        - Use this payload to reconstruct or explain fusion decisions and to chain further mutations.
     """
     start = perf_counter()
     response = await _require_service().provenance(run_id)

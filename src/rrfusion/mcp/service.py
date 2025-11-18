@@ -348,7 +348,6 @@ class MCPService:
         weights: dict[str, float] | None = None,
         rrf_k: int = 60,
         beta_fuse: float = 1.0,
-        family_fold: bool = True,
         target_profile: dict[str, dict[str, float]] | None = None,
         top_m_per_lane: dict[str, int] | None = None,
         k_grid: list[int] | None = None,
@@ -365,7 +364,6 @@ class MCPService:
             weights=(weights or DEFAULT_WEIGHTS.copy()),
             rrf_k=rrf_k,
             beta_fuse=beta_fuse,
-            family_fold=family_fold,
             target_profile=target_profile or {},
             top_m_per_lane=(top_m_per_lane or DEFAULT_TOP_M_PER_LANE.copy()),
             k_grid=(k_grid or DEFAULT_K_GRID.copy()),
@@ -464,7 +462,6 @@ class MCPService:
             "rrf_k": request.rrf_k,
             "beta_fuse": request.beta_fuse,
             "beta": request.beta_fuse,
-            "family_fold": request.family_fold,
             "target_profile": request.target_profile,
             "top_m_per_lane": request.top_m_per_lane,
             "k_grid": request.k_grid,
@@ -508,7 +505,6 @@ class MCPService:
         fields: list[str] | None = None,
         per_field_chars: dict[str, int] | None = None,
         claim_count: int = 3,
-        strategy: Literal["head", "match", "mix"] = "head",
         budget_bytes: int = 12_288,
     ) -> PeekSnippetsResponse:
         request_kwargs: dict[str, Any] = {
@@ -516,7 +512,6 @@ class MCPService:
             "offset": offset,
             "limit": limit,
             "claim_count": claim_count,
-            "strategy": strategy,
             "budget_bytes": budget_bytes,
         }
         if fields is not None:
@@ -779,7 +774,6 @@ class MCPService:
             beta_fuse=updated_recipe.get(
                 "beta_fuse", updated_recipe.get("beta", 1.0)
             ),
-            family_fold=base_recipe.get("family_fold", True),
             target_profile=updated_recipe.get("target_profile", {}),
             top_m_per_lane=updated_recipe.get(
                 "top_m_per_lane", {"fulltext": 10000, "semantic": 10000}
@@ -793,7 +787,6 @@ class MCPService:
             weights=blend_request.weights,
             rrf_k=blend_request.rrf_k,
             beta_fuse=blend_request.beta_fuse,
-            family_fold=blend_request.family_fold,
             target_profile=blend_request.target_profile,
             top_m_per_lane=blend_request.top_m_per_lane,
             k_grid=blend_request.k_grid,

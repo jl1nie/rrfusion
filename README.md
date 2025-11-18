@@ -121,14 +121,9 @@ This exposes the same logic as the FastAPI service while letting any MCP-native 
 
 If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-redis rrfusion-mcp` (after copying `infra/env.example` to `infra/.env`) will spin up Redis and the FastMCP host with port `3000` forwarded to your machine; add the DB stub by running `docker compose -f infra/compose.stub.yml up -d rrfusion-db-stub rrfusion-mcp` when you need it.
 
-- FastMCP exposes two curated prompts (`RRFusion MCP Handbook` and `Tool Recipes`) via `@mcp.prompt`. Each prompt crushes the handbook text or the example JSON recipes so that agents can fetch guidance and copy/paste payloads directly from the same server that runs the tools. New handbook/toolrecipe content now spells out the pipeline, heuristics, budgeting, metrics, and security reminders agents rely on at runtime.
+Refer to this README (and AGENT.md for the latest agent-facing heuristics) whenever you need pipeline guidance, prompts, or JSON payload examples; the FastMCP server no longer exposes curated prompt handlers.
 
-## Prompt Catalog
-
-1. **RRFusion MCP Handbook** – follow the documented pipeline (query normalization → lane searches → fusion → snippet budgeting → mutation → provenance), read tool-specific heuristics, see snippet budget/peek patterns, and mind the telemetry and security reminders directly from `mcp.prompt(name="RRFusion MCP Handbook")`.
-2. **Tool Recipes** – pull the JSON examples (including good/bad prompts) for `search_fulltext`, `search_semantic`, `blend_frontier_codeaware`, `peek_snippets`, `get_snippets`, `mutate_run`, and `get_provenance` by calling `mcp.prompt(name="Tool Recipes")`.
-
-Call the prompts if you want the FastMCP host itself to serve the guidance text instead of keeping it in README.
+The human-readable MCP specification is also captured in `src/rrfusion/RRFusionSpecification.md`, so you can review it alongside this README when you need a broader overview. The default agent system prompt and pipeline configuration live in `src/rrfusion/SystemPrompt.yaml`; use that YAML as the canonical starting point when wiring RRFusion into an LLM agent.
 
 ## Testing
 
@@ -257,7 +252,6 @@ async def blend_frontier_codeaware(
     weights: dict[str, float] | None = None,
     rrf_k: int = 60,
     beta_fuse: float = 1.0,
-    family_fold: bool = True,
     target_profile: dict[str, dict[str, float]] | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,
@@ -269,7 +263,6 @@ async def blend_frontier_codeaware(
         weights: dict[str, float] | None = None,
         rrf_k: int = 60,
         beta_fuse: float = 1.0,
-        family_fold: bool = True,
         target_profile: dict[str, dict[str, float]] | None = None,
         top_m_per_lane: dict[str, int] | None = None,
         k_grid: list[int] | None = None,
@@ -285,9 +278,6 @@ async def blend_frontier_codeaware(
 
 Fusion consumes multiple lane handles, applies RRF plus optional code-aware boosts, and returns the final ranking with a `frontier` summary. Reuse the `run_id` it emits for snippet peeks, provenance, or further mutation.
 
-> **Note:** The `family_fold` flag is currently recorded in the recipe but
-> no active code applies family folding, so set it without expecting grouping to happen.
-
 ### `peek_snippets`
 
 ```python
@@ -301,7 +291,6 @@ async def peek_snippets(
     fields: list[str] | None = None,
     per_field_chars: dict[str, int] | None = None,
     claim_count: int = 3,
-    strategy: Literal["head", "match", "mix"] = "head",
     budget_bytes: int = 12_288,
 ) -> PeekSnippetsResponse:
     """
@@ -312,7 +301,6 @@ async def peek_snippets(
         fields: list[str] | None = None,
         per_field_chars: dict[str, int] | None = None,
         claim_count: int = 3,
-        strategy: Literal["head","match","mix"] = "head",
         budget_bytes: int = 12288,
     )
     prompts/list:
@@ -392,7 +380,7 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 
 `mutate_run` copies the cached lane results, reapplies the tweaked recipe, and yields a brand-new fusion run (with lineage). Prefer this over re-searching when you only change blending parameters.
 
-`delta` accepts weight adjustments, RRF/additional `rrf_k`/`beta_fuse` tweaks, and filter overrides so you can mutate the frontier without replicating full lane searches.
+`delta` provides replacement values for lane weights, `rrf_k`, and `beta_fuse`; each supplied field overwrites the stored recipe value (filters or other offsets are not supported).
 
 ### `get_provenance`
 

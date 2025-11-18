@@ -1,0 +1,1574 @@
+# RRFusion MCP v1.3 開発者向けドキュメント（専門版）
+
+**対象読者ペルソナ**
+
+- 特許検索の実務経験あり（無効資料調査、新規性・進歩性、FTO 等を日常的に実施）
+- IT・プログラミングは専門ではないが、  
+  - ロジックやフロー図は理解できる  
+  - 数式は、説明があれば読み解けるレベル（理系大学院卒程度）
+
+**この文書を読むとできるようになること**
+
+- RRFusion MCP が「内部で何をしているのか」を構造的に説明できる
+- レーン設計（`fulltext_wide` / `semantic` / `fulltext_recall` / `fulltext_precision`）の意味と役割を理解し、修正できる
+- コード体系（FI/FT/CPC/IPC）の扱いと、なぜ混在が禁止されるかを説明できる
+- 検索性能に問題があるときに、どこを調整するかの見当をつけられる
+- 将来の改良（新レーン追加、β調整、クエリ設計の変更）を、実務の観点から検討・指示できる
+- MCPツールAPI仕様を見て、LLMエージェントやバックエンド実装者と具体的な会話ができる
+
+---
+
+## 0. 全体像と設計哲学
+
+### 0.1 何を解決しようとしているか
+
+特許検索は、以下のような困難を常に抱えています。
+
+1. **用語の揺れ（シノニム・パラフレーズ）**
+   - 「光放射素子」と「発光素子」
+   - 「供給」と「供給手段」と「給電」
+   - 同じ概念が多様な表現で書かれる
+
+2. **構成要素の組み合わせ**
+   - A, B, C の三つの特徴が揃って初めて「本件発明らしい」文献になる
+   - しかし検索式では AND/OR の組み合わせが爆発しやすい
+
+3. **技術分野の境界**
+   - 似た用語が全く別分野で使われる（例：通信と医用機器）
+   - 分類コード（FI/FT/CPC/IPC）の助けは有用だが、設計を誤ると絞りすぎ・広げすぎになる
+
+4. **評価用の「正解データ」がない**
+   - 多くの実務では「正解リスト」が存在せず、F値（Fβ）を厳密に計測できない
+   - それでも「一般に見て良い検索」になっているかは判断しなければならない
+
+RRFusion MCP は、これらの困難に対して、
+
+- **複数のレーン（検索パターン）を並列に試す**
+- それらの結果を **RRF（Reciprocal Rank Fusion）とコードプロファイル** で統合する
+- 明示的な「正解ラベル」がなくても、**Fβ を最大化するような設定を探索しやすくする**
+
+というアプローチをとるコンポーネントです。
+
+### 0.2 RRFusion MCP の役割
+
+RRFusion MCP 自体は、**検索エンジン（OpenSearch 等）のフロントに立つ「メタ検索エンジン」** として設計されています。
+
+- バックエンド：
+  - FI/FT/CPC/IPC、請求項/要約/明細書などを保持した特許 DB
+  - fulltext（TT-IDF/BM25 系）、semantic（ベクトル）といった検索 API を提供
+- RRFusion MCP：
+  - 「どのレーンにどんなクエリを投げるか」を決める
+  - レーンごとの結果（run_id）を受け取り、RRF + コードプロファイルで融合する
+  - スニペット抽出やフロンティア評価など、実務で必要な「周辺ロジック」を提供
+
+さらに、その上に **LLM エージェント** が載ることを前提としています。
+
+- LLM（エージェント）：
+  - ユーザからの自然文の質問を解釈
+  - 特徴語の抽出・シノニム生成
+  - どのレーンにどのようなクエリを投げるかを設計
+  - 結果（ランク・スニペット）をユーザに説明しやすい形に整形
+
+### 0.3 設計哲学（Design Principles）
+
+RRFusion MCP v1.3 では、次のような設計哲学を重視しています。
+
+1. **レーンの独立性**
+   - 各レーンは「ある思想に基づく検索式のテンプレート」として定義される
+   - レーン内のクエリ設計は LLM で柔軟に変えられるが、レーンの役割（wide / recall / precision / semantic）は固定する
+
+2. **観測可能性（Observability）**
+   - どの文献がどのレーンから来たのか
+   - コード的にどの分野に属しているか
+   - あるチューニングが precision / recall にどう効いていそうか  
+   を、人間が「数値」と「スニペット」で把握できるようにする
+
+3. **安全なデフォルト**
+   - v1.3 のデフォルト設定は、「少なくとも大外しはしにくい」ように設計
+   - 高度なチューニング（β調整、レーン追加）は後から段階的に導入できる
+
+4. **手動チューニングと自動チューニングの両立**
+   - 実務家が「もう少しこの分野を厚く」「このコードは弱く」といった指示を出せる余地を残す
+   - 一方で、`mutate_run` などを通じてパラメータ探索を半自動化できる
+
+---
+
+## 1. 数理的な基礎：BM25 / ベクトル類似度 / RRF / Fβ
+
+ここでは、RRFusion MCP の中核となる数式を整理します。  
+理解が曖昧でも運用はできますが、「なぜそのような挙動をするか」の直感が得られるため、一度目を通しておくことを推奨します。
+
+### 1.1 Lexical 検索（BM25 / TT-IDF のイメージ）
+
+TT-IDF は BM25 と同系統のスコアリングです。BM25 の代表的な式は次の通りです（概念レベル）：
+
+\[
+\text{BM25}(d, q) = \sum_{t \in q} \text{IDF}(t) \cdot 
+\frac{f(t, d) \cdot (k_1 + 1)}{f(t, d) + k_1 \cdot \left(1 - b + b \cdot \frac{|d|}{\text{avgdl}}\right)}
+\]
+
+- \(d\)：文書
+- \(q\)：クエリ
+- \(t\)：クエリ中の用語（term）
+- \(f(t, d)\)：文書 \(d\) における用語 \(t\) の出現頻度
+- \( |d| \)：文書長
+- avgdl：平均文書長
+- \(k_1, b\)：調整パラメータ
+
+**ポイント**
+
+- 用語が多く出るほどスコア上昇
+- 文書長が長すぎると評価が補正される
+- IDF（逆文書頻度）により「よく出る一般語」は弱く、「珍しい専門語」は強く評価される
+
+RRFusion MCP では、具体的な式は検索バックエンドに依存しますが、  
+「TT-IDF/BM25 に似た性質の lexical スコアを返す検索」と考えれば十分です。
+
+### 1.2 Dense 検索（ベクトル類似度）
+
+Dense 検索は、文書やクエリをベクトル（埋め込み）に変換し、その類似度でランキングするものです。
+
+- クエリ \(q\) と文書 \(d\) をそれぞれベクトル \(v_q, v_d\) に写像
+- 類似度（スコア）をコサイン類似度などで定義
+
+\[
+\text{sim}(q, d) = \frac{v_q \cdot v_d}{\|v_q\| \cdot \|v_d\|}
+\]
+
+- 「言い換え」や「関連する概念」を拾いやすい
+- 一方で、**細かい構成要素の一致**や「否定・限定（〜以外）」などの扱いは苦手なことが多い
+
+RRFusion MCP では、レーン `semantic` や将来実装予定の `original_dense` がこの役割を担います。
+
+### 1.3 RRF（Reciprocal Rank Fusion）
+
+複数のレーンから得られたランキング結果を統合するために、RRF（Reciprocal Rank Fusion）を用います。  
+基本形は次の通りです。
+
+\[
+\text{RRF}(d) = \sum_{\ell} \frac{1}{k + \text{rank}_\ell(d)}
+\]
+
+- \(\ell\)：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
+- \(\text{rank}_\ell(d)\)：レーン \(\ell\) における文献 \(d\) の順位（1始まり）
+- \(k\)：調整パラメータ（ランキングが「効きすぎる」のを和らげる役割）
+
+RRFusion MCP では、レーンごとに重み \(w_\ell\) を掛けた形で使います。
+
+\[
+\text{RRF}_w(d) = \sum_{\ell} w_\ell \cdot \frac{1}{k + \text{rank}_\ell(d)}
+\]
+
+これにより、
+
+- wide レーンは「見落とし防止のために広く拾うが、重みは控えめ」
+- precision レーンは「上位に来たものを強く押し上げる」
+- semantic レーンは「lexical に拾いきれない関連文献を補完する」
+
+といった設計が可能になります。
+
+### 1.4 Precision / Recall / Fβ（概念レベル）
+
+RRFusion MCP v1.3 は、実務上の制約から「厳密なラベル付きデータ」を前提としていませんが、  
+設計思想としては F値（特に Fβ）を意識しています。
+
+- Precision（適合率）：  
+  - 上位に出てきた文献のうち、「本当に関連がある」ものの割合
+- Recall（再現率）：  
+  - 「本当に関連がある」文献のうち、検索で拾えている割合
+- F値（Fβ）：  
+  - Precision と Recall の調和平均（β は Recall をどれだけ重視するかを表す）
+
+\[
+F_\beta = (1 + \beta^2) \cdot \frac{\text{Precision} \cdot \text{Recall}}{(\beta^2 \cdot \text{Precision}) + \text{Recall}}
+\]
+
+- \(\beta > 1\)：Recall 重視（見落としを嫌う）
+- \(\beta < 1\)：Precision 重視（外れ文献を嫌う）
+
+実際には「真の Precision / Recall」はわかりませんが、
+
+- コード分布（target_profile との一致度）
+- スコア分布（上位と下位の差）
+- スニペットの内容（人間の目によるジャッジ）
+
+などを proxy として、Fβ が高くなりそうな設定を **探索・固定する** という思想で設計されています。
+
+---
+
+## 2. コード体系と target_profile
+
+ここでは、FI/FT/CPC/IPC といった分類コードの扱いと、  
+RRFusion MCP で導入している `target_profile` の概念を整理します。
+
+### 2.1 コード体系の種類
+
+特許検索でよく使うコード体系は、主に次の 4 つです。
+
+1. **FI（File Index, 日本独自の詳細分類）**
+   - JPO（日本特許庁）が運用する細分類
+   - IPC を基礎に、より細かい階層を持つ
+   - 日本語実務では最も馴染みが深い
+
+2. **FT（F-Term, 特許分類テーマごとのタグ）**
+   - 技術テーマごとに設計されたタグセット
+   - FI と組み合わせて使うことで、構成要素や用途などを表現しやすい
+
+3. **CPC（Cooperative Patent Classification）**
+   - EPO / USPTO 共同の詳細分類
+   - 欧米系文献で広く採用されている
+   - IPC より細かい
+
+4. **IPC（International Patent Classification）**
+   - 国際的な基本分類
+   - 粒度はやや粗いが、世界中の文献に付与されている
+
+それぞれ設計思想・粒度・運用の歴史が異なり、  
+**「どの体系を主とするか」** によって、検索結果の傾向も大きく変わります。
+
+### 2.2 レーンごとにコード体系を混在させてはいけない理由
+
+v1.3 では **「1つのレーンの中で、異なるコード体系を混ぜてはいけない」** というルールがあります。
+
+禁止例：
+
+- FI + CPC
+- FI + IPC
+- FT + CPC
+- CPC + IPC
+
+理由：
+
+1. コード体系ごとに設計思想・粒度が異なるため
+   - FI は非常に細かいが、日本系文献中心
+   - CPC は欧米系文献に強く、IPC より細かい
+   - IPC は粗いが、世界中に広く付いている
+2. これらを同一レーンで混在させると、「どの粒度で絞り込んでいるのか」が不明瞭になる
+3. RRFusion MCP 側でコード分布を解析するときに、  
+   「FI のこのコードと CPC のこのコードはどちらがどの程度強いのか」といった比較が難しくなる
+
+したがって、
+
+- **レーンごとに「このレーンは FI/FT だけ」「このレーンは CPC だけ」というように役割を固定する**
+- 後段でコード分布を見て target_profile を作るときも、「同じ体系どうし」で比較する
+
+というポリシーを採用しています。
+
+### 2.3 RRFusion MCP v1.3 のコード運用ルール
+
+- JP 系文献：
+  - **FI を主体系**
+  - 必要に応じて FT を補助的に使う
+- US/EP/WO 系文献：
+  - **CPC または IPC のどちらか一方**
+
+特定レーンでは、**必ず一つの体系だけ**を使うこと。  
+（例：`fulltext_recall` では FI/FT のみ、`fulltext_precision` でも同じく FI/FT のみ、というように整合を保つ）
+
+---
+
+## 3. レーン設計の詳細
+
+この章では、RRFusion MCP v1.3 で前提としているレーン構成と、それぞれの役割・想定クエリ・フィールド設計を整理します。
+
+- `fulltext_wide` レーン
+- `semantic` レーン
+- `fulltext_recall` レーン
+- `fulltext_precision` レーン
+- （オプション）コード専用レーン
+
+レーンごとの違いは **「クエリ設計」＋「フィールド・コード制約」＋「RRF 重み付け」** にあり、基盤となる検索ツールは次のように対応します。
+
+- `fulltext_*` 系：`search_fulltext`
+- `semantic`：`search_semantic(semantic_style="default" | "original_dense")`
+  - v1.3 現在、`semantic_style="original_dense"` 経路は **実行時には disabled** であり、実運用では常に `"default"` を使用する
+- コード専用レーン：RRFusion MCP 内部で組み立てたコードスコア ZSET を利用
+
+### 3.1 レーン一覧とざっくりした役割
+
+| レーン名              | 主ツール                                   | 目的                             | 典型的なクエリの長さ      | コード制約               |
+|----------------------|--------------------------------------------|----------------------------------|---------------------------|--------------------------|
+| `fulltext_wide`      | `search_fulltext`                          | 落とし穴防止のための「広い網」  | 長め（数百〜千文字程度）  | 原則なし（ゆるめ）       |
+| `semantic`           | `search_semantic(semantic_style="default")`| 概念的に近い文献の補完          | 中程度（〜1024 文字目安）| レーンごとに統一         |
+| `fulltext_recall`    | `search_fulltext`                          | ターゲット分野を厚く拾う        | 中程度（特徴語中心）      | FI/FT or CPC/IPC のどれか|
+| `fulltext_precision` | `search_fulltext`                          | 「本命候補」の絞り込み           | 短め（特徴語＋構成要素）  | `fulltext_recall` と同一 |
+| code-only（任意）    | 内部 ZSET                                  | コード的ど真ん中の軽い押し上げ  | なし                      | 体系固定                 |
+
+以降、各レーンの詳細を説明します。
+
+---
+
+### 3.2 `fulltext_wide` レーン
+
+**目的**
+
+- 「この問題設定で、そもそもどのあたりの分野が絡んできそうか」を俯瞰するための、**最も広いレーン**。
+- 上位 100〜300 件程度の「顔ぶれ」を作ることが主目的で、  
+  ここからコード分布を観測し `target_profile` を構築します。
+
+**クエリの特徴**
+
+- ユーザの自然文説明を、LLM が適度に整形したものをほぼそのまま使う。
+- シノニム展開・関連語展開は行うが、  
+  「構成要素の厳密な AND 条件」まではあまり厳しく入れない。
+- クエリ長の目安：
+  - 〜 1000 文字程度まで許容（バックエンドの制約に従う）
+  - 多段の AND/OR よりも、自然文やキーワード列を優先
+
+**フィールド設計**
+
+- タイトル、要約、請求項、明細書の主要部分を広く対象とする。
+- バックエンド側の典型的な設定例：
+  - title, abstract, claims, description に対して均等〜やや claims 重み寄り
+- コード制約は原則つけない（技術分野の先入観を避ける）。
+
+**コード分布と target_profile**
+
+- `fulltext_wide` から得られた run（例：`run_id_fulltext_wide`）に対して `get_provenance` を 1 回呼び出し、
+  - FI/FT/CPC/IPC コードの頻度分布を観測する。
+- その分布をもとに、LLM 側ロジックで `target_profile` を作る：
+  - 頻度が高く、かつ特異度が高いコードを抽出
+  - 上位 n 個（例：10〜30 個）を採用
+  - 適切に正規化して「重み付き辞書」とする
+
+---
+
+### 3.3 `semantic` レーン
+
+**目的**
+
+- 自然文レベルでの「概念的な近さ」を補完するレーン。
+- lexical な完全一致に依存せず、関連する言い換え・周辺概念の文献を拾う役割。
+
+**`search_semantic` と `semantic_style`**
+
+`search_semantic` は、引数 `semantic_style` によって内部の実装を切り替えられる設計になっています。
+
+- 型：`semantic_style: Literal["default", "original_dense"]`
+- デフォルト値：`"default"`  
+  （`host.py` 側の定義：`semantic_style: SemanticStyle = "default"`）
+
+意味合いは以下の通りです。
+
+- `semantic_style="default"`  
+  - LLM による要約・再構成を用いた **fulltext ベース** の semantic レーン  
+  - 実体としては BM25 系の fulltext 検索を使いつつ、  
+    クエリ側で概念的な表現に寄せることで semantic 的な挙動を得る
+- `semantic_style="original_dense"`  
+  - 将来実装予定の **ベクトル検索（original_dense）** を用いるモード
+  - v1.3 現在、この経路は **実行時には disabled** であり、使用しないこと
+
+したがって、v1.3 の LLM レシピでは：
+
+- `search_semantic` を呼ぶ場合は、明示的に  
+  `semantic_style: "default"` を指定するか、省略（＝ "default"）とする
+- `"original_dense"` は予約語として残るが、v1.3 では選択してはならない
+
+**クエリの特徴**
+
+- LLM がユーザの説明から「本質的な技術課題・解決手段」を短く要約し、  
+  それをクエリの中心に据える。
+- 具体的な構成要素の列挙よりも、
+  - 技術分野
+  - 目的・効果
+  - キーとなる動作や関係
+  を重視した表現にする。
+- クエリ長の目安：
+  - 〜 1024 文字程度の短めテキスト
+  - 1〜3 段落程度で「この発明の肝」をまとめるイメージ
+
+**フィールド設計**
+
+- claims＋abstract を中心に、title も加える形が多い。
+- 明細書本体はあえて弱くするか、対象外にしてもよい（実装ポリシー次第）。
+
+**コード制約**
+
+- 必要に応じて `target_profile` を参照し、  
+  「明らかに分野外のコードを持つ文献」をゆるく除外することも可能。
+- ただし、`semantic` レーンでは過度にコードで絞らず、  
+  あくまで「概念として近い候補を拾う」ことを優先する。
+
+---
+
+### 3.4 `fulltext_recall` レーン
+
+**目的**
+
+- `fulltext_wide` と `semantic` で把握した技術分野を踏まえ、  
+  **ターゲット分野の文献を「厚く拾う」ためのレーン**。
+- Recall を稼ぐ役割であり、多少のノイズ混入は許容する。
+
+**クエリの特徴**
+
+- LLM が抽出した特徴語・シノニム群を用い、
+  - 技術分野（用途・構造・動作）
+  - コアとなる構成要素
+  を網羅的に OR/AND で組み立てる。
+- `fulltext_wide` よりも構成要素を明示的に AND で結ぶが、
+  - 各要素内では OR で複数シノニムを許容する。
+- クエリ長の目安：
+  - 特徴語＋シノニム群を中心に、中程度の長さ（数十〜数百トークン）。
+
+**フィールド設計**
+
+- claims＋abstract を中心に、description の関連部分も対象にする。
+- precision レーンほど絞り込まないが、title だけに偏らないようにする。
+
+**コード制約**
+
+- `fulltext_wide` から得た `target_profile` に基づき、
+  - FI/FT または CPC/IPC のうち、**体系を一つに固定**してフィルタする。
+  - 例：JP 系中心なら FI/FT、US/EP/WO 中心なら CPC。
+- 「target_profile に含まれるコード群」を SHOULD / FILTER として使い、  
+  近い分野の文献を厚く拾う。
+
+---
+
+### 3.5 `fulltext_precision` レーン
+
+**目的**
+
+- `fulltext_recall` で得た分野の中から、  
+  **「本命候補」を絞り込むレーン**。
+- 高い Precision を狙うため、構成要素の組み合わせをより厳密に見る。
+
+**クエリの特徴**
+
+- 特徴語と構成要素を、LLM が「請求項のクレームチャート」を作るイメージで整理し、
+  - A：必須構成要素
+  - B：重要な限定要素
+  - C：付加的な好適例
+  などに分ける。
+- クエリとしては、
+  - A と B を AND 必須
+  - C は SHOULD または省略可
+  のような形で組み立てる。
+- クエリ長の目安：
+  - `fulltext_recall` より短く、キーとなるターム群に絞る。
+
+**フィールド設計**
+
+- claims を最重視。
+- abstract は補助的に見る。
+- description は原則として弱め（もしくは無効）にしてもよい。
+
+**コード制約**
+
+- `fulltext_recall` と同じコード体系（FI/FT or CPC/IPC）を使用し、
+  - target_profile の中でも特に重みの高いコードを優先的に用いる。
+- 過度に絞りすぎると Recall が落ちるため、
+  - FILTER ではなく SHOULD で優先度を上げる形も選択肢とする。
+
+**RRF における位置づけ**
+
+- `fulltext_precision` レーンは RRF 重み \(w_\ell\) を高めに設定し、
+  - 上位に来た文献を強く押し上げる役割を持たせることが多い。
+- 一方で、`fulltext_wide` や `semantic` レーンからも候補が来るため、  
+ これらとのバランスを `blend_frontier_codeaware` で調整する。
+
+---
+
+### 3.6 コード専用レーン（オプション）
+
+**目的**
+
+- コード的に「ど真ん中」の文献を、  
+  他レーンのスコアに関係なく **少しだけ押し上げるための補助レーン**。
+
+**実装イメージ**
+
+- `target_profile` に基づき、文献ごとにコードスコア \(g(d)\) を計算し、  
+  それを ZSET として保持する：
+  - 例：キー `z:rank_code:{snapshot}` に `{doc_id: g(d)}` を格納
+- `blend_frontier_codeaware` の際に、
+  - 他のレーンと同様に one lane として扱い、
+  - RRF レーン重み \(w_{\text{code}}\) を小さめ（例：0.3〜0.5）に設定する。
+
+**注意点**
+
+- コードだけで順位を支配させないために、必ず小さい重みに留める。
+- 実装・運用のコストと効果を見て、導入するかどうかを決めればよいオプション扱い。
+
+---
+
+### 3.7 レーン設計の運用パターン
+
+RRFusion MCP v1.3 の標準的な運用パターンは次の通りです。
+
+1. `fulltext_wide` で広く当たりを取り、  
+   - その結果から `target_profile` を作成する。
+2. `semantic` レーンで、概念的に近い候補群を補完する。  
+   - ツール呼び出しでは `search_semantic(semantic_style="default")` を用いる（`"original_dense"` は v1.3 では使用禁止）。
+3. `fulltext_recall` で、`target_profile` を使ってターゲット分野を厚く拾う。
+4. `fulltext_precision` で、本命候補を絞り込む。
+5. 必要に応じてコード専用レーンを追加し、ど真ん中の文献を軽く押し上げる。
+
+これらのレーンをまとめて `blend_frontier_codeaware` に渡し、  
+RRF + コード情報による融合スコアを得る、というのが v1.3 の基本設計です。
+
+---
+## 4. パイプライン全体のフロー（7ステップ）
+
+ここでは、RRFusion MCP のパイプラインを「実際の処理順」に沿って整理します。
+
+---
+
+### Step 1. Feature Extraction（特徴語抽出）
+
+- 入力：ユーザの自然文（+ 必要ならクレーム文）
+- LLM の作業：
+  - 技術課題の抽出
+  - 解決手段の主要構成の抽出（A/B/C…）
+  - 同義語・言い換えの整理
+  - 明らかに範囲外のもの（negative hints）の明示
+  - フィールド重み付けのヒント（claims を重く、abstract を重め…など）
+
+結果として、LLM 内部では次のような「プロファイル」ができるイメージです：
+
+```yaml
+feature_terms:
+  - "light-emitting element"
+  - "drive current control"
+  - "temperature sensor"
+synonym_clusters:
+  - ["light-emitting element", "emission element", "LED element"]
+  - ["drive current control", "driving current regulation"]
+negative_hints:
+  - "display panel"
+  - "projector"
+field_hints:
+  - emphasize_claims: true
+  - emphasize_abstract: true
+```
+
+このプロファイルをもとに、以降の Step 2〜4 で各レーン向けのクエリを具体化します。
+
+---
+
+### Step 2. Wide Recall（wide + semantic）
+
+ここでは、「まず大きな網を張る」ために `fulltext_wide` と `semantic` の 2 レーンを実行し、  
+後続のコード解析やチューニングの母集団（wide pool）を作ります。
+
+1. `fulltext_wide` レーン（`search_fulltext`）
+
+   - クエリ：
+     - feature_terms ＋ synonym_clusters を広く含む自然文／キーワード列
+     - negative_hints はできる範囲で除外条件として反映（NOT / must_not）
+   - フィールド：
+     - title, abstract, claims, description を広く対象とする
+   - コード制約：
+     - 原則なし（技術分野の先入観を避ける）
+   - 実行：
+     - `search_fulltext` を呼び、`fulltext_wide` レーン用の `run_id_fulltext_wide` を得る
+     - この `run_id_fulltext_wide` を **レーン名と紐付けて保存** しておく
+
+2. `semantic` レーン（`search_semantic`）
+
+   - クエリ：
+     - LLM が「発明の肝」を 1〜3 段落程度に要約したテキスト
+   - フィールド：
+     - claims＋abstract＋title を主対象
+   - コード制約：
+     - 原則なし、もしくはごく緩いコードフィルタのみ
+   - 実行：
+     - `search_semantic` を `semantic_style="default"` で呼ぶ  
+       （`"original_dense"` は v1.3 では **disabled** のため使用しない）
+     - 得られた `run_id_semantic` を **`semantic` レーンと紐付けて保存** しておく
+
+3. wide pool の構成
+
+   - 上記 2 つの run（`run_id_fulltext_wide`, `run_id_semantic`）から上位数百件を統合し、
+     - 「この問題に関係しそうな分野の粗い候補集合（wide pool）」として扱う
+   - 以降の Step 3〜5 で、この wide pool を材料にコード解析・レーン設計・融合を行う
+
+---
+
+### Step 3. Code Profiling & target_profile 構築
+
+ここでは、`fulltext_wide` レーンの結果を使って「この問題が属する技術分野の輪郭」をコードベースで把握し、  
+`target_profile` を構築します。
+
+1. `get_provenance` によるコード分布の取得
+
+   - 入力：
+     - `run_id_fulltext_wide`（Step 2 で得た wide レーンの run）
+   - `get_provenance(run_id_fulltext_wide)` を呼び、
+     - FI/FT/CPC/IPC のコード頻度分布（文献集合ごとの出現頻度）を取得する
+
+2. `target_profile` の構築（LLM ロジック）
+
+   - `get_provenance` のコード頻度辞書をもとに、LLM 側で次を行う：
+     - 技術的に意味のありそうなコードを抽出
+     - 頻度×特異度（IDF 的な考え方）でスコアリング
+     - 上位 n 個（例：10〜30 個）に絞る
+   - 結果として、次のような辞書を得る：
+
+   ```yaml
+   target_profile:
+     "F-term:5F044AA01": 0.9
+     "FI:H01L33/00": 0.8
+     "FI:H01L33/20": 0.7
+     ...
+   ```
+
+   - 以降の Step 4〜5 では、この `target_profile` を使って
+     - in-field fulltext レーン（recall / precision）のコード制約
+     - RRF のコード-aware 調整
+     を行う。
+
+---
+
+### Step 4. In-field Fulltext Lanes（再現・精度レーン）
+
+Step 3 で得た `target_profile` を用いて、  
+`fulltext_recall` と `fulltext_precision` の 2 レーンを構築します。
+
+#### 4.1 `fulltext_recall` レーン
+
+- 目的：
+  - target_profile が示す技術分野を **厚くカバー** する（Recall 重視）
+- クエリ：
+  - feature_terms ＋ synonym_clusters を広く使った OR/AND 構造
+  - 「用途」「構造」「動作」など、分野を規定する要素を網羅的に含める
+- コード制約：
+  - `target_profile` から選んだコード体系（FI/FT または CPC/IPC のどれか一体系）を使用
+  - その体系内のコードを FILTER または SHOULD でクエリに組み込む
+- フィールド：
+  - claims＋abstract＋description の関連部分を対象
+- 実行：
+  - `search_fulltext` を呼んで `run_id_fulltext_recall` を得る
+  - この `run_id_fulltext_recall` を **`fulltext_recall` レーンと紐付けて保存** する
+
+#### 4.2 `fulltext_precision` レーン
+
+- 目的：
+  - `fulltext_recall` で厚く拾った分野の中から、**本命候補** を絞り込む（Precision 重視）
+- クエリ：
+  - LLM がクレームチャート的に整理した構成要素をもとに、
+    - A：必須構成要素
+    - B：重要な限定要素
+    - C：好適例（あれば）
+  に分け、A＋B を AND 必須、C は SHOULD とするような形で構成
+- コード制約：
+  - `fulltext_recall` と同じコード体系を使用
+  - `target_profile` のうち特に重みの高いコードを優先的に使う
+- フィールド：
+  - claims を最重視、abstract を補助的に利用
+- 実行：
+  - `search_fulltext` を呼んで `run_id_fulltext_precision` を得る
+  - この `run_id_fulltext_precision` を **`fulltext_precision` レーンと紐付けて保存** する
+
+---
+
+### Step 5. Fusion（RRF + コード志向）
+
+ここまでで、少なくとも次の run_id が揃っています：
+
+- `run_id_fulltext_wide`
+- `run_id_semantic`
+- `run_id_fulltext_recall`
+- `run_id_fulltext_precision`
+- （任意）コード専用レーンの run_id
+
+これらを `blend_frontier_codeaware` に渡し、RRF + コード情報に基づく融合を行います。
+
+1. 入力パラメータの例
+
+```yaml
+runs:
+  fulltext_wide:        run_id_fulltext_wide
+  semantic:             run_id_semantic
+  fulltext_recall:      run_id_fulltext_recall
+  fulltext_precision:   run_id_fulltext_precision
+  # optional:
+  # code_lane:          run_id_code_only
+weights:
+  fulltext_wide:      0.8
+  semantic:           0.7
+  fulltext_recall:    1.0
+  fulltext_precision: 1.4
+  # code_lane:        0.3
+rrf_k: 80
+beta_fuse: 1.5
+target_profile: {...}  # Step 3 で構築したもの
+```
+
+- `weights`：
+  - レーンごとの RRF 重み \(w_\ell\)
+- `rrf_k`：
+  - RRF の k パラメータ
+- `beta_fuse`：
+  - Fβ の β に相当する、「Recall/Precision のバランス」を調整するパラメータ
+- `target_profile`：
+  - コード-aware なスコア調整に利用するコード重み辞書
+
+2. 出力
+
+- `blend_frontier_codeaware` は、
+  - 融合済みランキングを表す新しい `run_id_blend` を返す
+- 以降の Step 6〜7 では、この `run_id_blend` をもとに
+  - スニペット確認
+  - パラメータチューニング
+  を行う
+
+---
+
+### Step 6. Snippet Budgeting & Human Review
+
+ここでは、`run_id_blend` を人間が確認しやすい形に落とし込むためのステップです。
+
+#### 6.1 `peek_snippets` による軽量ビュー
+
+- 目的：
+  - 上位 50〜100 件程度を「薄く広く」眺めて、  
+    - 「顔ぶれが妥当か？」
+    - 「分野外が多すぎないか？」
+    - 「請求項の書きぶりが期待に近いか？」
+    を短時間で掴む
+- 呼び出し例：
+
+```jsonc
+{
+  "tool": "peek_snippets",
+  "arguments": {
+    "run_id": "run_id_blend",
+    "offset": 0,
+    "limit": 50,
+    "fields": ["claim", "abst"],
+    "budget_bytes": 800
+  }
+}
+```
+
+- `fields` とレスポンスの対応：
+  - 例では `["claim", "abst"]` を指定した場合、
+    - レスポンス側の各スニペットは `"fields": { "claim": "...", "abst": "..." }` のように、同じキーを持つ
+
+- 運用ポリシーの一例：
+  - `peek_snippets` で上位 50〜100 件をざっと確認
+  - 「有望」と感じた上位 10〜20 件程度を次の `get_snippets` の対象候補としてメモする
+
+#### 6.2 `get_snippets` による詳細ビュー
+
+- 目的：
+  - 上位候補の中で、「本当に読み込むべき文献」を選ぶために  
+    claim の先頭数項や要約（abst）をもう少し厚く確認する
+- 呼び出し例：
+
+```jsonc
+{
+  "tool": "get_snippets",
+  "arguments": {
+    "ids": ["JP1234567A", "US2020123456A1", "..."],
+    "fields": ["claim", "abst"],
+    "per_field_chars": {
+      "claim": 2000,
+      "abst": 1000
+    }
+  }
+}
+```
+
+- `budget_bytes`：
+  - 文献ごとに許される総バイト数
+- `fields`：
+  - 返すフィールド（例：`claims`, `abstract`）
+- `max_claims`：
+  - claims を返す場合、先頭から何項まで含めるか
+
+このように、
+
+- `peek_snippets`：広く薄く
+- `get_snippets`：狭く厚く
+
+という 2 段階で、`run_id_blend` の上位を人間がレビューできるようにします。
+
+---
+
+### Step 7. Frontier Tuning（フロンティア調整）
+
+最後に、`mutate_run` と `get_provenance` を使って、  
+RRFusion MCP の設定を「手応えのあるフロンティア」にチューニングします。
+
+1. `mutate_run` によるパラメータ変更
+
+- 入力：
+  - 元となる `run_id_blend`
+  - 変更後パラメータを表す `delta`（※名称は delta だが、**差分ではなく絶対値指定**）
+
+```jsonc
+{
+  "tool": "mutate_run",
+  "arguments": {
+    "run_id": "run_id_blend",
+    "delta": {
+      "weights": {
+        "fulltext_precision": 1.6,
+        "semantic": 0.8
+      },
+      "rrf_k": 90,
+      "beta_fuse": 1.7
+    }
+  }
+}
+```
+
+- ここでの `delta` は：
+  - 「元の値に対する±の差分」ではなく、
+  - 「変更後の **絶対値** を上書きする指定」である点に注意
+- 出力：
+  - 新しい設定で再計算した run（例：`run_id_blend_2`）が返ってくる
+
+2. `get_provenance` による寄与度・コード分布の確認
+
+- 各 `run_id`（`run_id_blend`, `run_id_blend_2`, ...）について `get_provenance` を呼び、
+  - レーンごとの寄与度（例：`{"fulltext_recall": 0.3, "fulltext_precision": 0.5, "semantic": 0.2}`）
+  - コード分布（`target_profile` との整合度）
+  を確認する
+
+3. `peek_snippets` / `get_snippets` による比較
+
+- 新旧それぞれの run_id について `peek_snippets` を呼び、
+  - 上位の顔ぶれがどう変わったか
+  - 分野外文献の混入具合がどう変わったか
+  を確認する
+- 必要なら `get_snippets` で上位候補を詳しく比較する
+
+4. 設定の固定
+
+- 上記のサイクル（`mutate_run` → `get_provenance` → `peek_snippets`）を数回繰り返し、
+  - 実務家の感覚と proxy 指標（コード分布など）が両立する設定を「レシピ」として固定する
+
+---
+
+このように、Step 1〜7 を一連のフローとして回すことで、
+
+- wide〜precision〜semantic の各レーンを
+- target_profile と Fβ 志向の融合ロジックで統合しつつ
+- 人間のレビューとチューニングループを組み込み
+
+「ラベルなし環境でも、それなりに信頼できる検索フロンティア」を構築することを狙っています。
+
+---
+
+## 5. 典型的な問題パターンと対処
+
+### 5.1 wide レーンで「ノイズ」が多すぎる」
+
+**症状**
+
+- 明らかに分野が違う文献が大量に混ざる
+- コード頻度解析で、関係ない分野のコードが大量に出る
+
+**原因候補**
+
+- `fulltext_wide` の OR 展開が広すぎる
+- 特徴語の選定が甘く、一般語が多い
+
+**対処**
+
+...
+
+### 5.4 precision が不足している
+
+**症状**
+
+- 上位 50～100 件を見ても「本当に欲しい文献」がなかなか出てこない
+
+**原因候補**
+
+- `fulltext_precision` で phrase / NEAR をあまり使っていない
+- claims へのフィールドバイアスが弱い
+
+**対処**
+
+- claims 内の重要構成を明確にし、その組み合わせを NEAR で表現
+- synonym cluster の中から「強い言い方」を優先的に使う
+- weights で `fulltext_precision` の重みを上げる
+
+---
+
+## 6. アルゴリズム & ヒューリスティクス（最終実装）
+
+この節では、RRFusion MCP v1.3 で実際に採用している実装レベルのロジックを示します。  
+ここまでの説明で出てきた概念（RRF、target_profile、コード頻度など）が、  
+**どのような数式・Redis操作として具現化されているか** を明示します。
+
+### 6.1 RRFスコアリングと格納
+
+各レーン（`search_fulltext` / `search_semantic` など）で検索を実行した結果に対して、  
+**ランクベースのスコア** を以下の式で計算します。
+
+\[
+\text{score}_\ell(d) = \frac{w_\ell}{\text{rrf\_k} + \text{rank}_\ell(d)}
+\]
+
+- \(\ell\)：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
+- \(w_\ell\)：レーンの重み（後述の lane weights）
+- \(\text{rank}_\ell(d)\)：レーン \(\ell\) における文書 \(d\) の順位（1始まり）
+- `rrf_k`：RRF の調整パラメータ（60〜120 程度）
+
+実装上は：
+
+- 各 `search_*` 呼び出し時に上記スコアを計算し、Redis の ZSET に格納する  
+  - キー例：`z:{snapshot}:{query_hash}:{lane}`  
+- 同時に、後続処理用に「文書別スニペット」「コードリスト」も Redis にキャッシュしておく。
+
+複数レーンの結果を融合するときは、Redis の `ZUNIONSTORE` を用いて、
+
+- 各レーン ZSET をまとめて `z:rrf:{run_id}` に ZUNION する
+- WEIGHTS は 1 固定（すでに `score_ℓ(d)` の中に `w_ℓ` が織り込まれている）
+
+という形で RRF 融合を実現しています。
+
+---
+
+### 6.2 コード情報に基づくスコア調整（Code-aware adjustments）
+
+`target_profile` は、技術分野ごとのコード重み（FI/FT/CPC/IPC）を表す
+
+\[
+T = \{\, c \mapsto T_c \,\}
+\]
+
+のような辞書です。  
+`get_provenance` が返すコード頻度辞書をベースに、LLM 側ロジックで `T_c` を決めておきます  
+（頻度×特異度、上位コードのみ残す、などのヒューリスティクス）。
+
+この `target_profile` を、以下の 3 つの方法で活用します。
+
+#### A) 文献ごとのブースト（Per-doc boost）
+
+まず、文献 \(d\) に付与されているコード集合を \(\mathcal{C}(d)\) とします。  
+この文献が `target_profile` とどの程度重なるかを表すスコア \(g(d)\) を計算します。
+
+\[
+g(d) = \sum_{c \in \mathcal{C}(d)} T_c \cdot h(c)
+\]
+
+- \(T_c\)：`target_profile` におけるコード \(c\) の重み
+- \(h(c)\)：階層マッチの補正等を行う係数  
+  （例：完全一致なら 1.0、上位階層一致なら 0.5 など）
+
+この \(g(d)\) を [0,1] に正規化したものを \(\text{norm}(g(d))\) とし、  
+各レーン \(\ell\) のスコアを次のように補正します。
+
+\[
+\hat{s}_\ell(d) = s_\ell(d) \cdot \left(1 + \alpha_\ell \cdot \text{norm}(g(d))\right)
+\]
+
+- \(s_\ell(d)\)：元の RRF 用スコア
+- \(\hat{s}_\ell(d)\)：コード情報でブーストされたスコア
+- \(\alpha_\ell\)：レーンごとのコード感度パラメータ（0 以上）
+
+**実装メモ**
+
+- `hat_s_ℓ(d)` は ZSET のスコアとして反映される  
+- レーンごとに \(\alpha_\ell\) を変えることで、  
+  「このレーンはコードに敏感／鈍感」といったチューニングが可能  
+- \(\alpha_\ell\) は内部実装用の固定パラメータであり、MCP ツール引数からは変更できない
+
+#### B) レーン重みの調整（Lane modulation）
+
+各レーン \(\ell\) について、そのレーンの結果に含まれるコード頻度を集計して  
+コード頻度ベクトル \(F_\ell\) を作ります：
+
+\[
+F_\ell = \{\, c \mapsto f_{\ell,c} \,\}
+\]
+
+- \(f_{\ell,c}\)：レーン \(\ell\) におけるコード \(c\) の出現頻度
+
+`target_profile` \(T\) と \(F_\ell\) の類似度を例えばコサイン類似度で定義します：
+
+\[
+\text{sim}(F_\ell, T) =
+\frac{\sum_c f_{\ell,c} \cdot T_c}{\sqrt{\sum_c f_{\ell,c}^2} \cdot \sqrt{\sum_c T_c^2}}
+\]
+
+これを使ってレーン重みを調整します：
+
+\[
+w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
+\]
+
+- \(w_\ell\)：元のレーン重み
+- \(w'_\ell\)：コード適合度を反映した新しいレーン重み
+- \(\beta\)：調整強度（正の値。大きいほど「target_profile に一致するレーン」を優遇）
+
+**実装メモ**
+
+- 実際には、各レーンの ZSET スコアにスケーリングをかける形で反映します
+- 例えば `ZUNIONSTORE` でもう一段階 WEIGHTS を使ってスコアを拡大・縮小できます
+
+#### C) コード専用レーン（Code-only lane）
+
+場合によっては、コード情報だけでランキングする補助レーンを作ることもできます。
+
+- 文献ごとの \(g(d)\) をスコアとする ZSET（例：`rank_code(d)`）を作り、
+- これを小さな重み \(w_{\text{code}}\)（例：0.5）で融合に加える
+
+これにより、
+
+- 「コード的にど真ん中」の文献が、他のレーンのスコアに関係なく少しだけ押し上がる
+- ただし重みは小さく保ち、過度にコードのみで支配されないようにする
+
+---
+
+### 6.3 フロンティア推定（Frontier estimation）
+
+`mutate_run` によるパラメータ探索を支えるために、  
+「ある設定における精度・再現度の見込み」をプロキシで見積もる仕組みを持ちます。
+
+ある融合スコア \(\hat{s}(d)\)（例えば A/B/C をすべて反映後の最終スコア）に対して、  
+複数の \(k\) 値（上位何件までを見るか）からなるグリッド \(k_{\text{grid}}\) を用意し、それぞれについて：
+
+- **\(P_\ast(k)\)**：上位 k 件の「平均的な関連度プロキシ」
+- **\(R_\ast(k)\)**：上位 k 件までの「再現度プロキシ」
+- **\(F_{\beta,\ast}(k)\)**：これらから計算した Fβ 相当値
+
+を算出します。
+
+例として：
+
+\[
+\pi'(d) = \sigma(a \cdot \hat{s}(d) + b + \gamma \cdot z(g(d)))
+\]
+
+- \(\sigma(\cdot)\)：シグモイド関数（0〜1の値に圧縮）
+- \(z(g(d))\)：コード重み \(g(d)\) に対する変換（標準化など）
+- \(a,b,\gamma\)：調整パラメータ
+
+とおき、\(P_\ast(k)\) を、
+
+\[
+P_\ast(k) = \frac{1}{k} \sum_{d \in \text{Top-}k} \pi'(d)
+\]
+
+のように定義します。
+
+一方、\(R_\ast(k)\) は技術分野のカバレッジを proxy として、
+
+\[
+R_\ast(k) = \rho \cdot \text{coverage}(k) + (1 - \rho) \cdot \text{CDF\_score}(k)
+\]
+
+- \(\text{coverage}(k)\)：上位 k 件で `target_profile` に含まれるコードがどれだけ多様にカバーされているか
+- \(\text{CDF\_score}(k)\)：スコアの累積分布に基づく指標（詳細は実装依存）
+- \(\rho\)：カバレッジとスコアのバランスを決める係数
+
+最後に、通常の Fβ の式を使って \(F_{\beta,\ast}(k)\) を求めます：
+
+\[
+F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \cdot P_\ast(k) + R_\ast(k)}
+\]
+
+グリッド上の 10〜20 点程度の代表点についてこの値を計算し、  
+「どのあたりの k でバランスが良いか」を可視化します。
+
+---
+
+### 6.4 レーン別貢献度のトラッキング
+
+最後に、`get_provenance` から返す情報として、  
+**各レーンが文献スコアにどれくらい寄与したか** を記録します。
+
+- RRF スコアを計算する過程で、
+  - 文献 \(d\) のスコアが、
+    - `fulltext_recall` レーン由来でどれだけ増えたか
+    - `fulltext_precision` レーン由来でどれだけ増えたか
+    - `semantic` レーン由来でどれだけ増えたか
+    - `code` レーン（もしあれば）由来でどれだけ増えたか
+  を積算していきます。
+
+- 最後に、各文献ごとに寄与度を正規化して **百分率** に変換し、
+  - 例：`{ "fulltext_recall": 0.2, "fulltext_precision": 0.5, "semantic": 0.3 }`
+  のような形で `get_provenance` の結果に含めます。
+
+これにより、チューニング時に：
+
+- 「この設定だと precision レーンが支配的になりすぎていないか」
+- 「semantic レーンの寄与がほとんどゼロになっていないか」
+
+といった診断がしやすくなります。
+
+---
+
+## 7. 将来の拡張パターン
+
+### 7.1 新レーンの追加
+
+例：
+
+- `claim_only_fulltext`：
+  - claims のみを対象とした BM25 検索
+- `title_abstract_boosted`：
+  - landscape 調査向けに、タイトルと要約だけを強く見る
+
+追加の際の注意：
+
+- レーン数を増やしすぎない（4～6程度が推奨）
+- 既存レーンと「本質的に異なる視点」になるように設計する
+- weights の初期値は 1.0 近辺から慎重に調整する
+...
+
+### 7.2 タスク別チューニング
+
+- 新規性調査：
+  - 再現率重視（β > 1）
+  - wide / semantic の比重を高める
+- 無効資料調査：
+  - precision も重要
+  - `fulltext_precision` の比重を上げ、NEAR/phrase を強化
+- 侵害予防（FTO）：
+  - 再現率や coverage を重視しつつ、  
+    特定のクレーム構成に対する mapping エージェントとの組み合わせを意識する
+
+---
+
+## 8. MCP ツール API リファレンス（概要）
+
+ここでは、RRFusion MCP が提供する MCP ツール（関数）の API を  
+**実装・メンテナンス向けに整理**します。  
+正確な型・フィールドは `rrfusion.models` 等の実装を参照してください。
+
+### 8.1 共通概念
+
+多くの API では以下のような概念が共通して使われます。
+
+- `run_id`：
+  - あるツール呼び出しの結果集合を識別する ID
+- `doc_id`：
+  - 個々の文献（特許公報）を識別する ID（INPADOC形式等）
+- `Filters`：
+  - 年、国、言語、コード体系などのフィルタ情報
+- `meta.took_ms`：
+  - そのツール呼び出しにかかった時間（ミリ秒）
+
+...
+
+### 8.2 `search_fulltext`
+
+**役割**  
+
+- TT-IDF / BM25 系の全文検索レーンを実行するための基本ツール
+
+**呼び出しイメージ（論理）**
+
+```jsonc
+{
+  "tool": "search_fulltext",
+  "arguments": {
+    "query": "((light-emitting element) NEAR/5 (drive current)) AND H01L*",
+    "filters": {
+      "years": [2010, 2024],
+      "country": ["JP", "US"],
+      "language": ["JA", "EN"],
+      "code_system": "auto",
+      "codes": {
+        "fi": [],
+        "cpc": [],
+        "ipc": ["H01L33/00"]
+      }
+    },
+    ...
+  }
+}
+```
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_fulltext_123",
+  "items": [
+    {
+      "rank": 1,
+      "doc_id": "JP1234567A",
+      "score": 0.87,
+      "codes": {
+        "fi": ["H01L33/00"],
+        "cpc": ["H01L33/00"],
+        "ipc": []
+      }
+    },
+    ...
+  ],
+  "meta": {
+    "took_ms": 120
+  }
+}
+```
+
+---
+
+### 8.3 `search_semantic`
+
+**役割**  
+
+- semantic レーンの検索を実行するツール。  
+- 内部実装は `semantic_style` によって切り替わるが、v1.3 現在は `"default"` のみ実運用対象。
+
+**パラメータ概要**
+
+- `text`: 検索意図を表す自然文テキスト（LLM が要約・再構成したものを想定）
+- `filters: Filters`: 年、国、言語などのフィルタ
+- `top_k: int`: 上位何件取得するか（目安：〜800）
+- `semantic_style: "default" | "original_dense"`  
+  - 省略時は "default"  
+  - `"original_dense"` は将来のベクトル検索用で、v1.3 では **実行時に disabled**。  
+    LLM は `search_semantic` を呼ぶ際、`semantic_style` を指定するなら必ず `"default"` を選ぶこと。
+
+**呼び出しイメージ**
+
+```jsonc
+{
+  "tool": "search_semantic",
+  "arguments": {
+    "text": "A light-emitting element whose drive current is controlled according to temperature, to keep luminance stable.",
+    "filters": {
+      "years": [2010, 2024],
+      "country": ["JP", "US"]
+    },
+    "top_k": 800,
+    "semantic_style": "default"
+  }
+}
+```
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_semantic_456",
+  "items": [
+    {
+      "rank": 1,
+      "doc_id": "JP1234567A",
+      "score": 0.87,
+      "codes": {
+        "fi": ["H01L33/00"],
+        "cpc": ["H01L33/00"],
+        "ipc": []
+      }
+    },
+    ...
+  ],
+  "meta": {
+    "took_ms": 200
+  }
+}
+```
+
+---
+
+### 8.4 `blend_frontier_codeaware`
+
+**役割**
+
+- 複数レーンの run を RRF + コード情報で融合し、  
+  「frontier 志向」のランキングを生成する中核ツール。
+
+**呼び出しイメージ（概略）**
+
+```jsonc
+{
+  "tool": "blend_frontier_codeaware",
+  "arguments": {
+    "runs": [
+      {"lane": "fulltext_wide", "run_id": "run_fulltext_123"},
+      {"lane": "semantic", "run_id": "run_semantic_456"},
+      {"lane": "fulltext_recall", "run_id": "run_fulltext_789"},
+      {"lane": "fulltext_precision", "run_id": "run_fulltext_999"}
+    ],
+    "weights": {
+      "fulltext_wide": 1.0,
+      "semantic": 1.0,
+      "fulltext_recall": 1.0,
+      "fulltext_precision": 1.2
+    },
+    "rrf_k": 80,
+    "beta_fuse": 1.0,
+    "target_profile": {
+      "FI:H01L33/00": 0.8,
+      "FI:H01L33/20": 0.7,
+      ...
+    }
+  }
+}
+```
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_blend_001",
+  "items": [
+    {
+      "rank": 1,
+      "doc_id": "JP1234567A",
+      "score": 0.92,
+      "codes": {...}
+    },
+    ...
+  ],
+  "meta": {
+    "took_ms": 50
+  }
+}
+```
+
+※ 実際のコード-aware 処理（target_profile によるブースト、レーン重み調整など）は 6章で説明した通り。
+
+---
+
+### 8.5 `peek_snippets`
+
+**役割**
+
+`peek_snippets` は、ある `run_id` に対して
+
+- 上位数十〜百件の文献
+- 各文献あたりごく限られたテキスト量（例：800〜1000 bytes）
+
+だけを先に取得し、人間が「ざっと当たりを付ける」ための **軽量ビュー** を提供するツールです。
+
+- 「この設定で上位に出てくる顔ぶれは妥当か？」
+- 「分野外の文献が多すぎないか？」
+- 「claims の書きぶりが期待しているものに近いか？」
+
+といった感触を、**短時間で掴む**ためのものと位置づけます。
+
+**呼び出しイメージ**
+
+```jsonc
+{
+  "tool": "peek_snippets",
+  "arguments": {
+    "run_id": "run_blend_001",
+    "offset": 0,
+    "limit": 50,
+    "fields": ["claim", "abst"],
+    "budget_bytes": 800
+  }
+}
+```
+
+- `run_id`  
+  - `blend_frontier_codeaware` や `mutate_run` の結果として得られたランの ID
+- `budget_bytes`  
+  - スニペット全体に使える合計バイト数の上限（フィールド全体の合計）
+- `fields`  
+  - どのフィールドを抜き出すか（例：`["claim", "abst"]`）
+- `max_docs`  
+  - 上位何件までを見るか（目安：50〜100）
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_blend_001",
+  "snippets": [
+    {
+      "id": "JP1234567A",
+      "fields": {
+        "claim": "【請求項１】 ...",
+        "abst": "【要約】 ..."
+      }
+    },
+    {
+      "id": "US2020123456A1",
+      "fields": {
+        "claim": "1. A light-emitting device comprising ...",
+        "abst": "An apparatus for ..."
+      }
+    }
+    ...
+  ],
+  "meta": {
+    "took_ms": 70
+  }
+}
+```
+
+- `fields` とレスポンスのキーは一致する  
+  （`["claim", "abst"]` を指定した場合、各スニペットの `fields` も `claim`, `abst` キーを持つ）
+
+**チューニングループにおける位置づけ**
+
+`peek_snippets` は以下のループの中で繰り返し使います：
+
+1. ある設定で `blend_frontier_codeaware` を実行して `run_id` を得る
+2. その `run_id` について `peek_snippets` を呼び出し、上位文献をざっと確認する
+3. 「precision が足りない」「分野外が多い」などの印象から、  
+   `mutate_run` で重みや `beta_fuse` を少しだけ調整する
+4. 新しい `run_id` に対して再度 `peek_snippets` して比較する
+5. 必要に応じて 2〜4 を何度か繰り返し、手応えのある設定をレシピとして固定する
+
+このように、`peek_snippets` は
+
+- `mutate_run`（設定を動かす）
+- `get_provenance`（何がどう変わったか数値で見る）
+
+と並んで、チューニングループの中核となるツールです。
+
+---
+
+### 8.6 `get_snippets`
+
+**役割**
+
+- 特定の `doc_id` セットについて、  
+  claims や abstract の「少し厚めの」スニペットを取得する。
+
+**呼び出しイメージ**
+
+```jsonc
+{
+  "tool": "get_snippets",
+  "arguments": {
+    "ids": ["JP1234567A", "US2020123456A1", "..."],
+    "fields": ["claim", "abst"],
+    "per_field_chars": {
+      "claim": 4000,
+      "abst": 2000
+    }
+  }
+}
+```
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "snippets": {
+    "JP1234567A": {
+      "claim": "【請求項１】 ...【請求項２】 ...【請求項３】 ...",
+      "abst": "【要約】 ..."
+    },
+    ...
+  },
+  "meta": {
+    "took_ms": 30
+  }
+}
+```
+
+---
+
+### 8.7 `mutate_run`
+
+**役割**
+
+- 既存の融合結果（`run_id`）に対して、  
+  `weights` / `rrf_k` / `beta_fuse` などの **設定値を上書き** して、新しい run を生成する。
+
+> 注意：`delta` という名前だが、「元の値との差分」ではなく  
+> **変更後の絶対値を部分的に指定するためのオブジェクト** である。
+
+**呼び出しイメージ**
+
+```jsonc
+{
+  "tool": "mutate_run",
+  "arguments": {
+    "run_id": "run_blend_001",
+    "delta": {
+      "weights": {
+        "fulltext_precision": 1.6,
+        "semantic": 0.8
+      },
+      "rrf_k": 90,
+      "beta_fuse": 1.7
+    }
+  }
+}
+```
+
+- ここで指定されていないパラメータは、`run_blend_001` の設定値がそのまま引き継がれる。
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_blend_002",
+  "items": [...],
+  "meta": {
+    "parent_run_id": "run_blend_001",
+    "took_ms": 40
+  }
+}
+```
+
+- `run_blend_002` は、`run_blend_001` をベースに  
+  `weights.fulltext_precision = 1.6`、`weights.semantic = 0.8`、`rrf_k = 90`、`beta_fuse = 1.7` を適用した設定で再計算された run となる。
+
+---
+
+### 8.8 `get_provenance`
+
+**役割**
+
+- ある run の「由来・構成」を解析する
+- どのレーンがどれだけ貢献したか、コード分布はどうか、などを知る
+
+**呼び出しイメージ**
+
+```jsonc
+{
+  "tool": "get_provenance",
+  "arguments": {
+    "run_id": "run_blend_001"
+  }
+}
+```
+
+**レスポンス（概念）**
+
+```jsonc
+{
+  "run_id": "run_blend_001",
+  "lane_contributions": {
+    "fulltext_wide": {...},
+    "semantic": {...},
+    "fulltext_recall": {...},
+    "fulltext_precision": {...}
+  },
+  "code_distributions": {
+    "fi": {...},
+    "cpc": {...},
+    "ipc": {...}
+  },
+  "config_snapshot": {
+    "weights": {...},
+    "rrf_k": 80,
+    "beta_fuse": 1.5,
+    "target_profile": {...}
+  }
+}
+```
+
+---
+
+## 9. まとめ
+
+この専門版ドキュメントでは、
+
+- 数理的背景（BM25/TT-IDF、コサイン類似度、RRF、Fβ）
+- コード体系の設計と混在禁止の理由
+- 4つのコアレーンの役割とクエリ設計の指針
+- 7ステップのパイプライン構造
+- 典型的なトラブルと改善策
+- MCP ツール API の概念仕様
+
+を、特許検索実務者が将来の改善・メンテナンスに活かせるレベルで整理しました。
+
+本ドキュメントをベースに、  
+
+- タスク別レシピ（無効資料調査 / 新規性 / FTO）  
+- 社内向けトレーニング資料（ワークショップ用）  
+などを追加していくことで、RRFusion MCP を社内標準の検索インフラとして育てていくことができます。
+
+以上。

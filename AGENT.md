@@ -136,7 +136,7 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
   - `doc_id` is treated as the publication number (`pub_id`) by the backend, so snippet fields that expose `pub_id` will echo the `doc_id` you received from the lane.
   - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
-  Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...}, "claim_count": 3, "strategy": "head|match|mix" }`.  
+  Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...}, "claim_count": 3 }`.  
   Returns `{ doc_id: { field: truncated_text } }`, respecting char caps.
 
 ### 4.3 MCP host (FastMCP)
@@ -203,7 +203,6 @@ Perform RRF fusion with optional code awareness and frontier reporting.
   "weights": { "recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5 },
   "rrf_k": 60,
   "beta": 1.0,
-  "family_fold": true,
   "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },
   "top_m_per_lane": { "fulltext": 10000, "semantic": 10000 },
   "k_grid": [10,20,30,40,50,80,100,150,200],
@@ -229,14 +228,13 @@ Perform RRF fusion with optional code awareness and frontier reporting.
     "ft": {"432": 5}
   },
   "contrib": { "123456789": {"recall":0.4,"semantic":0.4,"code":0.2} },
-  "recipe": { "weights": {...}, "rrf_k": 60, "beta": 1.0, "family_fold": true, "snapshot": "..." },
   "peek_samples": [ { "id":"123456789", "title":"...", "abst":"..." } ]
 }
 ```
 
 **Implementation notes**
 - Stub milestone: run RRF in Python, generate a mocked frontier (e.g., random relevance prior), store fusion results in Redis for consistency.
-- Algorithm milestone: use Redis `ZUNIONSTORE`, apply code-aware adjustments (§6), compute true frontier proxies, family fold, and contribution shares. Include lineage metadata for reproducibility.
+- Algorithm milestone: use Redis `ZUNIONSTORE`, apply code-aware adjustments (§6), compute true frontier proxies and contribution shares. Include lineage metadata for reproducibility.
 - Implementation note: `target_profile` now accepts IPC/CPC/FI/FT maps, so the fusion run also captures FI/FT frequencies in `freqs_topk`. The new `freq-snapshot` scenario validates those hashes before peek/mutate steps.
 
 ---
@@ -261,7 +259,6 @@ Return snippets for a run, honoring doc count + byte budgets.
     "exam_id":64
   },
   "claim_count": 3,
-  "strategy": "head" | "match" | "mix",
   "budget_bytes": 12288
 }
 ```
@@ -343,16 +340,11 @@ Immutable delta exploration; server reuses cached lanes, recomputing fusion/fron
 ```json
 {
   "run_id": "string",
-  "delta": {
-    "add_keywords": ["..."]?,
-    "drop_keywords": ["..."]?,
-    "add_ipc": ["..."]?,
-    "drop_ipc": ["..."]?,
-    "rollup_change": { "ipc_level": 4 }?,
-    "weights": { "precision": 1.2 }?,
-    "rrf_k": 30?,
-    "beta": 0.5?
-  }
+    "delta": {
+      "weights": { "precision": 1.2 }?,
+      "rrf_k": 30?,
+      "beta": 0.5?
+    }
 }
 ```
 
@@ -361,8 +353,11 @@ Immutable delta exploration; server reuses cached lanes, recomputing fusion/fron
 { "new_run_id": "string", "frontier": [...], "recipe": {...} }
 ```
 
+- Every delta field overwrites the stored value; `mutate_run` does not interpret `+/-` offsets.
+- Algorithm milestone: apply deltas to recipe (weights, rrf_k, beta, target profile), recompute fusion via Redis, update lineage.
+
 - Stub milestone: may simply copy parent fusion results with a new `run_id`.
-- Algorithm milestone: apply deltas to recipe (weights, rrf_k, beta, target profile, rollup), recompute fusion via Redis, update lineage.
+- Algorithm milestone: apply deltas to recipe (weights, rrf_k, beta, target profile), recompute fusion via Redis, update lineage.
 
 ---
 
@@ -402,28 +397,23 @@ Return `recipe` and lineage for auditability.
   - `F_beta_star(k)`: standard Fβ from `P_star` and `R_star`.
 - Return 10–20 representative points (use provided grid).
 
-### 6.4 Family folding
-- Maintain `doc_id → family_id` map (simple rule ok during scaffold, e.g., `fam = doc_id // 10`).
-- When reading fusion ranks, skip docs whose family already appeared until the requested `k` unique families are collected.
-
-### 6.5 Contribution tracking
+### 6.4 Contribution tracking
 - While computing RRF, accumulate per-doc contributions by lane (`recall`, `precision`, `semantic`, `code`). Normalize to percentages before returning.
 
 ---
 
 ## 7. LLM Operating Rules (prompt-ready)
-- Always fetch lanes with the **same query/filters/rollup**.
+- Always fetch lanes with the **same query/filters**.
 - Never request full `(doc_id, score)` arrays; use handles only.
 - Fuse with `blend_frontier_codeaware`; pick `k` from the returned `frontier` (or explicit `top_K_read`).
 - Use `peek_snippets` sparingly (≤ `PEEK_MAX_DOCS`, obey `PEEK_BUDGET_BYTES`).
-- Prefer `family_fold:true` and report `run_id/recipe` for reproducibility.
 - Tune precision vs recall using `weights` and `rrf_k` (smaller = precision bias).
 
 ---
 
 ## 8. Testing & Acceptance
 - **Smoke**: `search_fulltext` → `search_semantic` → `blend_frontier_codeaware` → `peek_snippets`. Assert run IDs exist, Redis ZSETs populated, frontier non-empty, snippet budgets respected.
-- **Unit**: fusion math, code boosts, snippet truncation, family folding.
+- **Unit**: fusion math, code boosts, snippet truncation.
 - **Integration**: `mutate_run` delta path, `get_provenance` lineage, Redis TTL behavior.
 + **Acceptance checklist**
 -  - `docker compose -f infra/compose.ci.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp` starts Redis + services healthy.
@@ -431,4 +421,4 @@ Return `recipe` and lineage for auditability.
 -  - Frontier computation is server-side and reproducible via `recipe`.
 -  - Snippet endpoints enforce doc count and byte caps.
 
-This AGENT.md is the single source of truth; the previous `AGENT_2.md`, `CODEX_BRIEF_STUB.md`, and `CODEX_BRIEF_ALGO.md` have been merged here.
+This AGENT.md is the single source of truth; the previous `AGENT_2.md`, `CODEX_BRIEF_STUB.md`, and `CODEX_BRIEF_ALGO.md` have been merged here. The human-friendly MCP specification lives in `src/rrfusion/RRFusionSpecification.md`, so consult it for higher-level context when needed. The recommended system prompt and pipeline configuration for LLM agents are defined in `src/rrfusion/SystemPrompt.yaml`.

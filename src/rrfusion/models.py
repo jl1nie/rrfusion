@@ -98,16 +98,6 @@ class FusionRun(BaseModel):
     run_id: str
 
 
-class GateConfig(BaseModel):
-    tau: float = 0.05
-    sigma: float | None = None
-
-
-class MMRConfig(BaseModel):
-    enable: bool = True
-    lambda_mmr: float = 0.7
-
-
 class FusionParams(BaseModel):
     runs: list[FusionRun]
     weights: dict[Lane, float] = Field(
@@ -115,10 +105,6 @@ class FusionParams(BaseModel):
     )
     rrf_k: int = 60
     beta_fuse: float = 1.0
-    lambda_code: float = 0.25
-    gate: GateConfig = GateConfig()
-    mmr: MMRConfig = MMRConfig()
-    limit: int = 200
     trace_id: str | None = None
 
 
@@ -138,7 +124,6 @@ class PeekSnippetsRequest(BaseModel):
     per_field_chars: dict[SnippetField, int] = Field(
         default_factory=lambda: {"title": 160, "abst": 480, "claim": 320}
     )
-    strategy: Literal["head", "match", "mix"] = "mix"
     budget_bytes: int = 12_288
     trace_id: str | None = None
 
@@ -192,10 +177,6 @@ class MutateDelta(BaseModel):
     weights: dict[Lane, float] | None = None
     rrf_k: int | None = None
     beta_fuse: float | None = None
-    lambda_code: float | None = None
-    gate: GateConfig | None = None
-    mmr: MMRConfig | None = None
-    limit: int | None = None
 
 
 class MutateRequest(BaseModel):
@@ -239,7 +220,6 @@ class BlendRequest(BaseModel):
     )
     rrf_k: int = 60
     beta_fuse: float = 1.0
-    family_fold: bool = True
     target_profile: dict[str, dict[str, float]] = Field(default_factory=dict)
     top_m_per_lane: dict[str, int] = Field(
         default_factory=lambda: {"fulltext": 10000, "semantic": 10000, "original_dense": 10000}
@@ -293,8 +273,6 @@ __all__ = [
     "SemanticParams",
     "SearchToolResponse",
     "FusionRun",
-    "GateConfig",
-    "MMRConfig",
     "FusionParams",
     "FusionResult",
     "PeekSnippetsRequest",

@@ -108,7 +108,6 @@ async def _prepare_fusion_run(
         "weights": {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
         "rrf_k": 60,
         "beta_fuse": 1.0,
-        "family_fold": False,
         "target_profile": {},
         "top_m_per_lane": {"fulltext": cfg.stub_max_results, "semantic": cfg.stub_max_results},
         "k_grid": [10, 50, 100, 200, 500],
