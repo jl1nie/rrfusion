@@ -200,9 +200,9 @@ Perform RRF fusion with optional code awareness and frontier reporting.
     { "lane": "fulltext", "run_id_lane": "string" },
     { "lane": "semantic",  "run_id_lane": "string" }
   ],
-  "weights": { "recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5 },
+  "weights": { "fulltext": 1.0, "semantic": 1.0, "code": 0.5 },
   "rrf_k": 60,
-  "beta": 1.0,
+  "beta_fuse": 1.0,
   "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },
   "top_m_per_lane": { "fulltext": 10000, "semantic": 10000 },
   "k_grid": [10,20,30,40,50,80,100,150,200],
@@ -341,9 +341,9 @@ Immutable delta exploration; server reuses cached lanes, recomputing fusion/fron
 {
   "run_id": "string",
     "delta": {
-      "weights": { "precision": 1.2 }?,
+      "weights": { "fulltext": 1.2 }?,
       "rrf_k": 30?,
-      "beta": 0.5?
+      "beta_fuse": 0.5?
     }
 }
 ```

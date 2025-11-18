@@ -80,16 +80,13 @@ SNIPPET_DEFAULT_PER_FIELD = {
 }
 
 DEFAULT_WEIGHTS = {
-    "recall": 1.0,
-    "precision": 1.0,
+    "fulltext": 1.0,
     "semantic": 1.0,
-    "original_dense": 1.0,
     "code": 0.5,
 }
 DEFAULT_TOP_M_PER_LANE = {
     "fulltext": 10000,
     "semantic": 10000,
-    "original_dense": 10000,
 }
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 
@@ -461,7 +458,6 @@ class MCPService:
             "weights": request.weights,
             "rrf_k": request.rrf_k,
             "beta_fuse": request.beta_fuse,
-            "beta": request.beta_fuse,
             "target_profile": request.target_profile,
             "top_m_per_lane": request.top_m_per_lane,
             "k_grid": request.k_grid,
@@ -747,7 +743,6 @@ class MCPService:
             updated_recipe["rrf_k"] = request.delta.rrf_k
         if request.delta.beta_fuse is not None:
             updated_recipe["beta_fuse"] = request.delta.beta_fuse
-            updated_recipe["beta"] = request.delta.beta_fuse
 
         updated_recipe.setdefault(
             "top_m_per_lane",
