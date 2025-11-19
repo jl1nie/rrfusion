@@ -134,6 +134,16 @@ class PatentfieldBackend(HttpLaneBackend):
                 targets.append(column)
         return targets
 
+    def _map_fields_to_columns(self, fields: list[str]) -> list[str]:
+        seen: set[str] = set()
+        columns: list[str] = []
+        for field in fields:
+            column = FIELD_COLUMN_MAP.get(field, field)
+            if column not in seen:
+                columns.append(column)
+                seen.add(column)
+        return columns
+
     def _extract_records(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             for key in ("records", "results", "items"):
@@ -345,7 +355,7 @@ class PatentfieldBackend(HttpLaneBackend):
         name = request.ids[0]
         params = {"id_type": request.id_type}
         if request.fields:
-            params["columns"] = ",".join(request.fields)
+            params["columns"] = self._map_fields_to_columns(request.fields)
         logger.info("Patentfield publication GET: %s params=%s", name, params)
         try:
             response = await self.http.get(
