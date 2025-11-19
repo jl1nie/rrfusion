@@ -63,6 +63,28 @@ CODE_FIELDS = ("ipcs", "cpcs", "fis", "fts")
 class PatentfieldBackend(HttpLaneBackend):
     """Call the Patentfield REST endpoint and return DBSearchResponse."""
 
+    def _aggregate_code_summary(
+        self, items: list[SearchItem]
+    ) -> dict[str, dict[str, int]]:
+        freqs: dict[str, dict[str, int]] = {
+            "ipc": {},
+            "cpc": {},
+            "fi": {},
+            "ft": {},
+        }
+        for item in items:
+            for taxonomy, codes in (
+                ("ipc", item.ipc_codes),
+                ("cpc", item.cpc_codes),
+                ("fi", item.fi_codes),
+                ("ft", item.ft_codes),
+            ):
+                if not codes:
+                    continue
+                for code in codes:
+                    freqs[taxonomy][code] = freqs[taxonomy].get(code, 0) + 1
+        return freqs
+
     def __init__(self, settings: Settings) -> None:
         headers: dict[str, str] | None = None
         if settings.patentfield_api_key:
