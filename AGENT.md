@@ -136,7 +136,7 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
   - `doc_id` is treated as the publication number (`pub_id`) by the backend, so snippet fields that expose `pub_id` will echo the `doc_id` you received from the lane.
   - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
-  Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...}, "claim_count": 3 }`.  
+  Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...} }`.  
   Returns `{ doc_id: { field: truncated_text } }`, respecting char caps.
 
 ### 4.3 MCP host (FastMCP)
@@ -162,10 +162,11 @@ Fetch top-k results from the DB stub, store them in Redis, and return handles on
     { "lop": "and", "field": "ipc", "op": "in", "value": ["H04L"] }
   ],
   "top_k": 800,
-  "budget_bytes": 4096,
   "trace_id": "string"
 }
 ```
+
+> note: these search calls no longer support `budget_bytes`; snippet byte budgets are enforced via `peek_snippets`/`get_snippets`.
 
 **Output**
 ```json
@@ -258,7 +259,6 @@ Return snippets for a run, honoring doc count + byte budgets.
     "pub_id":64,
     "exam_id":64
   },
-  "claim_count": 3,
   "budget_bytes": 12288
 }
 ```

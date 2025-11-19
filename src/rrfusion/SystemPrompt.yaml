@@ -102,8 +102,8 @@ lanes:
       description: >
         Use 1–3 paragraphs summarizing the core technical idea, purpose, and effect.
         Focus on conceptual similarity, not exact term matching.
-      max_length_chars: 1024
         Refer to the spec’s expectation for semantic queries: concise conceptual prose.
+      max_length_chars: 1024
     fields:
       include: [title, abst, claim]
     code_system_policy:
@@ -119,8 +119,8 @@ lanes:
       description: >
         Use feature_terms and synonym_clusters grouped by function or structure.
         AND across elements (A, B, C...), OR inside each element for synonyms.
-      typical_length_tokens: 50-300
         Keep these infield search expressions shorter than the initial wide search so they remain structured and focused.
+      typical_length_tokens: 50-300
     fields:
       include: [claim, abst, desc]
     code_system_policy:
@@ -192,11 +192,11 @@ snippet_policy:
       - after_first_blend_run
       - after_each_mutate_run
   get_snippets:
-    budget_bytes_default: 4000
-    max_claims_default: 3
     recommendation:
       - after_peek_select_top_n: 10-20
       - focus_on_most_promising_docs_for_human_review
+    notes:
+      - Use per_field_chars to make claims thicker (for example {"claim": 4000, "abst": 2000}) while keeping the overall payload uncapped by budget_bytes.
 
 tool_usage:
   search_fulltext:

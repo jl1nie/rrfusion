@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     patentfield_snippets_path: str = Field("/snippets", alias="PATENTFIELD_SNIPPETS_PATH")
     patentfield_api_key: str | None = Field(default=None, alias="PATENTFIELD_API_KEY")
     patentfield_publications_path: str = Field("/publications", alias="PATENTFIELD_PUBLICATIONS_PATH")
+    patentfield_max_results: int = Field(1000, alias="PATENTFIELD_MAX_RESULTS")
+    patentfield_sort_keys: list[str] = Field(
+        default_factory=lambda: ["-_score"], alias="PATENTFIELD_SORT_KEYS"
+    )
+    patentfield_default_targets: list[str] = Field(
+        default_factory=lambda: ["title", "abstract", "claim"], alias="PATENTFIELD_DEFAULT_TARGETS"
+    )
     wwrag_url: str = Field("http://localhost:8090", alias="WWRAG_URL")
     wwrag_search_path: str = Field("/search", alias="WWRAG_SEARCH_PATH")
     wwrag_api_key: str | None = Field(default=None, alias="WWRAG_API_KEY")

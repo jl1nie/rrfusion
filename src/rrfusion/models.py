@@ -62,7 +62,6 @@ class FulltextParams(BaseModel):
     query: str
     filters: list[Cond] = Field(default_factory=list)
     top_k: int = 800
-    budget_bytes: int = 4096
     trace_id: str | None = None
     include: IncludeOpts = IncludeOpts()
     fields: list[SnippetField] = Field(
@@ -74,7 +73,6 @@ class SemanticParams(BaseModel):
     text: str
     filters: list[Cond] = Field(default_factory=list)
     top_k: int = 800
-    budget_bytes: int = 4096
     trace_id: str | None = None
     include: IncludeOpts = IncludeOpts()
     fields: list[SnippetField] = Field(
@@ -167,14 +165,8 @@ class GetPublicationRequest(BaseModel):
     trace_id: str | None = None
 
 
-class SnippetsResponse(BaseModel):
-    run_id: str | None = None
-    snippets: dict[str, dict[str, str]]
-    meta: dict[str, Any]
-
-
 class MutateDelta(BaseModel):
-    weights: dict[Lane, float] | None = None
+    weights: dict[str, float] | None = None
     rrf_k: int | None = None
     beta_fuse: float | None = None
 
@@ -281,7 +273,6 @@ __all__ = [
     "PeekSnippet",
     "GetSnippetsRequest",
     "GetPublicationRequest",
-    "SnippetsResponse",
     "MutateDelta",
     "MutateRunRequest",
     "MutateRequest",

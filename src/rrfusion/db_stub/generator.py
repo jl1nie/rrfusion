@@ -156,7 +156,6 @@ def generate_search_results(
                 or getattr(request, "text", None),
                 "filters": [cond.model_dump() for cond in request.filters],
                 "fields": getattr(request, "fields", None),
-                "budget_bytes": request.budget_bytes,
             },
             trace_id=request.trace_id,
         ),

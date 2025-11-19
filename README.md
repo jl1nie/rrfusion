@@ -194,17 +194,17 @@ async def search_fulltext(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
-    budget_bytes: int = 4096,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None)
+    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, trace_id: str | None = None)
     prompts/list:
     - "List high-recall patent families mentioning {query} with IPC filters {filters}"
     - "List prior art using only keyword evidence for {query}"
     prompts/get:
     - "Get a lane run handle I can feed into fusion for {query}"
     """
+    Note: `search_fulltext` no longer exposes `budget_bytes`; snippet byte caps are managed by `peek_snippets` and `get_snippets`.
 ```
 
 The full-text lane maximizes recall by leaning on raw keyword scoring from the DB stub. Pick the lane variant you need (`search_fulltext.wide`, `.focused`, or `.hybrid`) before adding semantic context, and always capture the `run_id_lane` it returns.
@@ -223,23 +223,23 @@ async def search_semantic(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
-    budget_bytes: int = 4096,
     trace_id: str | None = None,
     semantic_style: Literal["default", "original_dense"] = "default",
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, budget_bytes: int = 4096, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
+    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
     prompts/list:
     - "List semantically similar inventions about {text}"
     - "List embedding-driven hits that stay on-spec for {text}"
     prompts/get:
     - "Get the semantic lane handle so I can blend with run {text}"
     """
-```
+    ```
 
-This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
-Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
-Set `semantic_style="original_dense"` if you need the dedicated dense-vector lane (shorter input, dense scoring) while `semantic_style="default"` keeps the regular BM25-like pipeline.
+    This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
+    Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
+    Set `semantic_style="original_dense"` if you need the dedicated dense-vector lane (shorter input, dense scoring) while `semantic_style="default"` keeps the regular BM25-like pipeline.
+    Note: `search_semantic` also omits `budget_bytes`; snippet byte caps are enforced when you later call `peek_snippets` or `get_snippets`.
 
 ### `blend_frontier_codeaware`
 
@@ -290,7 +290,6 @@ async def peek_snippets(
     limit: int = 12,
     fields: list[str] | None = None,
     per_field_chars: dict[str, int] | None = None,
-    claim_count: int = 3,
     budget_bytes: int = 12_288,
 ) -> PeekSnippetsResponse:
     """
@@ -300,7 +299,6 @@ async def peek_snippets(
         limit: int = 12,
         fields: list[str] | None = None,
         per_field_chars: dict[str, int] | None = None,
-        claim_count: int = 3,
         budget_bytes: int = 12288,
     )
     prompts/list:

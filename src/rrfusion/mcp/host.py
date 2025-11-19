@@ -156,7 +156,6 @@ async def search_fulltext(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
-    budget_bytes: int = 4096,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
@@ -181,10 +180,6 @@ async def search_fulltext(
         type: int
         required: false
         description: Maximum number of hits to retrieve for this lane (typically up to 800).
-      budget_bytes:
-        type: int
-        required: false
-        description: Byte budget for snippet materialization in this lane run.
       trace_id:
         type: string
         required: false
@@ -205,7 +200,6 @@ async def search_fulltext(
         filters=filters,
         fields=fields,
         top_k=top_k,
-        budget_bytes=budget_bytes,
         trace_id=trace_id,
     )
     _record_tool_timing(response, _elapsed_ms(start))
@@ -218,7 +212,6 @@ async def search_semantic(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
-    budget_bytes: int = 4096,
     trace_id: str | None = None,
     semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse:
@@ -244,10 +237,6 @@ async def search_semantic(
         type: int
         required: false
         description: Number of top results to retrieve (typically up to 800).
-      budget_bytes:
-        type: int
-        required: false
-        description: Byte budget for snippet materialization in this lane run.
       trace_id:
         type: string
         required: false
@@ -273,7 +262,6 @@ async def search_semantic(
         filters=filters,
         fields=fields,
         top_k=top_k,
-        budget_bytes=budget_bytes,
         trace_id=trace_id,
         semantic_style=semantic_style,
     )
@@ -361,7 +349,6 @@ async def peek_snippets(
     limit: int = 12,
     fields: list[str] | None = None,
     per_field_chars: dict[str, int] | None = None,
-    claim_count: int = 3,
     budget_bytes: int = 12_288,
 ) -> PeekSnippetsResponse:
     """
@@ -390,10 +377,6 @@ async def peek_snippets(
         type: dict[string,int]
         required: false
         description: Per-field character limits before byte budgeting is applied.
-      claim_count:
-        type: int
-        required: false
-        description: Reserved for future strategies based on claim subsets (currently advisory).
       budget_bytes:
         type: int
         required: false
@@ -414,7 +397,6 @@ async def peek_snippets(
         limit=limit,
         fields=fields,
         per_field_chars=per_field_chars,
-        claim_count=claim_count,
         budget_bytes=budget_bytes,
     )
     _record_tool_timing(response, _elapsed_ms(start))

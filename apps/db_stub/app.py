@@ -89,7 +89,6 @@ async def search_lane(
             filters=filters,
             fields=_columns_to_fields(request_body.get("columns")),
             top_k=request_body.get("limit", 800),
-            budget_bytes=request_body.get("budget_bytes", 4096),
             trace_id=request_body.get("trace_id"),
         )
     elif lane == "fulltext":

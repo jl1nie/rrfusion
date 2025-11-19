@@ -117,7 +117,6 @@ def _search_meta(lane: str, params: SearchParams) -> Meta:
         "query": getattr(params, "query", None) or getattr(params, "text", None),
         "filters": [cond.model_dump() for cond in params.filters],
         "fields": getattr(params, "fields", None),
-        "budget_bytes": params.budget_bytes,
         "include": params.include.model_dump(),
     }
     semantic_style = getattr(params, "semantic_style", None)
@@ -206,7 +205,6 @@ class MCPService:
         filters: list[Cond] | None = None,
         fields: list[SnippetField] | None = None,
         top_k: int = 800,
-        budget_bytes: int = 4096,
         trace_id: str | None = None,
         semantic_style: SemanticStyle = "default",
     ) -> SearchToolResponse:
@@ -229,13 +227,12 @@ class MCPService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="query required for fulltext lane",
                     )
-                # Prepare fulltext request with user query + filters and budget
+                # Prepare fulltext request with user query + filters
                 params = FulltextParams(
                     query=actual_query,
                     filters=filters or [],
                     fields=requested_fields,
                     top_k=top_k,
-                    budget_bytes=budget_bytes,
                     trace_id=trace_id,
                 )
             else:
@@ -251,7 +248,6 @@ class MCPService:
                     filters=filters or [],
                     fields=requested_fields,
                     top_k=top_k,
-                    budget_bytes=budget_bytes,
                     trace_id=trace_id,
                     semantic_style=semantic_style,
                 )
@@ -286,7 +282,6 @@ class MCPService:
             "count_returned": count_returned,
             "truncated": truncated,
             "query_hash": query_hash,
-            "budget_bytes": params.budget_bytes,
         }
 
         meta = _search_meta(lane, params)
@@ -494,22 +489,20 @@ class MCPService:
     # ------------------------------------------------------------------ #
     async def peek_snippets(
         self,
-        *,
-        run_id: str,
-        offset: int = 0,
-        limit: int = 12,
-        fields: list[str] | None = None,
-        per_field_chars: dict[str, int] | None = None,
-        claim_count: int = 3,
-        budget_bytes: int = 12_288,
-    ) -> PeekSnippetsResponse:
-        request_kwargs: dict[str, Any] = {
-            "run_id": run_id,
-            "offset": offset,
-            "limit": limit,
-            "claim_count": claim_count,
-            "budget_bytes": budget_bytes,
-        }
+    *,
+    run_id: str,
+    offset: int = 0,
+    limit: int = 12,
+    fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
+    budget_bytes: int = 12_288,
+) -> PeekSnippetsResponse:
+    request_kwargs: dict[str, Any] = {
+        "run_id": run_id,
+        "offset": offset,
+        "limit": limit,
+        "budget_bytes": budget_bytes,
+    }
         if fields is not None:
             request_kwargs["fields"] = fields
         if per_field_chars is not None:
