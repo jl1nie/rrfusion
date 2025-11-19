@@ -489,20 +489,20 @@ class MCPService:
     # ------------------------------------------------------------------ #
     async def peek_snippets(
         self,
-    *,
-    run_id: str,
-    offset: int = 0,
-    limit: int = 12,
-    fields: list[str] | None = None,
-    per_field_chars: dict[str, int] | None = None,
-    budget_bytes: int = 12_288,
-) -> PeekSnippetsResponse:
-    request_kwargs: dict[str, Any] = {
-        "run_id": run_id,
-        "offset": offset,
-        "limit": limit,
-        "budget_bytes": budget_bytes,
-    }
+        *,
+        run_id: str,
+        offset: int = 0,
+        limit: int = 12,
+        fields: list[str] | None = None,
+        per_field_chars: dict[str, int] | None = None,
+        budget_bytes: int = 12_288,
+    ) -> PeekSnippetsResponse:
+        request_kwargs: dict[str, Any] = {
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit,
+            "budget_bytes": budget_bytes,
+        }
         if fields is not None:
             request_kwargs["fields"] = fields
         if per_field_chars is not None:
