@@ -436,7 +436,6 @@ async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
         payload = {
             "text": "dense lane smoke test",
             "top_k": 50,
-            "budget_bytes": 4096,
             "semantic_style": "original_dense",
             "filters": None,
         }
