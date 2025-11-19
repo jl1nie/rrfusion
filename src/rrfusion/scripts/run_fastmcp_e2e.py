@@ -71,7 +71,6 @@ async def _prepare_lane_runs(
 ) -> dict[str, dict[str, Any]]:
     base_payload = {
         "top_k": cfg.stub_max_results,
-        "budget_bytes": 4096,
         "filters": None,
     }
     lane_runs: dict[str, dict[str, Any]] = {}
