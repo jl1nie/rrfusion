@@ -935,6 +935,15 @@ LLM エージェント側でもこのステップを踏むことが前提で、`
 
 ---
 
+#### 6.3 キャッシュ拡張案：REST + Redis 再利用
+
+- 現状 `PatentfieldBackend`/`HttpLaneBackend` は `httpx.AsyncClient` を直接使っているため、同一クエリ・filters・fields・lane でも毎回 Patentfield を叩いています。ここに `httpx` の `transport` や `event_hooks` を使ったキャッシュアダプタを挟み、クエリと構成パラメータを正規化したキー（例：`fields` をソート・`sort_keys` を含める）で Redis やローカルストレージに TTL 付きで保存する実装にすれば、REST レベルでの重複呼び出しを減らせます。
+  - 既存ライブラリ（`httpx-cache`, `httpx-cache-control` など）を `HttpLaneBackend` の AsyncClient 初期化時に組み込めば、最小限のコード変更でキャッシュが効きます。401/5xx のようなエラー時にはキャッシュを使わず再フェッチし、成功時は TTL を挟んで更新するルールを明示するのが実装例です。
+  - クエリのハッシュ化に `hash_query`（`src/rrfusion/utils.py`）を再利用し、`fields` や `filters` まで含めた総合キーを生成しておけば、同じパラメータを利用したときにキャッシュがヒットしやすくなります。
+
+- 現在の `RedisStorage.store_lane_run` は `query_hash`（クエリ＋filters）＋ `lane` で `z:<snapshot>:<query_hash>:<lane>` のスコアセットとドキュメントハッシュを保存し、後続 `blend_frontier_codeaware` は `zslice`/`get_docs` で再利用しています（`src/rrfusion/storage.py:42-220`）。この仕組みを前倒しして、lane 実行前に同じ `query_hash` が存在すれば `SearchToolResponse` をそのまま再利用するパスを追加すると、`run_id` を新たに切らなくてもキャッシュヒットが可能です。
+  - さらに `peek_snippets`/`get_snippets` で `_fetch_snippets_from_backend` によって不足分を追加したり `upsert_docs` で更新している現行ロジック（`src/rrfusion/mcp/service.py:520-694`）と組み合わせれば、スニペットの鮮度を損なわずに段階的なキャッシュ強化ができます。
+
 ### Step 7. Frontier Tuning（フロンティア調整）
 
 最後に、`mutate_run` と `get_provenance` を使って、  
