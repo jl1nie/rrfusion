@@ -1532,59 +1532,46 @@ search_semantic(
 
 **役割**
 
-- 複数レーンの run を RRF + コード情報で融合し、  
-  「frontier 志向」のランキングを生成する中核ツール。
+- 複数 lane run を RRF とコード Prior で融合し、frontier + code distribution を含む `BlendResponse` を生成。
+- この response の `run_id` は `peek_snippets` / `mutate_run` / `get_provenance` で後続処理される。
 
-**呼び出しイメージ（概略）**
+**シグネチャ（`mcp.host` と一致）**
 
-```jsonc
-{
-  "tool": "blend_frontier_codeaware",
-  "arguments": {
-    "runs": [
-      {"lane": "fulltext_wide", "run_id": "run_fulltext_123"},
-      {"lane": "semantic", "run_id": "run_semantic_456"},
-      {"lane": "fulltext_recall", "run_id": "run_fulltext_789"},
-      {"lane": "fulltext_precision", "run_id": "run_fulltext_999"}
-    ],
-    "weights": {
-      "fulltext_wide": 1.0,
-      "semantic": 1.0,
-      "fulltext_recall": 1.0,
-      "fulltext_precision": 1.2
-    },
-    "rrf_k": 80,
-    "beta_fuse": 1.0,
-    "target_profile": {
-      "FI:H01L33/00": 0.8,
-      "FI:H01L33/20": 0.7,
-      ...
-    }
-  }
-}
+```python
+blend_frontier_codeaware(
+    runs: list[BlendRunInput],
+    weights: dict[str, float] | None = None,
+    rrf_k: int = 60,
+    beta_fuse: float = 1.0,
+    target_profile: dict[str, dict[str, float]] | None = None,
+    top_m_per_lane: dict[str, int] | None = None,
+    k_grid: list[int] | None = None,
+    peek: PeekConfig | None = None,
+) -> BlendResponse
 ```
 
-**レスポンス（概念）**
+**主な引数**
 
-```jsonc
-{
-  "run_id": "run_blend_001",
-  "items": [
-    {
-      "rank": 1,
-      "doc_id": "JP1234567A",
-      "score": 0.92,
-      "codes": {...}
-    },
-    ...
-  ],
-  "meta": {
-    "took_ms": 50
-  }
-}
-```
+- `runs`：`lane` と `run_id_lane` のペア。少なくとも 1 つは必要。
+- `weights`：レーン／コード別の重み（例：`{"fulltext":1.0,"semantic":0.8,"code":0.5}`）。
+- `rrf_k`, `beta_fuse`：RRF tail / frontier の recall/precision バランスを制御。
+- `target_profile`：コード Prior（`{"fi":{"H04L":0.7}}`など）。
+- `top_m_per_lane`：融合前に各レーンから読み込む上位件数。
+- `k_grid`：frontier を計算する `k` のグリッド。
+- `peek`：`PeekConfig` を与えると、融合直後に snippet を収集。
 
-※ 実際のコード-aware 処理（target_profile によるブースト、レーン重み調整など）は 6章で説明した通り。
+**戻り値（`BlendResponse` 概要）**
+
+- `run_id`：生成された fusion run。
+- `pairs_top`：`rank`/`doc_id`/`score` の順序。
+- `frontier`：`BlendFrontierEntry`（`k,P_star,R_star,F_beta_star`）。
+- `freqs_topk`：上位での IPC/CPC/FI/FT 頻度。
+- `contrib`：各レーンがどれだけ貢献したかの比率。
+- `recipe`：使用されたパラメータ（`delta` を含む）。
+- `peek_samples`：`peek_snippets` を inline で取得した例。
+- `meta`：`took_ms` 等のメタ情報。
+
+> 実装ノート：このツールで生成したレシピと `target_profile` は `mutate_run` / `get_provenance` の入力になる。今回の `field_boosts` や `feature_scope` は `runs` 側で設定した lane run metadata から継承します。
 
 ---
 
@@ -1592,246 +1579,111 @@ search_semantic(
 
 **役割**
 
-`peek_snippets` は、ある `run_id` に対して
+- 指定 fusion run の上位 50〜100 件を `budget_bytes` 以内で preview し、人間の顔ぶれ確認を助ける軽量ツール。
+- `per_field_chars` / `budget_bytes` で出力フィールドを制御し、必要な `fields` のみを JSON に含める。
 
-- 上位数十〜百件の文献
-- 各文献あたりごく限られたテキスト量（例：800〜1000 bytes）
+**シグネチャ**
 
-だけを先に取得し、人間が「ざっと当たりを付ける」ための **軽量ビュー** を提供するツールです。
-
-- 「この設定で上位に出てくる顔ぶれは妥当か？」
-- 「分野外の文献が多すぎないか？」
-- 「claims の書きぶりが期待しているものに近いか？」
-
-といった感触を、**短時間で掴む**ためのものと位置づけます。
-
-**呼び出しイメージ**
-
-```jsonc
-{
-  "tool": "peek_snippets",
-  "arguments": {
-    "run_id": "run_blend_001",
-    "offset": 0,
-    "limit": 50,
-    "fields": ["claim", "abst"],
-    "budget_bytes": 800
-  }
-}
+```python
+peek_snippets(
+    run_id: str,
+    offset: int = 0,
+    limit: int = 12,
+    fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
+    budget_bytes: int = 12288,
+) -> PeekSnippetsResponse
 ```
 
-- `run_id`  
-  - `blend_frontier_codeaware` や `mutate_run` の結果として得られたランの ID
-- `budget_bytes`  
-  - スニペット全体に使える合計バイト数の上限（フィールド全体の合計）
-- `fields`  
-  - どのフィールドを抜き出すか（例：`["claim", "abst"]`）
-- `max_docs`  
-  - 上位何件までを見るか（目安：50〜100）
+**主な引数**
 
-**レスポンス（概念）**
+- `run_id`: `blend_frontier_codeaware` または `mutate_run` の run_id。
+- `offset`, `limit`: ランキング上のスライド。
+- `fields`: 返すテキストセクション（デフォルト `['title','abst','claim']`）。
+- `per_field_chars`: 各 field ごとの文字数上限。
+- `budget_bytes`: JSON 全体のバイト予算。
 
-```jsonc
-{
-  "run_id": "run_blend_001",
-  "snippets": [
-    {
-      "id": "JP1234567A",
-      "fields": {
-        "claim": "【請求項１】 ...",
-        "abst": "【要約】 ..."
-      }
-    },
-    {
-      "id": "US2020123456A1",
-      "fields": {
-        "claim": "1. A light-emitting device comprising ...",
-        "abst": "An apparatus for ..."
-      }
-    }
-    ...
-  ],
-  "meta": {
-    "took_ms": 70
-  }
-}
-```
+**戻り値（`PeekSnippetsResponse`）**
 
-- `fields` とレスポンスのキーは一致する  
-  （`["claim", "abst"]` を指定した場合、各スニペットの `fields` も `claim`, `abst` キーを持つ）
+- `snippets`: `PeekSnippet` のリスト（`id` + `fields`）。
+- `meta`: `PeekMeta`（`used_bytes`, `truncated`, `peek_cursor`, `total_docs`, `retrieved`, `returned`, `took_ms`）。
 
-**チューニングループにおける位置づけ**
-
-`peek_snippets` は以下のループの中で繰り返し使います：
-
-1. ある設定で `blend_frontier_codeaware` を実行して `run_id` を得る
-2. その `run_id` について `peek_snippets` を呼び出し、上位文献をざっと確認する
-3. 「precision が足りない」「分野外が多い」などの印象から、  
-   `mutate_run` で重みや `beta_fuse` を少しだけ調整する
-4. 新しい `run_id` に対して再度 `peek_snippets` して比較する
-5. 必要に応じて 2〜4 を何度か繰り返し、手応えのある設定をレシピとして固定する
-
-このように、`peek_snippets` は
-
-- `mutate_run`（設定を動かす）
-- `get_provenance`（何がどう変わったか数値で見る）
-
-と並んで、チューニングループの中核となるツールです。
-
----
-
+> 実装ノート：このツールは `mutate_run`/`get_provenance` 後の比較ループで毎回呼び、複数設定の顔ぶれを定量・定性にわたって評価します。
 ### 8.6 `get_snippets`
 
 **役割**
 
-- 特定の `doc_id` セットについて、  
-  claims や abstract の「少し厚めの」スニペットを取得する。
+- 特定の doc_id 集合について、`per_field_chars` で指定した文字数まで title/abst/claim/desc を返す。
+- バイト予算はないので、必要な field ごとに個別キャップを設定して厚めのスニペットを得る。
 
-**呼び出しイメージ**
+**シグネチャ**
 
-```jsonc
-{
-  "tool": "get_snippets",
-  "arguments": {
-    "ids": ["JP1234567A", "US2020123456A1", "..."],
-    "fields": ["claim", "abst"],
-    "per_field_chars": {
-      "claim": 4000,
-      "abst": 2000
-    }
-  }
-}
+```python
+get_snippets(
+    ids: list[str],
+    fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
+) -> dict[str, dict[str, str]]
 ```
 
-**レスポンス（概念）**
+**主な引数**
 
-```jsonc
-{
-  "JP1234567A": {
-    "claim": "【請求項１】 ...【請求項２】 ...【請求項３】 ...",
-    "abst": "【要約】 ..."
-  },
-  "US2020123456A1": {
-    "claim": "1. A light-emitting device comprising ...",
-    "abst": "An apparatus for ..."
-}
-}
-```
+- `ids`: 対象の doc_id 一覧。
+- `fields`: 返す field（デフォルト `['title','abst','claim']`）。
+- `per_field_chars`: 各 field の文字数上限（例：`{'claim':4000,'abst':2000}`）。
 
-> 実装ノート：`get_snippets` は backend の `search` エンドポイントに `conditions`（`pub_id` 等の `in`）を投げ込み、 `columns` で指定した箇所だけを取得しています。バックエンドに `/snippets` エンドポイントがないので、doc_id ベースの検索で必要なセクションだけを絞り込む設計です。
+**戻り値**
 
----
+- doc_id をキーとするマップ。各 field は `truncate_field` で `per_field_chars` に従って切り詰められる。
 
-### 8.7 `mutate_run`
+> 実装ノート：backend の `/search` へ `conditions`（`pub_id IN ids`）を送り、`columns` で必要 field だけを指定してスニペットを取得します。### 8.7 `mutate_run`
 
 **役割**
 
-- 既存の融合結果（`run_id`）に対して、  
-  `weights` / `rrf_k` / `beta_fuse` などの **設定値を上書き** して、新しい run を生成する。
+- 既存の fusion run に対して `weights`, `rrf_k`, `beta_fuse` を上書きし、新しい run を生成する。
+- 結果は `MutateResponse` で返され、`recipe` に `delta` を含める。
 
-> 注意：`delta` という名前だが、「元の値との差分」ではなく  
-> **変更後の絶対値を部分的に指定するためのオブジェクト** である。
+**シグネチャ**
 
-**呼び出しイメージ**
-
-```jsonc
-{
-  "tool": "mutate_run",
-  "arguments": {
-    "run_id": "run_blend_001",
-    "delta": {
-      "weights": {
-        "fulltext_precision": 1.6,
-        "semantic": 0.8
-      },
-      "rrf_k": 90,
-      "beta_fuse": 1.7
-    }
-  }
-}
+```python
+mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
 ```
 
-- `delta.weights` は `blend_frontier_codeaware` に渡した `weights` と同じ自由なキー（論理レーン名、`code`、`recall`/`precision` のようなメタキー）を受け付ける `dict[str,float]` で、指定したキーだけを上書きし、それ以外は元のレシピの値を維持します。
+**主な引数**
 
-- ここで指定されていないパラメータは、`run_blend_001` の設定値がそのまま引き継がれる。
+- `run_id`: ベースとなる fusion run。
+- `delta`: `weights`, `rrf_k`, `beta_fuse` の上書き。指定しない項目は元 run の recipe を継承。
 
-**レスポンス（概念）**
+**戻り値（`MutateResponse`）**
 
-```jsonc
-{
-  "new_run_id": "run_blend_002",
-  "frontier": [
-    { "k": 10, "P_star": 0.85, "R_star": 0.12, "F_beta_star": 0.20 },
-    ...
-  ],
-  "recipe": {
-    "weights": {...},
-    "rrf_k": 90,
-    "beta_fuse": 1.7,
-    "delta": {
-      "weights": {"fulltext_precision": 1.6, "semantic": 0.8},
-      "rrf_k": 90,
-      "beta_fuse": 1.7
-    }
-  },
-  "meta": {
-    "parent_run_id": "run_blend_001",
-    "took_ms": 40
-  }
-}
-```
+- `new_run_id`: 生成された fusion run。
+- `frontier`: `BlendFrontierEntry` リスト。
+- `recipe`: 新 recipe（`delta` を含む）。
+- `meta`: `took_ms` 等。
 
-- `run_blend_002` は、`run_blend_001` をベースに  
-  `weights.fulltext_precision = 1.6`、`weights.semantic = 0.8`、`rrf_k = 90`、`beta_fuse = 1.7` を適用した設定で再計算された run となる。
-
----
-
-### 8.8 `get_provenance`
+> 実装ノート：`delta` は差分ではなく絶対値として扱われ、変えない設定は元の recipe から引き継がれます。### 8.8 `get_provenance`
 
 **役割**
 
-- ある run の「由来・構成」を解析する
-- どのレーンがどれだけ貢献したか、コード分布はどうか、などを知る
+- 指定 run の recipe, lane contributions, code distributions を調査する。
 
-**呼び出しイメージ**
+**シグネチャ**
 
-```jsonc
-{
-  "tool": "get_provenance",
-  "arguments": {
-    "run_id": "run_blend_001"
-  }
-}
+```python
+get_provenance(run_id: str) -> ProvenanceResponse
 ```
 
-**レスポンス（概念）**
+**主な引数**
 
-```jsonc
-{
-  "run_id": "run_blend_001",
-  "lane_contributions": {
-    "fulltext_wide": {...},
-    "semantic": {...},
-    "fulltext_recall": {...},
-    "fulltext_precision": {...}
-  },
-  "code_distributions": {
-    "fi": {...},
-    "cpc": {...},
-    "ipc": {...}
-  },
-  "config_snapshot": {
-    "weights": {...},
-    "rrf_k": 80,
-    "beta_fuse": 1.5,
-    "target_profile": {...}
-  }
-}
-```
+- `run_id`: lane run もしくは fusion run。
 
----
+**戻り値（`ProvenanceResponse`）**
 
-## 9. まとめ
+- `lane_contributions`: 各 lane/run の寄与度。
+- `code_distributions`: IPC/CPC/FI/FT の分布。
+- `config_snapshot`: `weights`, `rrf_k`, `beta_fuse`, `target_profile` 等。
+
+> 実装ノート：`code_profiling` では `fulltext_wide` を指定して target_profile を構築し、`tuning` では fusion run を渡して変更後のバランスを確認するループに使います。## 9. まとめ
 
 この専門版ドキュメントでは、
 
