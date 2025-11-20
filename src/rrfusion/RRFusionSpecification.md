@@ -288,15 +288,93 @@ v1.3 では **「1つのレーンの中で、異なるコード体系を混ぜ�
 
 ### 3.1 レーン一覧とざっくりした役割
 
-| レーン名              | 主ツール                                   | 目的                             | 典型的なクエリの長さ      | コード制約               |
-|----------------------|--------------------------------------------|----------------------------------|---------------------------|--------------------------|
-| `fulltext_wide`      | `search_fulltext`                          | 落とし穴防止のための「広い網」  | 長め（数百〜千文字程度）  | 原則なし（ゆるめ）       |
-| `semantic`           | `search_semantic(semantic_style="default")`| 概念的に近い文献の補完          | 中程度（〜1024 文字目安）| レーンごとに統一         |
-| `fulltext_recall`    | `search_fulltext`                          | ターゲット分野を厚く拾う        | 中程度（特徴語中心）      | FI/FT or CPC/IPC のどれか|
-| `fulltext_precision` | `search_fulltext`                          | 「本命候補」の絞り込み           | 短め（特徴語＋構成要素）  | `fulltext_recall` と同一 |
-| code-only（任意）    | 内部 ZSET                                  | コード的ど真ん中の軽い押し上げ  | なし                      | 体系固定                 |
+| レーン名              | 主ツール                                   | 目的                             | 典型的なクエリの長さ      | コード制約               | 主な MCP パラメータ                                       |
+|----------------------|--------------------------------------------|----------------------------------|---------------------------|--------------------------|------------------------------------------------------------|
+| `fulltext_wide`      | `search_fulltext`                          | 落とし穴防止のための「広い網」  | 長め（数百〜千文字程度）  | 原則なし（ゆるめ）       | `field_boosts` は title 強め・desc 弱め（デフォルト）     |
+| `semantic`           | `search_semantic(semantic_style="default")`| 概念的に近い文献の補完          | 中程度（〜1024 文字目安）| レーンごとに統一         | `feature_scope="wide"` を基準に、場合により絞り込む       |
+| `fulltext_recall`    | `search_fulltext`                          | ターゲット分野を厚く拾う        | 中程度（特徴語中心）      | FI/FT or CPC/IPC のどれか| `field_boosts` で desc/claim をやや厚めにする             |
+| `fulltext_precision` | `search_fulltext`                          | 「本命候補」の絞り込み           | 短め（特徴語＋構成要素）  | `fulltext_recall` と同一 | `field_boosts` で title/claim を強く、desc は弱く         |
+| code-only（任意）    | 内部 ZSET                                  | コード的ど真ん中の軽い押し上げ  | なし                      | 体系固定                 | `BlendRequest.target_profile` / コードレーン用 `weights`  |
 
-以降、各レーンの詳細を説明します。
+以降、各レーンの詳細と、「どのように MCP パラメータを変えることで新レーンを増やせるか」を説明します。
+
+---
+
+### 3.2 fulltext 系レーンと `field_boosts` の設計
+
+fulltext 系レーンは、同じ `search_fulltext` を使いながら  
+`field_boosts`（タイトル／要約／クレーム／明細書などの重み）を変えることで役割を分けます。
+
+#### 3.2.1 代表的な `field_boosts` の例
+
+実装レベルでは Patentfield の `weights` にマッピングされますが、  
+論理レーンの観点では次のようなプリセットとして扱うと整理しやすくなります。
+
+| 論理レーン           | 役割                         | 典型的な `field_boosts`（概念）                                      |
+|----------------------|------------------------------|------------------------------------------------------------------------|
+| `fulltext_wide`      | 分野の当たりをつける        | `{"title": 80, "abstract": 10, "claim": 5, "description": 1}`         |
+| `fulltext_recall`    | 分野内の coverage を厚くする | `{"title": 40, "abstract": 10, "claim": 5, "description": 4}`         |
+| `fulltext_precision` | 本命候補の絞り込み           | `{"title": 120, "abstract": 20, "claim": 40, "description": 1}`       |
+
+- `fulltext_wide`  
+  - タイトルを強めに、明細書は弱めにして「方向性が近い文献」を広く拾う。
+- `fulltext_recall`  
+  - 明細書もある程度見ることで、「同じコード帯の近い技術」を漏らしにくくする。
+- `fulltext_precision`  
+  - タイトル／クレームをかなり強くし、「発明の骨格が似ている文献」を優先する。
+
+LLM や実務者が新レーンを設計する場合は、  
+この表を基準に `field_boosts` を少しずつ変えながら `blend_frontier_codeaware` → `peek_snippets` で結果を比較し、  
+「wide / recall / precision の中間」などのレーンを追加していくことができます。
+
+---
+
+### 3.3 semantic レーンと `feature_scope` のバリエーション
+
+semantic レーンは、バックエンドの `score_type="similarity_score"` を用いた類似度検索ですが、  
+`feature_scope` によって「どのセクションから特徴量を抽出するか」を切り替えられます。
+
+| semantic 論理レーン         | `feature_scope`         | Patentfield `feature` への対応       | 主な用途                                   |
+|-----------------------------|-------------------------|--------------------------------------|--------------------------------------------|
+| `semantic_wide`             | `"wide"`                | `word_weights`                       | 最初に広く関連文献を拾う                   |
+| `semantic_title_abst_claim` | `"title_abst_claims"`   | `claims_weights`                     | タイトル＋要約＋クレームの雰囲気を見る     |
+| `semantic_claims_only`      | `"claims_only"`         | `all_claims_weights`                 | クレーム構成が似た文献にフォーカス         |
+| `semantic_top_claim`        | `"top_claim"`           | `top_claim_weights`                  | クレーム 1 本目同士の比較                  |
+| `semantic_background_jp`    | `"background_jp"`       | `tbpes_weights` 系                   | JP の背景技術／課題／効果の雰囲気を把握    |
+
+- デフォルトは `feature_scope="wide"` とし、「semantic はまずは広く」という立ち位置。
+- 特定の比較（例：クレーム構成の近さ）に絞りたい場合は、`semantic_claims_only` のような論理レーンを定義して使います。
+- 将来的に dense ベクトル検索（`original_dense`）を導入するときは、  
+  ここでの semantic は「Patentfield similarity 専用」、dense は別レーンとして棲み分ける想定です。
+
+---
+
+### 3.4 新しい論理レーンを追加する手順
+
+RRFusion MCP では、**MCP ツールを増やさなくても** 新しい論理レーンを増やすことができます。  
+設計の観点からは、次の 4 ステップで整理すると分かりやすくなります。
+
+1. **物理レーンを選ぶ**  
+   - lexical を厚くしたい：`search_fulltext`  
+   - 類似度（Patentfield similarity）で補完したい：`search_semantic`  
+2. **テキストのフォーカスを決める**  
+   - fulltext：`field_boosts`（title/abstract/claim/desc の比重）  
+   - semantic：`feature_scope`（wide / claims_only / background_jp など）
+3. **コード・フィルタを決める**  
+   - FI/FT/CPC/IPC、出版年、国、言語などを `filters: list[Cond]` として固定する。
+4. **fusion 上の役割を決める**  
+   - `BlendRequest.weights` で wide/recall/precision のどれに近いかを調整し、  
+     必要に応じて `beta_fuse` や `target_profile` を設定する。
+
+例：
+
+- `semantic_claims_strict` レーン  
+  - `search_semantic` + `feature_scope="claims_only"`、FI/FT を絞り込んだフィルタ、fusion では precision 寄りの weight を付与。
+- `fulltext_background_wide` レーン  
+  - `search_fulltext` + desc や background に少し厚めの `field_boosts` を設定し、分野の広い当たりを付ける用途に使う。
+
+このように、「論理レーン = 物理レーン + MCP パラメータプリセット」と捉えることで、  
+将来的なレーン追加や調整を、MCP ツールの枠組みの中で安全に拡張していくことができます。
 
 ---
 
@@ -1314,58 +1392,66 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 
 **役割**  
 
-- TT-IDF / BM25 系の全文検索レーンを実行するための基本ツール
+- Patentfield バックエンドの `score_type="tfidf"` を用いて、  
+  **TT-IDF / BM25 系の全文検索レーン** を実行するための基本ツール。
+- タイトル／要約／請求の範囲／明細書などへの **フィールド別ブースト** を指定し、  
+  「どの部分の一致を強く見るか」を制御する。
 
-> **注意**：`search_fulltext`/`search_semantic` は `budget_bytes` を受け取らず、`top_k` だけを使って Redis にランキングをキャッシュします。スニペットの byte 制限は `peek_snippets`/`get_snippets` の `budget_bytes`/`per_field_chars` で制御してください。
+> **注意**：`search_fulltext` / `search_semantic` は `budget_bytes` を受け取らず、`top_k` だけを使って Redis にランキングをキャッシュします。  
+> スニペットの byte 制限は `peek_snippets` / `get_snippets` の `budget_bytes` / `per_field_chars` で制御してください。
 
-**呼び出しイメージ（論理）**
+**シグネチャ（`mcp.host` と一致）**
 
-```jsonc
-{
-  "tool": "search_fulltext",
-  "arguments": {
-    "query": "((light-emitting element) NEAR/5 (drive current)) AND H01L*",
-    "filters": {
-      "years": [2010, 2024],
-      "country": ["JP", "US"],
-      "language": ["JA", "EN"],
-      "code_system": "auto",
-      "codes": {
-        "fi": [],
-        "cpc": [],
-        "ipc": ["H01L33/00"]
-      }
-    },
-    ...
-  }
-}
+```python
+search_fulltext(
+    query: str,
+    filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
+    field_boosts: dict[str, float] | None = None,
+    top_k: int = 800,
+    trace_id: str | None = None,
+) -> SearchToolResponse
 ```
 
-**レスポンス（概念）**
+**主な引数**
 
-```jsonc
-{
-  "run_id": "run_fulltext_123",
-  "items": [
-    {
-      "rank": 1,
-      "doc_id": "JP1234567A",
-      "score": 0.87,
-      "codes": {
-        "fi": ["H01L33/00"],
-        "cpc": ["H01L33/00"],
-        "ipc": []
-      }
-    },
-    ...
-  ],
-  "meta": {
-    "took_ms": 120
-  }
-}
-```
+- `query`  
+  - BM25/TF-IDF 系のキーワード検索式。
+- `filters`  
+  - 年・国・言語・分類コードなどの条件（`Cond` のリスト）。
+- `fields`  
+  - レーン検索時に対象とするテキストセクション（`"abst"`, `"title"`, `"claim"` など）。  
+  - 値がない場合は実装側で `None` とし、backend に渡す `columns` は ID（app_id/pub_id/exam_id）＋ requested fields + コードのみとなる。
+- `field_boosts`  
+  - fulltext 専用のフィールドブースト。  
+  - 例: `{"title": 100, "abstract": 10, "claim": 5, "description": 1}`。  
+  - 内部で Patentfield の `weights` にマッピングされ、title/abstract/claims/description への重み付けに使用される。
+- `top_k`  
+  - Redis に保持する上位件数（通常 〜800）。
+- `trace_id`  
+  - 任意のトレース ID。`Meta.trace_id` やログにコピーされる。
 
-> 実際の `search_fulltext` は `FulltextParams` を受け取り、`include` で `codes`/`code_freqs`/`scores` の返却内容を細かく制御でき、`trace_id` で任意の文字列をメタに残せます（`include.code_freqs` を `true` にすれば `response.code_freqs` に集計値が必ず戻ってくる）。
+**戻り値（`SearchToolResponse` 概要）**
+
+- `lane: "fulltext"`  
+  - 実行したレーン名。
+- `run_id_lane: str`  
+  - このレーン実行を識別する ID。  
+  - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` などで参照する。
+- `response: DBSearchResponse`  
+  - `items: list[SearchItem]`  
+    - 各 `SearchItem` は `doc_id`, `score`, `ipc_codes`, `cpc_codes`, `fi_codes`, `ft_codes` を持つ。  
+    - スコアは Patentfield 側の tfidf に基づく。
+  - `code_freqs: dict[str, dict[str, int]]`  
+    - IPC/CPC/FI/FT ごとの頻度集計。
+  - `meta: Meta`  
+    - `meta.took_ms` など、検索に関するメタ情報。
+- `count_returned: int` / `truncated: bool`  
+  - 実際に返ってきた件数と、`top_k` に対して切り詰められたかどうか。
+- `code_freqs`  
+  - `response.code_freqs` と同じ集計値へのショートカット。
+
+> 実装ノート（lane）：payload に `lane` を含めることで、stub 側でも fulltext/semantic の区別を再現しています。
 
 ---
 
@@ -1373,63 +1459,72 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 
 **役割**  
 
-- semantic レーンの検索を実行するツール。  
-- 内部実装は `semantic_style` によって切り替わるが、v1.3 現在は `"default"` のみ実運用対象。
+- Patentfield バックエンドの `score_type="similarity_score"` を用いて、  
+  **類似度（similarity）ベースの semantic レーン** を実行するツール。
+- 「どのセクションから特徴量を抽出するか」を指定することで、  
+  類似度の着目点を切り替える。
+- 将来は、真のベクトル類似検索用の `dense` / `original_dense` レーンを追加し、  
+  ここでの semantic は「Patentfield の similarity スコア」に限定する想定。
 
-> **注意**：`search_semantic` も `budget_bytes` を受け取らず、`top_k` だけを使って ranking を保持します。スニペットを byte で制御したい場合は `peek_snippets`/`get_snippets` に `budget_bytes`/`per_field_chars` を指定してください。
+> **注意**：`search_semantic` も `budget_bytes` を受け取らず、`top_k` だけを使って ranking を保持します。  
+> スニペットを byte で制御したい場合は `peek_snippets` / `get_snippets` に `budget_bytes` / `per_field_chars` を指定してください。
 
-**パラメータ概要**
+> 実装ノート：semantic もテキストを返さず、`get_snippets` は `doc_id` リストを `conditions` の `in` 句で再検索して必要なセクションを拾います（backend はこのような検索をサポートしている必要があります）。
 
-- `text`: 検索意図を表す自然文テキスト（LLM が要約・再構成したものを想定）
-- `filters: Filters`: 年、国、言語などのフィルタ
-- `top_k: int`: 上位何件取得するか（目安：〜800）
-- `semantic_style: "default" | "original_dense"`  
-  - 省略時は "default"  
-  - `"original_dense"` は将来のベクトル検索用で、v1.3 では **実行時に disabled**。  
-    LLM は `search_semantic` を呼ぶ際、`semantic_style` を指定するなら必ず `"default"` を選ぶこと。
+**シグネチャ（`mcp.host` と一致）**
 
-**呼び出しイメージ**
-
-```jsonc
-{
-  "tool": "search_semantic",
-  "arguments": {
-    "text": "A light-emitting element whose drive current is controlled according to temperature, to keep luminance stable.",
-    "filters": {
-      "years": [2010, 2024],
-      "country": ["JP", "US"]
-    },
-    "top_k": 800,
-    "semantic_style": "default"
-  }
-}
+```python
+search_semantic(
+    text: str,
+    filters: list[Cond] | None = None,
+    fields: list[SnippetField] | None = None,
+    feature_scope: str | None = None,
+    top_k: int = 800,
+    trace_id: str | None = None,
+    semantic_style: SemanticStyle = "default",
+) -> SearchToolResponse
 ```
 
-**レスポンス（概念）**
+**主な引数**
 
-```jsonc
-{
-  "run_id": "run_semantic_456",
-  "items": [
-    {
-      "rank": 1,
-      "doc_id": "JP1234567A",
-      "score": 0.87,
-      "codes": {
-        "fi": ["H01L33/00"],
-        "cpc": ["H01L33/00"],
-        "ipc": []
-      }
-    },
-    ...
-  ],
-  "meta": {
-    "took_ms": 200
-  }
-}
-```
+- `text`  
+  - 検索意図を表す自然文テキスト（1〜3 段落程度を想定）。
+- `filters`  
+  - 年、国、言語などのフィルタ（`Cond` のリスト）。
+- `fields`  
+  - lane レベルで返してほしいテキストセクション（`"abst"`, `"title"`, `"claim"` など）。
+- `feature_scope`  
+  - semantic 専用の特徴抽出範囲。ブーストではなく、「どのセクションから特徴量を取るか」の指定。  
+  - 実装上は次の値を想定し、内部で Patentfield の `feature` にマッピングされる:
+    - `"wide"` → `word_weights`（title/abstract/claims/description/審査官キーワード）  
+    - `"title_abst_claims"` → `claims_weights`（title/abstract/claims）  
+    - `"claims_only"` → `all_claims_weights`（claims のみ）  
+    - `"top_claim"` → `top_claim_weights`（トップクレーム）  
+    - `"background_jp"` → `tbpes_weights` 系（JP の背景技術・課題・効果など）
+  - 未指定時は `"wide"` 相当として扱う。
+- `top_k`  
+  - Redis に保持する上位件数（通常 〜800）。
+- `trace_id`  
+  - 任意のトレース ID。
+- `semantic_style`  
+  - 内部実装切り替え用。v1.3 では `"default"` のみ有効で、将来 `original_dense` などの dense レーンと連携させる。
 
-> `search_semantic` も `SemanticParams` を受け取り、`include`/`trace_id` は `search_fulltext` と同じ意味です。レーン固有の `semantic_style` を指定しない場合は `"default"` が使われます。
+> semantic には `field_boosts` は存在しない。  
+> 「どのセクションから特徴を取るか」だけを `feature_scope` で指定し、重み付けやスコアリング本体は Patentfield に委ねる。
+
+**戻り値（`SearchToolResponse` 概要）**
+
+- `lane: "semantic" | "original_dense"`  
+  - `semantic_style` に応じた実レーン名。
+- `run_id_lane: str`  
+  - この semantic 実行を識別する ID。  
+  - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` で使う。
+- `response: DBSearchResponse`  
+  - フィールド構造は `search_fulltext` と同一で、  
+    `items`（`SearchItem` のリスト）、`code_freqs`、`meta` を含む。  
+    スコアは Patentfield 側の similarity スコア（`score_type="similarity_score"`）に基づく。
+- その他のフィールド  
+  - `count_returned`, `truncated`, `code_freqs` などは `search_fulltext` と同様の意味を持つ。
 
 ---
 
@@ -1619,9 +1714,11 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
   "US2020123456A1": {
     "claim": "1. A light-emitting device comprising ...",
     "abst": "An apparatus for ..."
-  }
+}
 }
 ```
+
+> 実装ノート：`get_snippets` は backend の `search` エンドポイントに `conditions`（`pub_id` 等の `in`）を投げ込み、 `columns` で指定した箇所だけを取得しています。バックエンドに `/snippets` エンドポイントがないので、doc_id ベースの検索で必要なセクションだけを絞り込む設計です。
 
 ---
 

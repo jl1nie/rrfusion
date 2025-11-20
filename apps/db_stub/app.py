@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException
 
 from rrfusion.db_stub.generator import (
     generate_search_results,
@@ -75,11 +75,12 @@ async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/search/{lane}", response_model=DBSearchResponse)
-async def search_lane(
-    request_body: dict[str, object],
-    lane: str = Path(..., pattern="^(fulltext|semantic|original_dense)$"),
-) -> DBSearchResponse:
+@app.post("/search", response_model=DBSearchResponse)
+async def search_lane(request_body: dict[str, object]) -> DBSearchResponse:
+    lane: str | None = request_body.get("lane")
+    if lane not in ("fulltext", "semantic", "original_dense"):
+        lane = request_body.get("search_type")
+        lane = "semantic" if lane == "semantic" else "fulltext"
     conditions = request_body.get("conditions")
     filters = _conditions_to_filters(conditions if isinstance(conditions, list) else None)
     if "search_type" in request_body:

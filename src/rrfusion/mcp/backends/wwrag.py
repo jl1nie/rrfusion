@@ -39,7 +39,8 @@ class WWRagBackend(HttpLaneBackend):
 
     async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
         payload = self._build_search_payload(request, lane)
-        response = await self.http.post(f"{self.search_path}/{lane}", json=payload)
+        payload["lane"] = lane
+        response = await self.http.post(self.search_path, json=payload)
         response.raise_for_status()
         return self._parse_search_response(response.json())
 

@@ -25,6 +25,7 @@ agent:
     - Always respect lane definitions in this config.
     - Never use semantic_style: "original_dense" (it is disabled in v1.3).
     - Do not mix code systems within a single lane.
+    - When adjusting field_boosts/feature_scope or mutate_run weights automatically, limit to three experiment cycles per lane before pausing for a human review.
     - Prefer recall-first design, then tune toward precision using mutate_run.
     - Always show your plan (which lanes, which tools, which parameters).
     - Always answer the human in Japanese, but keep identifiers and JSON keys in English.
@@ -45,6 +46,8 @@ pipeline:
       tools:
         - search_fulltext   # fulltext_wide
         - search_semantic   # semantic
+      notes:
+        - Ranking calls collect doc_id/score/codes only; snippet text is fetched later in the snippets step.
 
     - id: code_profiling
       description: Build target_profile from the fulltext_wide run via get_provenance.
@@ -55,6 +58,8 @@ pipeline:
       description: Run fulltext_recall and fulltext_precision using target_profile and refined queries.
       tools:
         - search_fulltext
+      notes:
+        - These lane calls also only collect ranking metadata; use snippets step to read text before presenting candidates.
 
     - id: fusion
       description: Fuse lanes via blend_frontier_codeaware into a blended run.
@@ -78,6 +83,12 @@ lanes:
   - name: fulltext_wide
     tool: search_fulltext
     purpose: wide_recall
+    parameters:
+      field_boosts:
+        title: 80
+        abstract: 10
+        claim: 5
+        description: 1
     query_style:
       description: >
         Use a relatively long natural-language description or keyword mix describing the invention.
@@ -98,6 +109,7 @@ lanes:
     purpose: conceptual_recall
     parameters:
       semantic_style: default   # "original_dense" is disabled in v1.3
+      feature_scope: wide       # wide = title/abst/claims/desc + examiner keywords
     query_style:
       description: >
         Use 1–3 paragraphs summarizing the core technical idea, purpose, and effect.
@@ -115,6 +127,12 @@ lanes:
   - name: fulltext_recall
     tool: search_fulltext
     purpose: infield_recall
+    parameters:
+      field_boosts:
+        title: 40
+        abstract: 10
+        claim: 5
+        description: 4
     query_style:
       description: >
         Use feature_terms and synonym_clusters grouped by function or structure.
@@ -133,6 +151,12 @@ lanes:
   - name: fulltext_precision
     tool: search_fulltext
     purpose: high_precision
+    parameters:
+      field_boosts:
+        title: 120
+        abstract: 20
+        claim: 40
+        description: 1
     query_style:
       description: >
         Use claim-chart-like elements. Split into:
@@ -197,6 +221,8 @@ snippet_policy:
       - focus_on_most_promising_docs_for_human_review
     notes:
       - Use per_field_chars to make claims thicker (for example {"claim": 4000, "abst": 2000}) while keeping the overall payload uncapped by budget_bytes.
+    implementation_note:
+      - search_fulltext / search_semantic produce rankings without textual snippets; peek_snippets/get_snippets are the only APIs providing text content.
 
 tool_usage:
   search_fulltext:
@@ -210,9 +236,11 @@ tool_usage:
     key_arguments:
       - query
       - filters
+      - field_boosts
       - top_k
     notes:
       - Use different query styles per lane as defined under lanes.
+      - Keep `fields` minimal (e.g., default list or omit) and treat this tool as only returning doc_id/score/codes; do not request this tool for snippet text.
       - Treat `query` as a search expression composed of keywords, logical operators, parentheses, and special keywords.
       - Logical operators: `AND` / `and` / (implicit AND when omitted), `OR`, `NOT` / `not`; use parentheses `()` to group parts of the expression.
       - Phrase search: wrap terms in double quotes to search for an exact phrase, e.g. `"solar panel"`.
@@ -226,12 +254,15 @@ tool_usage:
     key_arguments:
       - text
       - filters
+      - feature_scope
       - top_k
       - semantic_style
     constraints:
       - semantic_style must be "default" in v1.3 (original_dense is disabled).
     notes:
       - Use a concise conceptual description, not a long keyword list.
+      - Choose feature_scope according to lane purpose (e.g., wide, title_abst_claims, claims_only, background_jp); it maps to Patentfield's feature parameter.
+      - Do not ask this tool to produce textual snippets; rely on peek_snippets/get_snippets for text.
 
   blend_frontier_codeaware:
     when_to_use:
@@ -274,6 +305,7 @@ tool_usage:
     notes:
       - Use for 10–20 most promising docs after peek_snippets.
       - Provide richer claims and abstract snippets for human judgment.
+      - Best practice: keep search_fulltext/search_semantic calls text-free (set `fields` to null/minimal) and let snippets step request textual payloads.
 
   mutate_run:
     when_to_use:
@@ -306,3 +338,13 @@ language_policy:
       - Explain search plans, tool calls, and results in Japanese.
       - Keep technical identifiers (lane names, tool names, JSON keys, code labels) in English.
       - When quoting snippets from patents, preserve original language (JA/EN) as-is.
+
+semantic_feature_presets:
+  wide: word_weights
+  title_abst_claims: claims_weights
+  claims_only: all_claims_weights
+  top_claim: top_claim_weights
+  background_jp: tbpes_weights
+reference_tables:
+  purpose: Use this dictionary as the definitive mapping for which Patentfield feature corresponds to each semantic feature_scope; mention it whenever you define a new semantic lane.
+  note: Update semantic_feature_presets whenever you introduce a new feature_scope variant so the prompt and spec stay in sync.

@@ -66,9 +66,9 @@ class HttpLaneBackend(LaneBackend):
         self.publications_path = publications_path.rstrip("/")
 
     async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
-        response = await self.http.post(
-            f"{self.search_path}/{lane}", json=request.model_dump()
-        )
+        payload = request.model_dump()
+        payload["lane"] = lane
+        response = await self.http.post(self.search_path, json=payload)
         response.raise_for_status()
         return DBSearchResponse.model_validate(response.json())
 

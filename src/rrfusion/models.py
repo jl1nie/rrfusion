@@ -8,6 +8,13 @@ from pydantic import BaseModel, Field
 
 Lane = Literal["fulltext", "semantic", "original_dense"]
 SemanticStyle = Literal["default", "original_dense"]
+FeatureScope = Literal[
+    "wide",
+    "title_abst_claims",
+    "claims_only",
+    "top_claim",
+    "background_jp",
+]
 SnippetField = Literal[
     "title",
     "abst",
@@ -63,6 +70,7 @@ class FulltextParams(BaseModel):
     filters: list[Cond] = Field(default_factory=list)
     top_k: int = 800
     trace_id: str | None = None
+    field_boosts: dict[str, float] | None = None
     include: IncludeOpts = IncludeOpts()
     fields: list[SnippetField] = Field(
         default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
@@ -79,6 +87,7 @@ class SemanticParams(BaseModel):
         default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
     )
     semantic_style: SemanticStyle = "default"
+    feature_scope: FeatureScope | None = None
 
 
 class SearchToolResponse(BaseModel):
@@ -256,6 +265,8 @@ class MutateResponse(BaseModel):
 
 __all__ = [
     "Lane",
+    "SemanticStyle",
+    "FeatureScope",
     "Meta",
     "Cond",
     "IncludeOpts",

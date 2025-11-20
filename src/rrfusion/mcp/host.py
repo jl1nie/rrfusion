@@ -141,6 +141,36 @@ def _record_tool_timing(response: Any, took_ms: int) -> None:
         response.meta["took_ms"] = took_ms
 
 
+def _normalize_optional_list(value: Any) -> Any:
+    """Coerce empty objects/lists for optional list-typed tool arguments to None."""
+    if value is None:
+        return None
+    if value == {}:
+        return None
+    if isinstance(value, list):
+        return value
+    # Any other unexpected type: leave as-is and let validation fail loudly
+    return value
+
+
+def _normalize_optional_dict(value: Any) -> Any:
+    """Coerce empty dict-like values for optional dict-typed arguments to None."""
+    if value is None:
+        return None
+    if value == {}:
+        return None
+    return value
+
+
+def _normalize_optional_str(value: Any) -> Any:
+    """Normalize empty strings or empty containers for optional str-like arguments to None."""
+    if value is None:
+        return None
+    if value == "" or value == {} or value == []:
+        return None
+    return value
+
+
 # ============================
 # Prompts
 # ============================
@@ -155,6 +185,7 @@ async def search_fulltext(
     query: str,
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
+    field_boosts: dict[str, float] | None = None,
     top_k: int = 800,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
@@ -176,6 +207,10 @@ async def search_fulltext(
         type: list[SnippetField]
         required: false
         description: Which text sections to index/return; defaults to ["abst","title","claim"].
+      field_boosts:
+        type: dict[string,float]
+        required: false
+        description: Optional per-field boosts for the fulltext backend (e.g., {"title":100,"abst":10,"claim":5}); controls Patentfield weights.
       top_k:
         type: int
         required: false
@@ -192,13 +227,15 @@ async def search_fulltext(
         description: Handle for this fulltext lane run, to be used in fusion, peek_snippets, and provenance.
       notes:
         - Response also includes lane-level code frequencies and timing metadata in response.meta.took_ms.
+        - Text sections are not stored in this response; use peek_snippets/get_snippets for snippet text.
     """
     start = perf_counter()
     response = await _require_service().search_lane(
         "fulltext",
         query=query,
-        filters=filters,
-        fields=fields,
+        filters=_normalize_optional_list(filters),
+        fields=_normalize_optional_list(fields),
+        field_boosts=_normalize_optional_dict(field_boosts),
         top_k=top_k,
         trace_id=trace_id,
     )
@@ -211,15 +248,16 @@ async def search_semantic(
     text: str,
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
+    feature_scope: str | None = None,
     top_k: int = 800,
     trace_id: str | None = None,
     semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse:
     """
-    summary: Run semantic-style search based on a natural language description.
+    summary: Run similarity-score-based semantic search using natural language guidance.
     when_to_use:
-      - Use in the wide_search step for the semantic lane.
-      - Use when you need concept-level similarity beyond exact keyword matches.
+      - Use in the wide_search step for the semantic lane when you need contextual similarity.
+      - Use when you want to adjust which sections (claims/background/etc.) drive the similarity score.
     arguments:
       text:
         type: string
@@ -233,10 +271,14 @@ async def search_semantic(
         type: list[SnippetField]
         required: false
         description: Which text sections to return in lane snippets; defaults to ["abst","title","claim"].
+      feature_scope:
+        type: '"wide" | "title_abst_claims" | "claims_only" | "top_claim" | "background_jp"'
+        required: false
+        description: Semantic feature scope controlling which sections contribute to similarity (mapped to Patentfield feature).
       top_k:
         type: int
         required: false
-        description: Number of top results to retrieve (typically up to 800).
+        description: Number of top results to retrieve (typically up to 800) for ranking storage only (snippet text is not returned).
       trace_id:
         type: string
         required: false
@@ -252,15 +294,17 @@ async def search_semantic(
       run_id_lane:
         description: ID of this semantic search run, to be used in fusion, peek_snippets, and provenance.
       notes:
-        - Results include doc_id, score, and code information for downstream fusion and analysis.
+        - Results include doc_id, similarity score, and code information for downstream fusion and analysis.
+        - Text sections are not stored; ask for snippets via peek_snippets/get_snippets when needed.
     """
     lane = "semantic" if semantic_style == "default" else "original_dense"
     start = perf_counter()
     response = await _require_service().search_lane(
         lane,
         text=text,
-        filters=filters,
-        fields=fields,
+        filters=_normalize_optional_list(filters),
+        fields=_normalize_optional_list(fields),
+        feature_scope=_normalize_optional_str(feature_scope),
         top_k=top_k,
         trace_id=trace_id,
         semantic_style=semantic_style,

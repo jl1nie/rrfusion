@@ -27,6 +27,7 @@ from ..models import (
     BlendRunInput,
     Cond,
     DBSearchResponse,
+    FeatureScope,
     FulltextParams,
     GetPublicationRequest,
     GetSnippetsRequest,
@@ -74,10 +75,6 @@ FIELD_MIN_CHARS = {
     "pub_id": 32,
     "exam_id": 32,
 }
-SNIPPET_FIELDS = FIELD_ORDER.copy()
-SNIPPET_DEFAULT_PER_FIELD = {
-    field: FIELD_DEFAULT_CHARS.get(field, 120) for field in SNIPPET_FIELDS
-}
 
 DEFAULT_WEIGHTS = {
     "fulltext": 1.0,
@@ -122,6 +119,12 @@ def _search_meta(lane: str, params: SearchParams) -> Meta:
     semantic_style = getattr(params, "semantic_style", None)
     if semantic_style is not None:
         meta_params["semantic_style"] = semantic_style
+    field_boosts = getattr(params, "field_boosts", None)
+    if field_boosts is not None:
+        meta_params["field_boosts"] = field_boosts
+    feature_scope = getattr(params, "feature_scope", None)
+    if feature_scope is not None:
+        meta_params["feature_scope"] = feature_scope
     return Meta(
         lane=lane,
         top_k=params.top_k,
@@ -207,6 +210,8 @@ class MCPService:
         top_k: int = 800,
         trace_id: str | None = None,
         semantic_style: SemanticStyle = "default",
+        field_boosts: dict[str, float] | None = None,
+        feature_scope: FeatureScope | None = None,
     ) -> SearchToolResponse:
         start = perf_counter()
         backend = self.backend_registry.get_backend(lane)
@@ -234,6 +239,7 @@ class MCPService:
                     fields=requested_fields,
                     top_k=top_k,
                     trace_id=trace_id,
+                    field_boosts=field_boosts,
                 )
             else:
                 actual_text = text
@@ -250,22 +256,11 @@ class MCPService:
                     top_k=top_k,
                     trace_id=trace_id,
                     semantic_style=semantic_style,
+                    feature_scope=feature_scope,
                 )
         db_payload = await backend.search(params, lane=lane)
         # hydrate lane results into dictionaries for caching and snippet fetching
         docs = [item.model_dump(exclude_none=True) for item in db_payload.items]
-        backend = self.backend_registry.get_backend(lane)
-        if backend and docs:
-            snippet_ids = [doc["doc_id"] for doc in docs]
-            fetched_snippets = await self._fetch_snippets_from_backend(
-                backend,
-                lane,
-                ids=snippet_ids,
-                fields=SNIPPET_FIELDS,
-                per_field_chars=SNIPPET_DEFAULT_PER_FIELD,
-            )
-            for doc in docs:
-                doc.update(fetched_snippets.get(doc["doc_id"], {}))
         # compute stats for the run
         count_returned = len(docs)
         truncated = count_returned < params.top_k
