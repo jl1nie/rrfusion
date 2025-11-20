@@ -1604,7 +1604,7 @@ blend_frontier_codeaware(
 **役割**
 
 - 指定 fusion run の上位 50〜100 件を `budget_bytes` 以内で preview し、人間の顔ぶれ確認を助ける軽量ツール。
-- `per_field_chars` / `budget_bytes` で出力フィールドを制御し、必要な `fields` のみを JSON に含める。
+- `per_field_chars` / `budget_bytes` で出力 fields を調整し、必要な field のみを JSON に含める。
 
 **シグネチャ**
 
@@ -1621,8 +1621,8 @@ peek_snippets(
 
 **主な引数**
 
-- `run_id`: `blend_frontier_codeaware` または `mutate_run` の run_id。
-- `offset`, `limit`: ランキング上のスライド。
+- `run_id`: `blend_frontier_codeaware` / `mutate_run` の fusion run ID。
+- `offset`, `limit`: ランキング内のスライド。
 - `fields`: 返すテキストセクション（デフォルト `['title','abst','claim']`）。
 - `per_field_chars`: 各 field ごとの文字数上限。
 - `budget_bytes`: JSON 全体のバイト予算。
@@ -1632,7 +1632,7 @@ peek_snippets(
 - `snippets`: `PeekSnippet` のリスト（`id` + `fields`）。
 - `meta`: `PeekMeta`（`used_bytes`, `truncated`, `peek_cursor`, `total_docs`, `retrieved`, `returned`, `took_ms`）。
 
-> 実装ノート：このツールは `mutate_run`/`get_provenance` 後の比較ループで毎回呼び、複数設定の顔ぶれを定量・定性にわたって評価します。
+> 実装ノート：このツールは `mutate_run` / `get_provenance` を挟んだループで複数回呼び、前後の顔ぶれを定量・定性の両面で比較します。
 
 **使用例**
 
@@ -1651,7 +1651,7 @@ peek_snippets(
 
 **典型的な場面**
 
-- fusion 直後に `peek_snippets` を呼び、`mutate_run` する前に上位命中文献の傾向をざっと見る。
+- fusion 実行後、`mutate_run` などで `weights` を変える前に上位を大きく俯瞰する。
 ### 8.6 `get_snippets`
 
 **役割**
@@ -1748,32 +1748,8 @@ mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
 
 **役割**
 
-- 既存の fusion run に対して `weights`, `rrf_k`, `beta_fuse` を上書きし、新しい run を生成する。
-- 結果は `MutateResponse` で返され、`recipe` に `delta` を含める。
-
-**シグネチャ**
-
-```python
-mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
-```
-
-**主な引数**
-
-- `run_id`: ベースとなる fusion run。
-- `delta`: `weights`, `rrf_k`, `beta_fuse` の上書き。指定しない項目は元 run の recipe を継承。
-
-**戻り値（`MutateResponse`）**
-
-- `new_run_id`: 生成された fusion run。
-- `frontier`: `BlendFrontierEntry` リスト。
-- `recipe`: 新 recipe（`delta` を含む）。
-- `meta`: `took_ms` 等。
-
-> 実装ノート：`delta` は差分ではなく絶対値として扱われ、変えない設定は元の recipe から引き継がれます。### 8.8 `get_provenance`
-
-**役割**
-
-- 指定 run の recipe, lane contributions, code distributions を調査する。
+- ある run の recipe, lane contributions, code distributions を詳しく調査する。
+- `BlendResponse`/`MutateResponse` の関連 run を監査するための鑑賞ビュー。
 
 **シグネチャ**
 
@@ -1783,15 +1759,15 @@ get_provenance(run_id: str) -> ProvenanceResponse
 
 **主な引数**
 
-- `run_id`: lane run もしくは fusion run。
+- `run_id`: lane run または fusion run で、`blend_frontier_codeaware` や `mutate_run` の出力に使用した ID。
 
 **戻り値（`ProvenanceResponse`）**
 
-- `lane_contributions`: 各 lane/run の寄与度。
+- `lane_contributions`: 各 lane/run がどれだけスコアに貢献したか。
 - `code_distributions`: IPC/CPC/FI/FT の分布。
-- `config_snapshot`: `weights`, `rrf_k`, `beta_fuse`, `target_profile` 等。
+- `config_snapshot`: `weights`, `rrf_k`, `beta_fuse`, `target_profile` などの設定。
 
-> 実装ノート：`code_profiling` では `fulltext_wide` を指定して target_profile を構築し、`tuning` では fusion run を渡して変更後のバランスを確認するループに使います。
+> 実装ノート：`code_profiling` では `fulltext_wide` を指定し、`target_profile` を構築するためにこのツールを使用します。`tuning` では fusion run を渡して、mutate 後のバランスを確認するループで回します。
 
 **使用例**
 
@@ -1806,8 +1782,8 @@ get_provenance(run_id: str) -> ProvenanceResponse
 
 **典型的な場面**
 
-- `fulltext_wide` の code_distribution を見て `target_profile` を再設計する。
-- `mutate_run` 前後で `lane_contributions` を比較し、意図した lane が貢献しているか検証する。
+- fusion 実行直後に lane contributions と code distributions を記録して target_profile を更新する。
+- mutate_run 前後で `config_snapshot` を比較し、どの lane が強化されたかを判断する。
 
 ## 9. まとめ
 
