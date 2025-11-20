@@ -863,9 +863,11 @@ target_profile: {...}  # Step 3 で構築したもの
 
 ---
 
-### Step 6. Snippet Budgeting & Human Review
+### Step 6. Snippet Budgeting & Human / LLM Review
 
 ここでは、`run_id_blend` を人間が確認しやすい形に落とし込むためのステップです。
+
+LLM エージェント側でもこのステップを踏むことが前提で、`peek_snippets`/`get_snippets` を使って得られたテキストをプロンプトに組み込んだり、ユーザへの説明に活用します。
 
 #### 6.1 `peek_snippets` による軽量ビュー
 
