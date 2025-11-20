@@ -107,13 +107,13 @@ TT-IDF は BM25 と同系統のスコアリングです。BM25 の代表的な�
 \frac{f(t, d) \cdot (k_1 + 1)}{f(t, d) + k_1 \cdot \left(1 - b + b \cdot \frac{|d|}{\text{avgdl}}\right)}
 \]
 
-- \(d\)：文書
-- \(q\)：クエリ
-- \(t\)：クエリ中の用語（term）
-- \(f(t, d)\)：文書 \(d\) における用語 \(t\) の出現頻度
-- \( |d| \)：文書長
+- $d$：文書
+- $q$：クエリ
+- $t$：クエリ中の用語（term）
+- $f(t, d)$：文書 $d$ における用語 $t$ の出現頻度
+- $ |d| $：文書長
 - avgdl：平均文書長
-- \(k_1, b\)：調整パラメータ
+- $k_1, b$：調整パラメータ
 
 **ポイント**
 
@@ -128,7 +128,7 @@ RRFusion MCP では、具体的な式は検索バックエンドに依存しま�
 
 Dense 検索は、文書やクエリをベクトル（埋め込み）に変換し、その類似度でランキングするものです。
 
-- クエリ \(q\) と文書 \(d\) をそれぞれベクトル \(v_q, v_d\) に写像
+- クエリ $q$ と文書 $d$ をそれぞれベクトル $v_q, v_d$ に写像
 - 類似度（スコア）をコサイン類似度などで定義
 
 \[
@@ -149,11 +149,11 @@ RRFusion MCP では、レーン `semantic` や将来実装予定の `original_de
 \text{RRF}(d) = \sum_{\ell} \frac{1}{k + \text{rank}_\ell(d)}
 \]
 
-- \(\ell\)：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
-- \(\text{rank}_\ell(d)\)：レーン \(\ell\) における文献 \(d\) の順位（1始まり）
-- \(k\)：調整パラメータ（ランキングが「効きすぎる」のを和らげる役割）
+- $\ell$：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
+- $\text{rank}_\ell(d)$：レーン $\ell$ における文献 $d$ の順位（1始まり）
+- $k$：調整パラメータ（ランキングが「効きすぎる」のを和らげる役割）
 
-RRFusion MCP では、レーンごとに重み \(w_\ell\) を掛けた形で使います。
+RRFusion MCP では、レーンごとに重み $w_\ell$ を掛けた形で使います。
 
 \[
 \text{RRF}_w(d) = \sum_{\ell} w_\ell \cdot \frac{1}{k + \text{rank}_\ell(d)}
@@ -183,8 +183,8 @@ RRFusion MCP v1.3 は、実務上の制約から「厳密なラベル付きデ�
 F_\beta = (1 + \beta^2) \cdot \frac{\text{Precision} \cdot \text{Recall}}{(\beta^2 \cdot \text{Precision}) + \text{Recall}}
 \]
 
-- \(\beta > 1\)：Recall 重視（見落としを嫌う）
-- \(\beta < 1\)：Precision 重視（外れ文献を嫌う）
+- $\beta > 1$：Recall 重視（見落としを嫌う）
+- $\beta < 1$：Precision 重視（外れ文献を嫌う）
 
 実際には「真の Precision / Recall」はわかりませんが、
 
@@ -601,7 +601,7 @@ LLM が search_fulltext の `query` を組み立てる際は、上記の構文�
 
 **RRF における位置づけ**
 
-- `fulltext_precision` レーンは RRF 重み \(w_\ell\) を高めに設定し、
+- `fulltext_precision` レーンは RRF 重み $w_\ell$ を高めに設定し、
   - 上位に来た文献を強く押し上げる役割を持たせることが多い。
 - 一方で、`fulltext_wide` や `semantic` レーンからも候補が来るため、  
  これらとのバランスを `blend_frontier_codeaware` で調整する。
@@ -617,12 +617,12 @@ LLM が search_fulltext の `query` を組み立てる際は、上記の構文�
 
 **実装イメージ**
 
-- `target_profile` に基づき、文献ごとにコードスコア \(g(d)\) を計算し、  
+- `target_profile` に基づき、文献ごとにコードスコア $g(d)$ を計算し、  
   それを ZSET として保持する：
   - 例：キー `z:rank_code:{snapshot}` に `{doc_id: g(d)}` を格納
 - `blend_frontier_codeaware` の際に、
   - 他のレーンと同様に one lane として扱い、
-  - RRF レーン重み \(w_{\text{code}}\) を小さめ（例：0.3〜0.5）に設定する。
+  - RRF レーン重み $w_{\text{code}}$ を小さめ（例：0.3〜0.5）に設定する。
 
 **注意点**
 
@@ -835,7 +835,7 @@ target_profile: {...}  # Step 3 で構築したもの
 ```
 
 - `weights`：
-  - レーンごとの RRF 重み \(w_\ell\)
+  - レーンごとの RRF 重み $w_\ell$
 - `rrf_k`：
   - RRF の k パラメータ
 - `beta_fuse`：
@@ -1059,9 +1059,9 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 \text{score}_\ell(d) = \frac{w_\ell}{\text{rrf\_k} + \text{rank}_\ell(d)}
 \]
 
-- \(\ell\)：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
-- \(w_\ell\)：レーンの重み（後述の lane weights）
-- \(\text{rank}_\ell(d)\)：レーン \(\ell\) における文書 \(d\) の順位（1始まり）
+- $\ell$：レーン（`fulltext_wide`, `semantic`, `fulltext_recall`, `fulltext_precision`, ...）
+- $w_\ell$：レーンの重み（後述の lane weights）
+- $\text{rank}_\ell(d)$：レーン $\ell$ における文書 $d$ の順位（1始まり）
 - `rrf_k`：RRF の調整パラメータ（60〜120 程度）
 
 実装上は：
@@ -1082,7 +1082,7 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 上記は「最終的に到達したい実装イメージ」であり、現行バージョンではもう少し素朴な構成になっています。
 
 - レーン検索（`search_fulltext` / `search_semantic` など）では、DB stub から返されたスコアをそのまま ZSET に格納しており、  
-  RRF 用の \(\text{score}_\ell(d)\) は **fusion 時に Python 側で計算** しています  
+  RRF 用の $\text{score}_\ell(d)$ は **fusion 時に Python 側で計算** しています  
   - 実装では `compute_rrf_scores`（`src/rrfusion/fusion.py`）で、各レーンの順位と `weights` に基づいて RRF スコアを計算しています
 - 計算した fused スコアは、`store_rrf_run`（`src/rrfusion/storage.py`）を通じて `z:rrf:{run_id}` に保存されます
 - Redis の `ZUNIONSTORE` を用いたレーン ZSET 同士の直接的な加算は、現行実装ではまだ行っていません
@@ -1112,47 +1112,47 @@ T = \{\, c \mapsto T_c \,\}
 
 #### A) 文献ごとのブースト（Per-doc boost）
 
-まず、文献 \(d\) に付与されているコード集合を \(\mathcal{C}(d)\) とします。  
-この文献が `target_profile` とどの程度重なるかを表すスコア \(g(d)\) を計算します。
+まず、文献 $d$ に付与されているコード集合を $\mathcal{C}(d)$ とします。  
+この文献が `target_profile` とどの程度重なるかを表すスコア $g(d)$ を計算します。
 
 \[
 g(d) = \sum_{c \in \mathcal{C}(d)} T_c \cdot h(c)
 \]
 
-- \(T_c\)：`target_profile` におけるコード \(c\) の重み
-- \(h(c)\)：階層マッチの補正等を行う係数  
+- $T_c$：`target_profile` におけるコード $c$ の重み
+- $h(c)$：階層マッチの補正等を行う係数  
   （例：完全一致なら 1.0、上位階層一致なら 0.5 など）
 
-この \(g(d)\) を [0,1] に正規化したものを \(\text{norm}(g(d))\) とし、  
-各レーン \(\ell\) のスコアを次のように補正します。
+この $g(d)$ を [0,1] に正規化したものを $\text{norm}(g(d))$ とし、  
+各レーン $\ell$ のスコアを次のように補正します。
 
 \[
 \hat{s}_\ell(d) = s_\ell(d) \cdot \left(1 + \alpha_\ell \cdot \text{norm}(g(d))\right)
 \]
 
-- \(s_\ell(d)\)：元の RRF 用スコア
-- \(\hat{s}_\ell(d)\)：コード情報でブーストされたスコア
-- \(\alpha_\ell\)：レーンごとのコード感度パラメータ（0 以上）
+- $s_\ell(d)$：元の RRF 用スコア
+- $\hat{s}_\ell(d)$：コード情報でブーストされたスコア
+- $\alpha_\ell$：レーンごとのコード感度パラメータ（0 以上）
 
 **実装メモ**
 
 - `hat_s_ℓ(d)` は ZSET のスコアとして反映される  
-- レーンごとに \(\alpha_\ell\) を変えることで、  
+- レーンごとに $\alpha_\ell$ を変えることで、  
   「このレーンはコードに敏感／鈍感」といったチューニングが可能  
-- \(\alpha_\ell\) は内部実装用の固定パラメータであり、MCP ツール引数からは変更できない
+- $\alpha_\ell$ は内部実装用の固定パラメータであり、MCP ツール引数からは変更できない
 
 #### B) レーン重みの調整（Lane modulation）
 
-各レーン \(\ell\) について、そのレーンの結果に含まれるコード頻度を集計して  
-コード頻度ベクトル \(F_\ell\) を作ります：
+各レーン $\ell$ について、そのレーンの結果に含まれるコード頻度を集計して  
+コード頻度ベクトル $F_\ell$ を作ります：
 
 \[
 F_\ell = \{\, c \mapsto f_{\ell,c} \,\}
 \]
 
-- \(f_{\ell,c}\)：レーン \(\ell\) におけるコード \(c\) の出現頻度
+- $f_{\ell,c}$：レーン $\ell$ におけるコード $c$ の出現頻度
 
-`target_profile` \(T\) と \(F_\ell\) の類似度を例えばコサイン類似度で定義します：
+`target_profile` $T$ と $F_\ell$ の類似度を例えばコサイン類似度で定義します：
 
 \[
 \text{sim}(F_\ell, T) =
@@ -1165,9 +1165,9 @@ F_\ell = \{\, c \mapsto f_{\ell,c} \,\}
 w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 \]
 
-- \(w_\ell\)：元のレーン重み
-- \(w'_\ell\)：コード適合度を反映した新しいレーン重み
-- \(\beta\)：調整強度（正の値。大きいほど「target_profile に一致するレーン」を優遇）
+- $w_\ell$：元のレーン重み
+- $w'_\ell$：コード適合度を反映した新しいレーン重み
+- $\beta$：調整強度（正の値。大きいほど「target_profile に一致するレーン」を優遇）
 
 **実装メモ**
 
@@ -1178,8 +1178,8 @@ w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 
 場合によっては、コード情報だけでランキングする補助レーンを作ることもできます。
 
-- 文献ごとの \(g(d)\) をスコアとする ZSET（例：`rank_code(d)`）を作り、
-- これを小さな重み \(w_{\text{code}}\)（例：0.5）で融合に加える
+- 文献ごとの $g(d)$ をスコアとする ZSET（例：`rank_code(d)`）を作り、
+- これを小さな重み $w_{\text{code}}$（例：0.5）で融合に加える
 
 これにより、
 
@@ -1194,7 +1194,7 @@ w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 - A) 文献ごとのブーストについて  
   - 実装では `apply_code_boosts`（`src/rrfusion/fusion.py`）で、文献ごとのコード集合と `target_profile` の重みを用いて  
     「コード重みの総和（boost）」を計算し、それに `weights["code"]` を掛けた値を **加算ブースト** としてスコアに足しています
-  - 正規化 \(\text{norm}(g(d))\) やレーンごとの感度パラメータ \(\alpha_\ell\) は現時点では導入しておらず、  
+  - 正規化 $\text{norm}(g(d))$ やレーンごとの感度パラメータ $\alpha_\ell$ は現時点では導入しておらず、  
     乗算ではなく「fused スコアに対する一律の加算」として扱っています
 
 - B) レーン重みの調整について  
@@ -1219,12 +1219,12 @@ w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 `mutate_run` によるパラメータ探索を支えるために、  
 「ある設定における精度・再現度の見込み」をプロキシで見積もる仕組みを持ちます。
 
-ある融合スコア \(\hat{s}(d)\)（例えば A/B/C をすべて反映後の最終スコア）に対して、  
-複数の \(k\) 値（上位何件までを見るか）からなるグリッド \(k_{\text{grid}}\) を用意し、それぞれについて：
+ある融合スコア $\hat{s}(d)$（例えば A/B/C をすべて反映後の最終スコア）に対して、  
+複数の $k$ 値（上位何件までを見るか）からなるグリッド $k_{\text{grid}}$ を用意し、それぞれについて：
 
-- **\(P_\ast(k)\)**：上位 k 件の「平均的な関連度プロキシ」
-- **\(R_\ast(k)\)**：上位 k 件までの「再現度プロキシ」
-- **\(F_{\beta,\ast}(k)\)**：これらから計算した Fβ 相当値
+- **$P_\ast(k)$**：上位 k 件の「平均的な関連度プロキシ」
+- **$R_\ast(k)$**：上位 k 件までの「再現度プロキシ」
+- **$F_{\beta,\ast}(k)$**：これらから計算した Fβ 相当値
 
 を算出します。
 
@@ -1234,11 +1234,11 @@ w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 \pi'(d) = \sigma(a \cdot \hat{s}(d) + b + \gamma \cdot z(g(d)))
 \]
 
-- \(\sigma(\cdot)\)：シグモイド関数（0〜1の値に圧縮）
-- \(z(g(d))\)：コード重み \(g(d)\) に対する変換（標準化など）
-- \(a,b,\gamma\)：調整パラメータ
+- $\sigma(\cdot)$：シグモイド関数（0〜1の値に圧縮）
+- $z(g(d))$：コード重み $g(d)$ に対する変換（標準化など）
+- $a,b,\gamma$：調整パラメータ
 
-とおき、\(P_\ast(k)\) を、
+とおき、$P_\ast(k)$ を、
 
 \[
 P_\ast(k) = \frac{1}{k} \sum_{d \in \text{Top-}k} \pi'(d)
@@ -1246,17 +1246,17 @@ P_\ast(k) = \frac{1}{k} \sum_{d \in \text{Top-}k} \pi'(d)
 
 のように定義します。
 
-一方、\(R_\ast(k)\) は技術分野のカバレッジを proxy として、
+一方、$R_\ast(k)$ は技術分野のカバレッジを proxy として、
 
 \[
 R_\ast(k) = \rho \cdot \text{coverage}(k) + (1 - \rho) \cdot \text{CDF\_score}(k)
 \]
 
-- \(\text{coverage}(k)\)：上位 k 件で `target_profile` に含まれるコードがどれだけ多様にカバーされているか
-- \(\text{CDF\_score}(k)\)：スコアの累積分布に基づく指標（詳細は実装依存）
-- \(\rho\)：カバレッジとスコアのバランスを決める係数
+- $\text{coverage}(k)$：上位 k 件で `target_profile` に含まれるコードがどれだけ多様にカバーされているか
+- $\text{CDF\_score}(k)$：スコアの累積分布に基づく指標（詳細は実装依存）
+- $\rho$：カバレッジとスコアのバランスを決める係数
 
-最後に、通常の Fβ の式を使って \(F_{\beta,\ast}(k)\) を求めます：
+最後に、通常の Fβ の式を使って $F_{\beta,\ast}(k)$ を求めます：
 
 \[
 F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \cdot P_\ast(k) + R_\ast(k)}
@@ -1267,19 +1267,19 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 
 #### 実装メモ（現行バージョン）
 
-上記の \(\pi'(d)\) によるシグモイド型のプロキシは、現時点では **将来拡張案** であり、  
+上記の $\pi'(d)$ によるシグモイド型のプロキシは、現時点では **将来拡張案** であり、  
 実装ではもう少し素朴な形でフロンティアを計算しています。
 
 - `target_profile` に基づいて、各文献ごとに「関連ラベル相当」のフラグ（関連あり/なし）を付与する  
   - 実装では `compute_relevance_flags`（`src/rrfusion/fusion.py`）で、  
     ターゲット側のコード重みの総和が 0 を超えるかどうかで 2 値フラグを決めている
-- 指定された \(k_{\text{grid}}\) それぞれについて、上位 k 件における  
+- 指定された $k_{\text{grid}}$ それぞれについて、上位 k 件における  
   - precision（関連フラグが立っている件数 / k）
   - recall（関連フラグが立っている件数 / 全関連文献数）
-  を計算し、通常の Fβ 式で \(F_{\beta,\ast}(k)\) を求める  
+  を計算し、通常の Fβ 式で $F_{\beta,\ast}(k)$ を求める  
   - 実装では `compute_frontier`（`src/rrfusion/fusion.py`）で計算している
 
-このため、現行実装の \(P_\ast(k), R_\ast(k), F_{\beta,\ast}(k)\) は、
+このため、現行実装の $P_\ast(k), R_\ast(k), F_{\beta,\ast}(k)$ は、
 
 - 「完全にラベル付きデータがある場合の Precision / Recall / Fβ」を模した **簡易版の proxy**
 
@@ -1294,7 +1294,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 **各レーンが文献スコアにどれくらい寄与したか** を記録します。
 
 - RRF スコアを計算する過程で、
-  - 文献 \(d\) のスコアが、
+  - 文献 $d$ のスコアが、
     - `fulltext_recall` レーン由来でどれだけ増えたか
     - `fulltext_precision` レーン由来でどれだけ増えたか
     - `semantic` レーン由来でどれだけ増えたか
