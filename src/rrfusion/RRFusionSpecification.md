@@ -1573,6 +1573,30 @@ blend_frontier_codeaware(
 
 > 実装ノート：このツールで生成したレシピと `target_profile` は `mutate_run` / `get_provenance` の入力になる。今回の `field_boosts` や `feature_scope` は `runs` 側で設定した lane run metadata から継承します。
 
+**使用例**
+
+```json
+{
+  "tool": "blend_frontier_codeaware",
+  "arguments": {
+    "runs": [
+      {"lane": "fulltext", "run_id_lane": "fulltext-abc"},
+      {"lane": "semantic", "run_id_lane": "semantic-def"}
+    ],
+    "weights": {"fulltext": 1.0, "semantic": 0.8},
+    "rrf_k": 80,
+    "beta_fuse": 1.2,
+    "target_profile": {"fi": {"H04L1/00": 0.9}},
+    "peek": {"count": 10, "fields": ["claim", "abst"]}
+  }
+}
+```
+
+**典型的な場面**
+
+- wide/recall/precision レーンのランを集めた直後に run_id をまとめ、frontier を確認したいとき。
+- `target_profile` に基づくコード優先順位と、`peek_snippets` でサンプルを取得するセットで用途。
+
 ---
 
 ### 8.5 `peek_snippets`
@@ -1609,6 +1633,25 @@ peek_snippets(
 - `meta`: `PeekMeta`（`used_bytes`, `truncated`, `peek_cursor`, `total_docs`, `retrieved`, `returned`, `took_ms`）。
 
 > 実装ノート：このツールは `mutate_run`/`get_provenance` 後の比較ループで毎回呼び、複数設定の顔ぶれを定量・定性にわたって評価します。
+
+**使用例**
+
+```json
+{
+  "tool": "peek_snippets",
+  "arguments": {
+    "run_id": "run_blend_002",
+    "offset": 0,
+    "limit": 30,
+    "fields": ["claim", "abst"],
+    "budget_bytes": 1024
+  }
+}
+```
+
+**典型的な場面**
+
+- fusion 直後に `peek_snippets` を呼び、`mutate_run` する前に上位命中文献の傾向をざっと見る。
 ### 8.6 `get_snippets`
 
 **役割**
@@ -1634,9 +1677,74 @@ get_snippets(
 
 **戻り値**
 
-- doc_id をキーとするマップ。各 field は `truncate_field` で `per_field_chars` に従って切り詰められる。
+ - doc_id をキーとするマップ。各 field は `truncate_field` で `per_field_chars` に従って切り詰められる。
 
-> 実装ノート：backend の `/search` へ `conditions`（`pub_id IN ids`）を送り、`columns` で必要 field だけを指定してスニペットを取得します。### 8.7 `mutate_run`
+**使用例**
+
+```json
+{
+  "tool": "get_snippets",
+  "arguments": {
+    "ids": ["JP1234567A", "JP9876543B2"],
+    "fields": ["claim", "abst"],
+    "per_field_chars": {"claim": 4000, "abst": 2000}
+  }
+}
+```
+
+**典型的な場面**
+
+- `peek_snippets` で有望候補を選んだ上位 10~20 件に対して、厚めの claim/abst を一括取得するとき。
+
+> 実装ノート：backend の `/search` へ `conditions`（`pub_id IN ids`）を送り、`columns` で必要 field だけを指定してスニペットを取得します。
+
+### 8.7 `mutate_run`
+
+**役割**
+
+- 既存の fusion run に対して `weights`, `rrf_k`, `beta_fuse` を上書きし、新しい run を生成する。
+- 結果は `MutateResponse` で返され、`recipe` に `delta` を含める。
+
+**シグネチャ**
+
+```python
+mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
+```
+
+**主な引数**
+
+- `run_id`: ベースとなる fusion run。
+- `delta`: `weights`, `rrf_k`, `beta_fuse` の上書き。指定しない項目は元 run の recipe を継承。
+
+**戻り値（`MutateResponse`）**
+
+- `new_run_id`: 生成された fusion run。
+- `frontier`: `BlendFrontierEntry` リスト。
+- `recipe`: 新 recipe（`delta` を含む）。
+- `meta`: `took_ms` 等。
+
+> 実装ノート：`delta` は差分ではなく絶対値として扱われ、変えない設定は元の recipe から引き継がれます。
+
+**使用例**
+
+```json
+{
+  "tool": "mutate_run",
+  "arguments": {
+    "run_id": "run_blend_002",
+    "delta": {
+      "weights": {"fulltext_precision": 1.6},
+      "rrf_k": 90
+    }
+  }
+}
+```
+
+**典型的な場面**
+
+- `peek_snippets` で precision が不足していると感じた後、weight/rrf_k を上書きして新しい frontier を迅速に生成する。
+
+### 8.8 `get_provenance`
 
 **役割**
 
@@ -1683,7 +1791,25 @@ get_provenance(run_id: str) -> ProvenanceResponse
 - `code_distributions`: IPC/CPC/FI/FT の分布。
 - `config_snapshot`: `weights`, `rrf_k`, `beta_fuse`, `target_profile` 等。
 
-> 実装ノート：`code_profiling` では `fulltext_wide` を指定して target_profile を構築し、`tuning` では fusion run を渡して変更後のバランスを確認するループに使います。## 9. まとめ
+> 実装ノート：`code_profiling` では `fulltext_wide` を指定して target_profile を構築し、`tuning` では fusion run を渡して変更後のバランスを確認するループに使います。
+
+**使用例**
+
+```json
+{
+  "tool": "get_provenance",
+  "arguments": {
+    "run_id": "run_blend_002"
+  }
+}
+```
+
+**典型的な場面**
+
+- `fulltext_wide` の code_distribution を見て `target_profile` を再設計する。
+- `mutate_run` 前後で `lane_contributions` を比較し、意図した lane が貢献しているか検証する。
+
+## 9. まとめ
 
 この専門版ドキュメントでは、
 
