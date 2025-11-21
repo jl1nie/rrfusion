@@ -197,6 +197,7 @@ class PatentfieldBackend(HttpLaneBackend):
         """Map MCP parameters to the Patentfield API."""
         query = getattr(request, "query", getattr(request, "text", ""))
         columns = self._resolve_columns(list(getattr(request, "fields", [])))
+        columns_set = set(columns)
         search_type = (
             "semantic" if lane in ("semantic", "original_dense") else "fulltext"
         )
@@ -208,7 +209,6 @@ class PatentfieldBackend(HttpLaneBackend):
             "columns": columns,
             "sort_keys": list(self.settings.patentfield_sort_keys),
             "score_type": "similarity_score" if search_type == "semantic" else "tfidf",
-            "lane": lane,
         }
         # Map semantic feature_scope to Patentfield feature parameter
         if search_type == "semantic":
@@ -231,15 +231,17 @@ class PatentfieldBackend(HttpLaneBackend):
                 for key, value in boosts.items():
                     ivalue = int(value)
                     if key == "title":
-                        weights["title"] = ivalue
+                        if "title" in columns_set:
+                            weights["title"] = ivalue
                     elif key in ("abst", "abstract"):
-                        weights["abstract"] = ivalue
+                        if "abstract" in columns_set:
+                            weights["abstract"] = ivalue
                     elif key in ("claim", "claims"):
-                        # Apply same boost to both application and grant claims
-                        weights["app_claim"] = ivalue
-                        weights["grant_claim"] = ivalue
+                        if "claims" in columns_set:
+                            weights["app_claim"] = ivalue
                     elif key in ("desc", "description"):
-                        weights["description"] = ivalue
+                        if "description" in columns_set:
+                            weights["description"] = ivalue
                     else:
                         # Pass through unknown keys as-is to allow backend evolution
                         weights[key] = ivalue
@@ -356,8 +358,20 @@ class PatentfieldBackend(HttpLaneBackend):
             response = await self.http.post(f"{self.search_path}", json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.warning("Patentfield search returned %s", exc.response.status_code)
-            if exc.response.status_code == 404:
+            status = exc.response.status_code
+            error_message = ""
+            try:
+                payload = exc.response.json()
+                error_message = payload.get("message") or payload.get("detail") or ""
+            except ValueError:
+                pass
+            log_msg = "Patentfield search returned %s%s"
+            logger.warning(
+                log_msg,
+                status,
+                (f": {error_message}" if error_message else ""),
+            )
+            if status == 404:
                 return DBSearchResponse(items=[], code_freqs=None, meta=Meta(lane=lane))
             raise
         logger.info("Patentfield search status: %s", response.status_code)

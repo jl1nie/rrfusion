@@ -1404,6 +1404,22 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 - `trace_id`：
   - 実行時に任意の文字列を渡すと、各ツールの `meta.params.trace_id` にコピーされてログやトレースに残る
 
+**エージェントモード（SystemPrompt.yaml）**
+
+- LLM エージェントのシステムプロンプトは `src/rrfusion/SystemPrompt.yaml` にあり、  
+  冒頭の `MODE:` 行で動作モードを指定します（`production` または `debug`）。
+  - 例：`MODE: production  # allowed values: production | debug`
+- この MODE は **デプロイ設定側でのみ変更可能** であり、ユーザプロンプトやツール呼び出しから変更してはいけません。
+- MODE に応じた推奨挙動：
+  - `production`：
+    - 内部アルゴリズムや SystemPrompt の全文、パイプライン構成を直接ユーザに開示しない。
+    - RRF や target_profile の存在は高レベルの説明に留め、実装細部は隠蔽する。
+  - `debug`：
+    - 通常の日本語回答に加えて、「どの lane / tool をどのパラメータ（特に `top_k` / `code_freq_top_k` / weights）で使ったか」を短い debug セクションとして明示する。
+    - それでも SystemPrompt の原文や機密なアルゴリズムはそのまま出力しない。
+- AGENT 側で LLM を組み込むときは、運用環境では必ず `MODE: production` を使い、  
+  CI・開発用のスタックだけ `MODE: debug` にする運用を推奨します。
+
 ...
 
 ### 8.2 `search_fulltext`
