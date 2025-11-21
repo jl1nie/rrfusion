@@ -293,6 +293,7 @@ tool_usage:
     notes:
       - runs should include fulltext_wide, semantic, fulltext_recall, fulltext_precision as available.
       - target_profile must come from code_profiling based on fulltext_wide.
+      - Each entry in runs must be a dictionary with both `lane` (e.g., "fulltext" or "semantic") and `run_id_lane` (the run handle returned by search_fulltext/search_semantic); do not pass raw run_id strings alone.
 
   peek_snippets:
     when_to_use:

@@ -1592,6 +1592,7 @@ blend_frontier_codeaware(
 **主な引数**
 
 - `runs`：`lane` と `run_id_lane` のペア。少なくとも 1 つは必要。
+  - `runs` の各要素は必ず `{"lane": "...", "run_id_lane": "..."}` の辞書で、`run_id_lane` には `search_fulltext`/`search_semantic` の戻り値をそのまま渡す。`lane` フィールドがないと Pydantic エラーになるので注意。
 - `weights`：レーン／コード別の重み（例：`{"fulltext":1.0,"semantic":0.8,"code":0.5}`）。
 - `rrf_k`, `beta_fuse`：RRF tail / frontier の recall/precision バランスを制御。
 - `target_profile`：コード Prior（`{"fi":{"H04L":0.7}}`など）。
