@@ -53,7 +53,7 @@ class HttpLaneBackend(LaneBackend):
         snippets_path: str = "/snippets",
         publications_path: str = "/publications",
         headers: dict[str, str] | None = None,
-        timeout: float = 30.0,
+        timeout: float = 180.0,
     ) -> None:
         super().__init__(settings)
         self.http = httpx.AsyncClient(
