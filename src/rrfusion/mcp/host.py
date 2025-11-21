@@ -206,6 +206,43 @@ def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
     return normalized
 
 
+def _guess_lane_from_run_id(run_id: str) -> str:
+    if run_id.startswith("fulltext"):
+        return "fulltext"
+    if run_id.startswith("semantic"):
+        return "semantic"
+    if run_id.startswith("original_dense"):
+        return "original_dense"
+    return "fulltext"
+
+
+def _normalize_blend_runs(runs: list[Any] | None) -> list[BlendRunInput]:
+    normalized: list[BlendRunInput] = []
+    if not runs:
+        return normalized
+    for entry in runs:
+        if isinstance(entry, BlendRunInput):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            payload = dict(entry)
+            if "run_id_lane" not in payload and "run_id" in payload:
+                payload["run_id_lane"] = payload["run_id"]
+                payload.pop("run_id", None)
+            if "lane" not in payload and "run_id_lane" in payload:
+                payload["lane"] = _guess_lane_from_run_id(payload["run_id_lane"])
+            normalized.append(BlendRunInput.model_validate(payload))
+        elif isinstance(entry, str):
+            normalized.append(
+                BlendRunInput(
+                    lane=_guess_lane_from_run_id(entry),
+                    run_id_lane=entry,
+                )
+            )
+        else:
+            raise RuntimeError(f"invalid run entry type: {type(entry)}")
+    return normalized
+
+
 # ============================
 # Prompts
 # ============================
@@ -420,7 +457,7 @@ async def blend_frontier_codeaware(
     """
     start = perf_counter()
     response = await _require_service().blend(
-        runs=runs,
+        runs=_normalize_blend_runs(runs),
         weights=weights,
         rrf_k=rrf_k,
         beta_fuse=beta_fuse,
