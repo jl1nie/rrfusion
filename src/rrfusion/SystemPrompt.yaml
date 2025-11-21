@@ -221,17 +221,18 @@ snippet_policy:
     budget_bytes_default: 800
     fields_default: [claim, abst]
     usage:
-      - quick_face_check
-      - compare_old_vs_new_runs
+      - quick_face_check (deprecated for normal workflows; prefer get_snippets)
+      - compare_old_vs_new_runs when you explicitly need a byte-capped preview
     typical_loop:
-      - after_first_blend_run
-      - after_each_mutate_run
+      - after_first_blend_run (optional)
+      - after_each_mutate_run (optional)
   get_snippets:
     recommendation:
       - after_peek_select_top_n: 10-20
       - focus_on_most_promising_docs_for_human_review
     notes:
-      - Use per_field_chars to make claims thicker (for example {"claim": 4000, "abst": 2000}) while keeping the overall payload uncapped by budget_bytes.
+      - Use per_field_chars to make claims thicker (for example {"claim": 800, "abst": 400}) while keeping the overall payload within a reasonable prompt budget.
+      - Prefer get_snippets over peek_snippets for any workflow where you need stable textual snippets.
     implementation_note:
       - search_fulltext / search_semantic produce rankings without textual snippets; peek_snippets/get_snippets are the only APIs providing text content.
 
