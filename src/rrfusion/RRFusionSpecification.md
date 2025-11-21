@@ -1739,7 +1739,7 @@ get_snippets(
 
 - `peek_snippets` で有望候補を選んだ上位 10~20 件に対して、厚めの claim/abst を一括取得するとき。
 
-> 実装ノート：backend の `/search` へ `conditions`（`pub_id IN ids`）を送り、`columns` で必要 field だけを指定してスニペットを取得します。
+> 実装ノート：backend の `/search` へ `numbers`（`[{"n": "...", "t": "pub_id"}, ...]`）を渡し、`columns` で必要 field だけを指定してスニペットを取得します。
 
 ### 8.7 `mutate_run`
 
