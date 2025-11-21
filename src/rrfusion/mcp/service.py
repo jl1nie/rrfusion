@@ -564,8 +564,8 @@ class MCPService:
         doc_metadata = await self.storage.get_docs(doc_ids)
         logger.debug("peek_snippets hydrated %s docs with metadata", len(doc_metadata))
 
-        lane = meta.get("lane")
-        backend = self.backend_registry.get_backend(lane) if lane else None
+        snippet_lane = self.settings.snippet_backend_lane
+        backend = self.backend_registry.get_backend(snippet_lane)
         fields = request.fields or ["title", "abst", "claim"]
         per_field_chars = request.per_field_chars
         missing_ids = [

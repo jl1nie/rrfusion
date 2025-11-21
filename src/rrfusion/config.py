@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     ci_search_path: str = Field("/search", alias="CI_SEARCH_PATH")
     ci_snippets_path: str = Field("/snippets", alias="CI_SNIPPETS_PATH")
     ci_publications_path: str = Field("/publications", alias="CI_PUBLICATIONS_PATH")
+    snippet_backend_lane: str = Field("fulltext", alias="SNIPPET_BACKEND_LANE")
 
     model_config = SettingsConfigDict(
         env_prefix="",

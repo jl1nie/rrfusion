@@ -932,12 +932,15 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 - `per_field_chars`：
   - 項目ごとの文字数上限。`peek_snippets` は総バイト `budget_bytes` を優先するため `get_snippets` では `per_field_chars` で厚めに指定するとよい（例: claim 800, desc 800, abst 480）。
 
-このように、
+ このように、
 
-- `peek_snippets`：広く薄く
-- `get_snippets`：狭く厚く
+ - `peek_snippets`：広く薄く
+ - `get_snippets`：狭く厚く
 
-という 2 段階で、`run_id_blend` の上位を人間がレビューできるようにします。
+ という 2 段階で、`run_id_blend` の上位を人間がレビューできるようにします。
+
+#### Snippet backend selection
+- Snippet retrieval always targets the lane defined by `SNIPPET_BACKEND_LANE` (default `fulltext`). Even fusion runs without lane metadata use this configured backend, so peek/get can fetch text consistently through the same API (Patentfield in CI). Adjusting `SNIPPET_BACKEND_LANE` lets you swap in a different snippet backend without changing the tool flow.
 
 ---
 

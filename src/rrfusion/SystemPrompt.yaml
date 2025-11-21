@@ -236,6 +236,7 @@ snippet_policy:
       - Avoid calling get_snippets repeatedly on large ID lists; reuse previously peeked or fetched snippets whenever possible.
     implementation_note:
       - search_fulltext / search_semantic produce rankings without textual snippets; peek_snippets/get_snippets are the only APIs providing text content.
+      - Both peek_snippets and get_snippets always call the backend lane configured via `SNIPPET_BACKEND_LANE` (default `fulltext`). Even if the fusion result lacks lane metadata, they still hit the configured snippet backend so text is provided consistently.
 
 tool_usage:
   search_fulltext:
