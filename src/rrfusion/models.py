@@ -47,7 +47,21 @@ class Cond(BaseModel):
     def _normalize_case(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
-        return value
+    return value
+
+
+class FilterEntry(BaseModel):
+    field: str
+    include_values: list[str] = Field(default_factory=list)
+    exclude_values: list[str] = Field(default_factory=list)
+    include_codes: list[str] = Field(default_factory=list)
+    exclude_codes: list[str] = Field(default_factory=list)
+    include_range: dict[str, str] | None = None
+    exclude_range: dict[str, str] | None = None
+
+    @field_validator("field", mode="before")
+    def _normalize_field(cls, value: Any) -> Any:
+        return str(value).lower()
 
 
 class IncludeOpts(BaseModel):

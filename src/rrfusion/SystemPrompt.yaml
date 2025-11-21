@@ -263,6 +263,7 @@ tool_usage:
           - 'Please find patents about wireless power transfer for EVs.'
       - If the user only provides natural language, first extract Japanese/English keywords and codes, then build a Boolean query before calling search_fulltext.
       - When sending filters that refer to dates (e.g., `pubyear`, `publication_date`, range queries), supply string values formatted as `yyyy-mm-dd`; backend expects date strings, not datetime objects or other structures.
+      - Represent filters as a list of objects keyed by `field`, with either `include_values`/`exclude_values`, `include_codes`/`exclude_codes`, or `include_range`/`exclude_range`. Do not manipulate Patentfield's `lop`/`op` directly; the host will convert this high-level format into `conditions` for you.
       - Logical operators: `AND` / `and` / (implicit AND when omitted), `OR`, `NOT` / `not`; use parentheses `()` to group parts of the expression.
       - Phrase search: wrap terms in double quotes to search for an exact phrase, e.g. `"solar panel"`.
       - NEAR search: use commands like `*N5"太陽 電池"` (unordered) or `*ONP5"太陽 電池"` (ordered) to require terms to appear within a given character distance.

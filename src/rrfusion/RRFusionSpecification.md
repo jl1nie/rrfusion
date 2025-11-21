@@ -1398,6 +1398,26 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 - `Filters`：
   - 年、国、言語、コード体系などのフィルタ情報
   - 日付（例：`pubyear` や監視対象の期間）を指定するときは、バックエンドが文字列 `yyyy-mm-dd` 形式を想定しているため、そのまま文字列で渡す。日付範囲は `op="range"` で、`value` に `[ "2023-01-01", "2023-12-31" ]` のように `yyyy-mm-dd` 文字列リストを使うと誤填にならない。
+  - 具体的には、`filters` は次のような entry の list で表現される:
+    ```jsonc
+    {
+      "field": "fi",
+      "include_codes": ["H04L1/00", "H04L1/06"],
+      "exclude_codes": []
+    },
+    {
+      "field": "country",
+      "include_values": ["JP"],
+      "exclude_values": []
+    },
+    {
+      "field": "pubyear",
+      "include_range": {"from": "2020-01-01", "to": "2020-12-31"}
+    }
+    ```
+    - `include_values`/`exclude_values` は `server`-side で `lop`=`and`/`not`, `op`=`in` の `conditions` に展開される。
+    - `include_codes`/`exclude_codes` はコード体系ごとの `key`（`fi`/`ft`/`ipc`/`cpc`）で絞り込みに使い、`include_range` は `op="range"` へ落ちる。
+    - 高レベルなこの schema を LLM が出力すれば、backend の `conditions` への変換は host が担当します。
   - 値を辞書で渡しても OK（例：`{"from":"2023-01-01","to":"2023-12-31"}`）。host 側で `[from,to]` に整形して `q1`/`q2` に変換するので、どちらのスタイルでも構いません。
   - 国の指定がないときは JP（日本）を優先し、FI/FT コードを基にした検索とする。運用上は `filters` に `country="JP"` を明示しなくても、説明がない場面では日本を前提に設計して問題ありません。
 - `meta.took_ms`：

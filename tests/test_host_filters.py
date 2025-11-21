@@ -5,35 +5,29 @@ import pytest
 from rrfusion.mcp import host
 
 
-def test_normalize_filters_accepts_range_dict() -> None:
-    raw_filters = [
-        {"lop": "and", "field": "pubyear", "op": "range", "value": {"from": "2023-01-01", "to": "2023-12-31"}}
-    ]
-    normalized = host._normalize_filters(raw_filters)
-    assert len(normalized) == 1
-    cond = normalized[0]
-    assert cond.op == "range"
-    assert cond.value == ["2023-01-01", "2023-12-31"]
+def test_filter_entry_generates_cond_list() -> None:
+    raw_filter = {
+        "field": "fi",
+        "include_codes": ["H04L1/00"],
+        "exclude_codes": ["H04L1/06"],
+    }
+    filters = host._normalize_filters([raw_filter])
+    assert len(filters) == 2
+    codes = [cond.value for cond in filters]
+    assert ["H04L1/00"] in codes
+    assert ["H04L1/06"] in codes
 
 
-def test_normalize_filters_accepts_flat_date_list() -> None:
-    raw_filters = [
-        {"lop": "and", "field": "pubyear", "op": "range", "value": ["2022-01-01", "2022-12-31"]}
-    ]
-    normalized = host._normalize_filters(raw_filters)
-    cond = normalized[0]
-    assert cond.value == ["2022-01-01", "2022-12-31"]
+def test_filter_entry_handles_ranges() -> None:
+    raw_filter = {
+        "field": "pubyear",
+        "include_range": {"from": "2020-01-01", "to": "2020-12-31"},
+    }
+    filters = host._normalize_filters([raw_filter])
+    assert filters[0].op == "range"
+    assert filters[0].value == ["2020-01-01", "2020-12-31"]
 
 
-def test_normalize_filters_normalizes_date_ints() -> None:
-    raw_filters = [
-        {"lop": "and", "field": "pubyear", "op": "range", "value": [20220101, 20221231]}
-    ]
-    normalized = host._normalize_filters(raw_filters)
-    cond = normalized[0]
-    assert cond.value == ["2022-01-01", "2022-12-31"]
-
-
-def test_normalize_filters_raises_on_unexpected_type() -> None:
+def test_filter_entry_raises_with_invalid_type() -> None:
     with pytest.raises(RuntimeError):
         host._normalize_filters([42])  # type: ignore[arg-type]
