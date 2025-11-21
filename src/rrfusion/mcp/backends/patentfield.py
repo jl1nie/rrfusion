@@ -226,21 +226,23 @@ class PatentfieldBackend(HttpLaneBackend):
         if search_type == "fulltext":
             boosts = getattr(request, "field_boosts", None)
             if boosts:
-                weights: dict[str, float] = {}
+                # Patentfield 側の weights は整数指定想定のため、内部 float を int に丸めて渡す
+                weights: dict[str, int] = {}
                 for key, value in boosts.items():
+                    ivalue = int(value)
                     if key == "title":
-                        weights["title"] = float(value)
+                        weights["title"] = ivalue
                     elif key in ("abst", "abstract"):
-                        weights["abstract"] = float(value)
+                        weights["abstract"] = ivalue
                     elif key in ("claim", "claims"):
                         # Apply same boost to both application and grant claims
-                        weights["app_claim"] = float(value)
-                        weights["grant_claim"] = float(value)
+                        weights["app_claim"] = ivalue
+                        weights["grant_claim"] = ivalue
                     elif key in ("desc", "description"):
-                        weights["description"] = float(value)
+                        weights["description"] = ivalue
                     else:
                         # Pass through unknown keys as-is to allow backend evolution
-                        weights[key] = float(value)
+                        weights[key] = ivalue
                 if weights:
                     payload["weights"] = [weights]
         if request.filters:

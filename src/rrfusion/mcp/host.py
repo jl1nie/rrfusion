@@ -130,7 +130,7 @@ def _elapsed_ms(start: float) -> int:
 
 def _record_tool_timing(response: Any, took_ms: int) -> None:
     if isinstance(response, SearchToolResponse):
-        response.response.meta.took_ms = took_ms
+        response.meta.took_ms = took_ms
     elif isinstance(response, PeekSnippetsResponse):
         response.meta.took_ms = took_ms
     elif isinstance(response, BlendResponse):
@@ -187,6 +187,7 @@ async def search_fulltext(
     fields: list[SnippetField] | None = None,
     field_boosts: dict[str, float] | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
@@ -215,6 +216,10 @@ async def search_fulltext(
         type: int
         required: false
         description: Maximum number of hits to retrieve for this lane (typically up to 800).
+      code_freq_top_k:
+        type: int
+        required: false
+        description: Limit how many codes appear in the lane-level `code_freqs` summary (default: 30, set to `None` to surface all codes).
       trace_id:
         type: string
         required: false
@@ -238,6 +243,7 @@ async def search_fulltext(
         field_boosts=_normalize_optional_dict(field_boosts),
         top_k=top_k,
         trace_id=trace_id,
+        code_freq_top_k=code_freq_top_k,
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response
@@ -250,6 +256,7 @@ async def search_semantic(
     fields: list[SnippetField] | None = None,
     feature_scope: str | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
     semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse:
@@ -279,6 +286,10 @@ async def search_semantic(
         type: int
         required: false
         description: Number of top results to retrieve (typically up to 800) for ranking storage only (snippet text is not returned).
+      code_freq_top_k:
+        type: int
+        required: false
+        description: Limit how many codes appear in the lane-level `code_freqs` summary (default: 30, set to `None` to surface all codes).
       trace_id:
         type: string
         required: false
@@ -308,6 +319,7 @@ async def search_semantic(
         top_k=top_k,
         trace_id=trace_id,
         semantic_style=semantic_style,
+        code_freq_top_k=code_freq_top_k,
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response

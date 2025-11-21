@@ -80,7 +80,7 @@ async def _prepare_lane_runs(
             "query" if lane == "fulltext" else "text": "fastmcp fusion scenario",
         }
         response = await _call_tool(client, f"search_{lane}", payload, timeout=cfg.timeout)
-        search_meta = response["response"]["meta"]
+        search_meta = response["meta"]
         _assert_took_ms(search_meta.get("took_ms"), f"{lane} search")
         if require_large and response["count_returned"] < 2000:
             raise RuntimeError(f"{lane} lane returned only {response['count_returned']} docs")
@@ -100,10 +100,10 @@ async def _prepare_fusion_run(
     lane_runs = await _prepare_lane_runs(client, redis_client, cfg, require_large=require_large)
 
     blend_payload = {
-        "runs": [
-            {"lane": "fulltext", "run_id_lane": lane_runs["fulltext"]["response"]["run_id_lane"]},
-            {"lane": "semantic", "run_id_lane": lane_runs["semantic"]["response"]["run_id_lane"]},
-        ],
+            "runs": [
+                {"lane": "fulltext", "run_id_lane": lane_runs["fulltext"]["response"]["run_id_lane"]},
+                {"lane": "semantic", "run_id_lane": lane_runs["semantic"]["response"]["run_id_lane"]},
+            ],
         "weights": {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
         "rrf_k": 60,
         "beta_fuse": 1.0,
@@ -127,7 +127,7 @@ async def scenario_search_counts(cfg: RunnerConfig) -> None:
         expected_count = min(cfg.stub_max_results, cfg.stub_max_results)
         for lane, data in lane_runs.items():
             payload = data["response"]
-            payload_meta = payload["response"]["meta"]
+            payload_meta = payload["meta"]
             _assert_took_ms(payload_meta.get("took_ms"), f"{lane} search counts")
             if payload["count_returned"] != expected_count:
                 raise AssertionError(f"{lane} lane returned unexpected size {payload['count_returned']}")
@@ -447,7 +447,7 @@ async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
         params = meta.get("params", {})
         if params.get("semantic_style") != "original_dense":
             raise AssertionError("stored run metadata missing semantic_style flag")
-        _assert_took_ms(response["response"]["meta"].get("took_ms"), "semantic style dense search")
+        _assert_took_ms(response["meta"].get("took_ms"), "semantic style dense search")
 
     await redis_client.aclose()
 

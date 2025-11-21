@@ -194,10 +194,11 @@ async def search_fulltext(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
 ) -> SearchToolResponse:
     """
-    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, trace_id: str | None = None)
+    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, code_freq_top_k: int | None = 30, trace_id: str | None = None)
     prompts/list:
     - "List high-recall patent families mentioning {query} with IPC filters {filters}"
     - "List prior art using only keyword evidence for {query}"
@@ -205,6 +206,7 @@ async def search_fulltext(
     - "Get a lane run handle I can feed into fusion for {query}"
     """
     Note: `search_fulltext` no longer exposes `budget_bytes`; snippet byte caps are managed by `peek_snippets` and `get_snippets`.
+    Note: `SearchToolResponse` omits the document list—only `run_id_lane`, `meta`, and truncated `code_freqs` are returned. Adjust `code_freq_top_k` (default 30) if you want more code entries for downstream analysis.
 ```
 
 The full-text lane maximizes recall by leaning on raw keyword scoring from the DB stub. Pick the lane variant you need (`search_fulltext.wide`, `.focused`, or `.hybrid`) before adding semantic context, and always capture the `run_id_lane` it returns.
@@ -223,11 +225,12 @@ async def search_semantic(
     filters: list[Cond] | None = None,
     fields: list[SnippetField] | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
     semantic_style: Literal["default", "original_dense"] = "default",
 ) -> SearchToolResponse:
     """
-    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
+    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, code_freq_top_k: int | None = 30, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
     prompts/list:
     - "List semantically similar inventions about {text}"
     - "List embedding-driven hits that stay on-spec for {text}"
@@ -237,6 +240,7 @@ async def search_semantic(
     ```
 
     This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
+    Note: `SearchToolResponse` omits the document list—only `run_id_lane`, `meta`, and `code_freqs` are returned. Tune `code_freq_top_k` (default 30) when you need more code coverage for analysis.
     Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
     Set `semantic_style="original_dense"` if you need the dedicated dense-vector lane (shorter input, dense scoring) while `semantic_style="default"` keeps the regular BM25-like pipeline.
     Note: `search_semantic` also omits `budget_bytes`; snippet byte caps are enforced when you later call `peek_snippets` or `get_snippets`.

@@ -93,7 +93,7 @@ class SemanticParams(BaseModel):
 class SearchToolResponse(BaseModel):
     lane: Lane
     run_id_lane: str
-    response: DBSearchResponse
+    meta: Meta
     count_returned: int
     truncated: bool
     code_freqs: dict[str, dict[str, int]] | None = None

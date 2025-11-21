@@ -27,7 +27,8 @@ agent:
     - Do not mix code systems within a single lane.
     - When adjusting field_boosts/feature_scope or mutate_run weights automatically, limit to three experiment cycles per lane before pausing for a human review.
     - Prefer recall-first design, then tune toward precision using mutate_run.
-    - Always show your plan (which lanes, which tools, which parameters).
+    - Always show your plan (which lanes, which tools, which parameters, especially top_k and code_freq_top_k).
+    - Only pass natural-language text to semantic lanes; fulltext lanes should receive keyword/structured queries, not paragraph-form text.
     - Always answer the human in Japanese, but keep identifiers and JSON keys in English.
     - When quoting patent snippets, preserve original language (JA/EN) as-is.
 
@@ -47,7 +48,7 @@ pipeline:
         - search_fulltext   # fulltext_wide
         - search_semantic   # semantic
       notes:
-        - Ranking calls collect doc_id/score/codes only; snippet text is fetched later in the snippets step.
+        - Backend ranking collects doc_id/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details are fetched later in the snippets step.
 
     - id: code_profiling
       description: Build target_profile from the fulltext_wide run via get_provenance.
@@ -238,9 +239,11 @@ tool_usage:
       - filters
       - field_boosts
       - top_k
+      - code_freq_top_k
     notes:
       - Use different query styles per lane as defined under lanes.
-      - Keep `fields` minimal (e.g., default list or omit) and treat this tool as only returning doc_id/score/codes; do not request this tool for snippet text.
+      - Keep `fields` minimal (e.g., default list or omit) and treat this tool as only returning a run_id and lane-level metadata; do not expect this tool to return snippet text or full doc lists.
+      - Use `code_freq_top_k` (default 30) to keep `code_freqs` compact; only increase beyond 50 when you explicitly need to inspect more codes for analysis.
       - Treat `query` as a search expression composed of keywords, logical operators, parentheses, and special keywords.
       - Logical operators: `AND` / `and` / (implicit AND when omitted), `OR`, `NOT` / `not`; use parentheses `()` to group parts of the expression.
       - Phrase search: wrap terms in double quotes to search for an exact phrase, e.g. `"solar panel"`.
@@ -256,6 +259,7 @@ tool_usage:
       - filters
       - feature_scope
       - top_k
+      - code_freq_top_k
       - semantic_style
     constraints:
       - semantic_style must be "default" in v1.3 (original_dense is disabled).

@@ -17,6 +17,8 @@ class RedisStorage:
     def __init__(self, redis: Redis, settings: Settings) -> None:
         self.redis = redis
         self.settings = settings
+        self._code_to_id_cache: dict[str, int] = {}
+        self._id_to_code_cache: dict[int, str] = {}
 
     # ---- Key helpers -----------------------------------------------------
     def lane_key(self, query_hash: str, lane: str) -> str:
@@ -38,6 +40,120 @@ class RedisStorage:
     def freq_key(run_id: str, lane: str) -> str:
         return f"h:freq:{run_id}:{lane}"
 
+    def _code_vocab_key(self) -> str:
+        return f"h:code_vocab:{self.settings.snapshot}"
+
+    def _code_vocab_rev_key(self) -> str:
+        return f"h:code_vocab_rev:{self.settings.snapshot}"
+
+    def _code_vocab_next_key(self) -> str:
+        return f"n:code_vocab_next:{self.settings.snapshot}"
+
+    async def _map_codes_to_ids(self, codes: Iterable[str]) -> dict[str, int]:
+        unique_codes = {str(code) for code in codes if code}
+        if not unique_codes:
+            return {}
+        mapping: dict[str, int] = {}
+        to_lookup: list[str] = []
+        for code in unique_codes:
+            cached = self._code_to_id_cache.get(code)
+            if cached is not None:
+                mapping[code] = cached
+            else:
+                to_lookup.append(code)
+        if to_lookup:
+            pipe = self.redis.pipeline(transaction=False)
+            for code in to_lookup:
+                pipe.hget(self._code_vocab_key(), code)
+            lookup_results = await pipe.execute()
+            new_codes: list[str] = []
+            for code, raw in zip(to_lookup, lookup_results):
+                if raw:
+                    value = int(raw)
+                    mapping[code] = value
+                    self._code_to_id_cache[code] = value
+                    self._id_to_code_cache[value] = code
+                else:
+                    new_codes.append(code)
+            if new_codes:
+                count = len(new_codes)
+                next_id = await self.redis.incrby(self._code_vocab_next_key(), count)
+                start_id = next_id - count + 1
+                pipe = self.redis.pipeline(transaction=False)
+                for offset, code in enumerate(new_codes):
+                    code_id = start_id + offset
+                    mapping[code] = code_id
+                    self._code_to_id_cache[code] = code_id
+                    self._id_to_code_cache[code_id] = code
+                    pipe.hset(self._code_vocab_key(), code, code_id)
+                    pipe.hset(self._code_vocab_rev_key(), str(code_id), code)
+                await pipe.execute()
+        return mapping
+
+    async def _decode_code_ids(self, ids: Sequence[int]) -> list[str]:
+        if not ids:
+            return []
+        result: list[str | None] = []
+        missing: list[tuple[int, int]] = []
+        for idx, code_id in enumerate(ids):
+            if code_id is None:
+                result.append(None)
+                continue
+            cached = self._id_to_code_cache.get(code_id)
+            if cached is not None:
+                result.append(cached)
+            else:
+                result.append(None)
+                missing.append((idx, code_id))
+        if missing:
+            pipe = self.redis.pipeline(transaction=False)
+            for _idx, code_id in missing:
+                pipe.hget(self._code_vocab_rev_key(), str(code_id))
+            lookup_results = await pipe.execute()
+            for (idx, code_id), raw in zip(missing, lookup_results):
+                if raw:
+                    code = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                else:
+                    code = str(code_id)
+                result[idx] = code
+                self._id_to_code_cache[code_id] = code
+                self._code_to_id_cache[code] = code_id
+        decoded: list[str] = []
+        for idx, value in enumerate(result):
+            if value is not None:
+                decoded.append(value)
+            else:
+                code_id = ids[idx]
+                decoded.append(str(code_id) if code_id is not None else "")
+        return decoded
+
+    async def _encode_codes_for_docs(self, docs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        code_fields = ("ipc_codes", "cpc_codes", "fi_codes", "ft_codes")
+        all_codes: set[str] = set()
+        for doc in docs:
+            for taxonomy in code_fields:
+                for code in doc.get(taxonomy, []) or []:
+                    if code:
+                        all_codes.add(str(code))
+        if not all_codes:
+            encoded_docs: list[dict[str, Any]] = []
+            for doc in docs:
+                encoded = dict(doc)
+                for taxonomy in code_fields:
+                    encoded[taxonomy] = []
+                encoded_docs.append(encoded)
+            return encoded_docs
+        mapping = await self._map_codes_to_ids(all_codes)
+        encoded_docs: list[dict[str, Any]] = []
+        for doc in docs:
+            encoded = dict(doc)
+            for taxonomy in code_fields:
+                values = doc.get(taxonomy, []) or []
+                encoded_values = [mapping[str(code)] for code in values if str(code) in mapping]
+                encoded[taxonomy] = encoded_values
+            encoded_docs.append(encoded)
+        return encoded_docs
+
     # ---- Persistence -----------------------------------------------------
     async def store_lane_run(
         self,
@@ -51,6 +167,8 @@ class RedisStorage:
     ) -> None:
         """Persist lane docs, per-doc metadata, freq summary, and run metadata."""
 
+        encoded_docs = await self._encode_codes_for_docs(docs)
+
         # Stage 1: put scores into a sorted set keyed by query hash + lane
         lane_key = self.lane_key(query_hash, lane)
         data_ttl = self.settings.data_ttl_hours * 3600
@@ -60,14 +178,14 @@ class RedisStorage:
         pipe = self.redis.pipeline(transaction=False)
         pipe.delete(lane_key)
 
-        z_mapping = {doc["doc_id"]: float(doc["score"]) for doc in docs}
+        z_mapping = {doc["doc_id"]: float(doc["score"]) for doc in encoded_docs}
         if z_mapping:
             pipe.zadd(lane_key, z_mapping)
 
         pipe.expire(lane_key, data_ttl)
 
         # Stage 2: cache document metadata for snippet retrieval
-        for doc in docs:
+        for doc in encoded_docs:
             doc_key = self.doc_key(doc["doc_id"])
             doc_payload = {
                 "title": doc.get("title", ""),
@@ -117,9 +235,10 @@ class RedisStorage:
     async def upsert_docs(self, docs: Sequence[dict[str, Any]]) -> None:
         if not docs:
             return
+        encoded_docs = await self._encode_codes_for_docs(docs)
         snippet_ttl = self.settings.snippet_ttl_hours * 3600
         pipe = self.redis.pipeline(transaction=False)
-        for doc in docs:
+        for doc in encoded_docs:
             doc_key = self.doc_key(doc["doc_id"])
             doc_payload = {
                 "title": doc.get("title", ""),
@@ -184,6 +303,18 @@ class RedisStorage:
                     str_value = value.decode("utf-8") if isinstance(value, bytes) else value
                     decoded[str_key] = str_value
                 payload = decoded
+            def _load_code_list(key: str) -> list[Any]:
+                raw_value = payload.get(key, "[]")
+                if isinstance(raw_value, bytes):
+                    raw_value = raw_value.decode("utf-8")
+                return json.loads(raw_value)
+
+            async def _decode_codes(key: str) -> list[str]:
+                raw = _load_code_list(key)
+                if raw and all(isinstance(item, int) for item in raw):
+                    return await self._decode_code_ids(raw)
+                return [str(item) for item in raw if item]
+
             docs[doc_id] = {
                 "title": payload.get("title", ""),
                 "abst": payload.get("abst", ""),
@@ -192,10 +323,10 @@ class RedisStorage:
                 "app_doc_id": payload.get("app_doc_id", ""),
                 "pub_id": payload.get("pub_id", ""),
                 "exam_id": payload.get("exam_id", ""),
-                "ipc_codes": json.loads(payload.get("ipc_codes", "[]")),
-                "cpc_codes": json.loads(payload.get("cpc_codes", "[]")),
-                "fi_codes": json.loads(payload.get("fi_codes", "[]")),
-                "ft_codes": json.loads(payload.get("ft_codes", "[]")),
+                "ipc_codes": await _decode_codes("ipc_codes"),
+                "cpc_codes": await _decode_codes("cpc_codes"),
+                "fi_codes": await _decode_codes("fi_codes"),
+                "ft_codes": await _decode_codes("ft_codes"),
             }
         return docs
 

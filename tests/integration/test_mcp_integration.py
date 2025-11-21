@@ -45,8 +45,8 @@ def _stub_max_results() -> int:
 async def _ensure_runs(service: MCPService) -> tuple[str, str]:
     fulltext = await service.search_lane("fulltext", query="integration query", top_k=200)
     semantic = await service.search_lane("semantic", text="integration query", top_k=200)
-    _assert_took_ms(fulltext.response.meta.took_ms, "fulltext integration search")
-    _assert_took_ms(semantic.response.meta.took_ms, "semantic integration search")
+    _assert_took_ms(fulltext.meta.took_ms, "fulltext integration search")
+    _assert_took_ms(semantic.meta.took_ms, "semantic integration search")
     return fulltext.run_id_lane, semantic.run_id_lane
 
 
@@ -116,8 +116,14 @@ async def test_peek_snippets_flow_with_real_backends():
 async def test_get_publication_returns_full_fields():
     async with service_context() as service:
         search_resp = await service.search_lane("fulltext", query="fulltext", top_k=1)
-        assert search_resp.response.items, "search should yield docs"
-        doc_id = search_resp.response.items[0].doc_id
+        peek = await service.peek_snippets(
+            run_id=search_resp.run_id_lane,
+            limit=1,
+            fields=["title", "abst", "claim"],
+            per_field_chars={"title": 64, "abst": 128, "claim": 128},
+        )
+        assert peek.snippets, "search should produce a snippet for publication lookup"
+        doc_id = peek.snippets[0].id
 
         publication = await service.get_publication(
             ids=[doc_id],
@@ -139,7 +145,7 @@ async def test_search_lane_handles_thousands_of_docs():
         expected = min(5000, _stub_max_results())
         assert response.count_returned == expected
         assert response.run_id_lane
-        _assert_took_ms(response.response.meta.took_ms, "large search lane")
+        _assert_took_ms(response.meta.took_ms, "large search lane")
 
 
 @pytest.mark.integration
@@ -153,8 +159,8 @@ async def test_large_search_and_peek_budget_flow():
             "semantic", text="budget stress query", top_k=5000
         )
 
-        _assert_took_ms(fulltext.response.meta.took_ms, "budget stress fulltext")
-        _assert_took_ms(semantic.response.meta.took_ms, "budget stress semantic")
+        _assert_took_ms(fulltext.meta.took_ms, "budget stress fulltext")
+        _assert_took_ms(semantic.meta.took_ms, "budget stress semantic")
 
         min_count = min(fulltext.count_returned, semantic.count_returned)
         if min_count < 4000:
@@ -217,8 +223,8 @@ async def test_original_dense_lane_metadata():
     async with service_context() as service:
         response = await service.search_lane("original_dense", text="dense boost query", top_k=40)
         assert response.lane == "original_dense"
-        assert response.response.meta.params.get("semantic_style") == "original_dense"
-        _assert_took_ms(response.response.meta.took_ms, "original_dense search")
+        assert response.meta.params.get("semantic_style") == "original_dense"
+        _assert_took_ms(response.meta.took_ms, "original_dense search")
 
 
 @pytest.mark.integration
@@ -226,9 +232,15 @@ async def test_original_dense_lane_metadata():
 async def test_snippet_identifier_fields_available():
     async with service_context() as service:
         search_resp = await service.search_lane("fulltext", query="id fields", top_k=5)
-        doc_ids = [item.doc_id for item in search_resp.response.items[:3]]
+        peek = await service.peek_snippets(
+            run_id=search_resp.run_id_lane,
+            limit=3,
+            fields=["app_doc_id", "pub_id", "exam_id"],
+            per_field_chars={"app_doc_id": 32, "pub_id": 32, "exam_id": 32},
+        )
+        doc_ids = [snippet.id for snippet in peek.snippets]
         assert doc_ids, "search should return doc IDs for snippet validations"
-        _assert_took_ms(search_resp.response.meta.took_ms, "id field search")
+        _assert_took_ms(search_resp.meta.took_ms, "id field search")
 
         snippets = await service.get_snippets(
             ids=doc_ids,

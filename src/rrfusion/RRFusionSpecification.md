@@ -945,6 +945,10 @@ LLM エージェント側でもこのステップを踏むことが前提で、`
   - クエリのハッシュ化に `hash_query`（`src/rrfusion/utils.py`）を再利用し、`fields` や `filters` まで含めた総合キーを生成しておけば、同じパラメータを利用したときにキャッシュがヒットしやすくなります。
 
 - 現在の `RedisStorage.store_lane_run` は `query_hash`（クエリ＋filters）＋ `lane` で `z:<snapshot>:<query_hash>:<lane>` のスコアセットとドキュメントハッシュを保存し、後続 `blend_frontier_codeaware` は `zslice`/`get_docs` で再利用しています（`src/rrfusion/storage.py:42-220`）。この仕組みを前倒しして、lane 実行前に同じ `query_hash` が存在すれば `SearchToolResponse` をそのまま再利用するパスを追加すると、`run_id` を新たに切らなくてもキャッシュヒットが可能です。
+#### コード語彙によるキャッシュ圧縮
+
+- `RedisStorage` 内部で `code_vocab:{snapshot}` と `code_vocab_rev:{snapshot}` を管理し、分類コード（IPC/CPC/FI/FT/F-term）を整数 ID に置き換えて格納するようにしました。これにより Redis への `doc` フィールド保存時の文字列サイズを抑えつつ、`get_docs` 時には逆引きして元のコード文字列を復元できます（`src/rrfusion/storage.py:36-220`）。
+- レーン実行では、全ドキュメントに含まれるコードをまとめて辞書化し、`store_lane_run` ではその ID 列を `json.dumps` して保存。`get_docs` は request ごとにコード ID を読み出し、キャッシュ済みの逆マップまたは Redis から引いた文字列で復元します。これにより `doc` キャッシュの平均サイズが下がり、F-term を含むコード頻度のキャッシュも軽量になります。
   - さらに `peek_snippets`/`get_snippets` で `_fetch_snippets_from_backend` によって不足分を追加したり `upsert_docs` で更新している現行ロジック（`src/rrfusion/mcp/service.py:520-694`）と組み合わせれば、スニペットの鮮度を損なわずに段階的なキャッシュ強化ができます。
 
 ### Step 7. Frontier Tuning（フロンティア調整）
@@ -1423,6 +1427,7 @@ search_fulltext(
     fields: list[SnippetField] | None = None,
     field_boosts: dict[str, float] | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
 ) -> SearchToolResponse
 ```
@@ -1439,9 +1444,11 @@ search_fulltext(
 - `field_boosts`  
   - fulltext 専用のフィールドブースト。  
   - 例: `{"title": 100, "abstract": 10, "claim": 5, "description": 1}`。  
-  - 内部で Patentfield の `weights` にマッピングされ、title/abstract/claims/description への重み付けに使用される。
+  - 内部で Patentfield の `weights` にマッピングされ、title/abstract/claims/description への重み付けに使用される（Patentfield 側の `weights` は **整数** を想定しているため、小数で指定された場合も内部で `int` に丸めて送信される）。
 - `top_k`  
   - Redis に保持する上位件数（通常 〜800）。
+- `code_freq_top_k`
+  - `code_freqs` に含めるコードの上位件数（デフォルト 30）。`None` を渡すと全コードを返す。
 - `trace_id`  
   - 任意のトレース ID。`Meta.trace_id` やログにコピーされる。
 
@@ -1452,20 +1459,15 @@ search_fulltext(
 - `run_id_lane: str`  
   - このレーン実行を識別する ID。  
   - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` などで参照する。
-- `response: DBSearchResponse`  
-  - `items: list[SearchItem]`  
-    - 各 `SearchItem` は `doc_id`, `score`, `ipc_codes`, `cpc_codes`, `fi_codes`, `ft_codes` を持つ。  
-    - ft_codes は Patentfield の `fterms` 列（Fタームタグ）から取得される。  
-    - スコアは Patentfield 側の tfidf に基づく。  
-  - `code_freqs: dict[str, dict[str, int]]`  
-    - IPC/CPC/FI/FT ごとの頻度集計。  
-    - FT 頻度も Patentfield の `fterms` 列から収集される（`code_freqs["ft"]` の元データ）。  
-  - `meta: Meta`  
-    - `meta.took_ms` など、検索に関するメタ情報。
+- `meta: Meta`  
+  - `meta.params` には `search_fulltext`／`search_semantic` の引数と `trace_id`、`fields`、`feature_scope`（semantic）などが入る。
 - `count_returned: int` / `truncated: bool`  
   - 実際に返ってきた件数と、`top_k` に対して切り詰められたかどうか。
-- `code_freqs`  
-  - `response.code_freqs` と同じ集計値へのショートカット。
+- `code_freqs: dict[str, dict[str, int]]`  
+  - IPC/CPC/FI/FT ごとの頻度集計。  
+  - 返却時点では `code_freq_top_k` に応じて上位 n 個に絞り込まれており、F-term（FT）分布も Patentfield の `fterms` 列から取得される。  
+  - `code_freq_top_k` を `None` にすると全コードをそのまま返すので、LLM/エージェントが必要なときにのみ値を増やす。  
+  - 実運用では 30 程度で十分なため、デフォルトの引数はこの値に設定される。
 
 > 実装ノート（lane）：payload に `lane` を含めることで、stub 側でも fulltext/semantic の区別を再現しています。
 
@@ -1496,6 +1498,7 @@ search_semantic(
     fields: list[SnippetField] | None = None,
     feature_scope: str | None = None,
     top_k: int = 800,
+    code_freq_top_k: int | None = 30,
     trace_id: str | None = None,
     semantic_style: SemanticStyle = "default",
 ) -> SearchToolResponse
@@ -1520,6 +1523,8 @@ search_semantic(
   - 未指定時は `"wide"` 相当として扱う。
 - `top_k`  
   - Redis に保持する上位件数（通常 〜800）。
+- `code_freq_top_k`  
+  - `code_freqs` に含めるコードの上位件数（デフォルト 30）。`None` を渡すと全コードを返す。
 - `trace_id`  
   - 任意のトレース ID。
 - `semantic_style`  
@@ -1535,12 +1540,14 @@ search_semantic(
 - `run_id_lane: str`  
   - この semantic 実行を識別する ID。  
   - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` で使う。
-- `response: DBSearchResponse`  
-  - フィールド構造は `search_fulltext` と同一で、  
-    `items`（`SearchItem` のリスト）、`code_freqs`、`meta` を含む。  
-    スコアは Patentfield 側の similarity スコア（`score_type="similarity_score"`）に基づく。
-- その他のフィールド  
-  - `count_returned`, `truncated`, `code_freqs` などは `search_fulltext` と同様の意味を持つ。
+- `meta: Meta`  
+  - `meta.params` には `search_semantic` ～ `code_freq_top_k` の引数が入り、`trace_id` / `fields` / `feature_scope` / `semantic_style` などが含まれる。
+- `count_returned: int` / `truncated: bool`  
+  - 実際に返ってきた件数と、`top_k` に対して切り詰められたかどうか。
+- `code_freqs: dict[str, dict[str, int]]`  
+  - IPC/CPC/FI/FT ごとの頻度集計。  
+  - `code_freq_top_k` に応じて上位 n 個に絞られ、FT 項目は Patentfield の `fterms` から取得される。  
+  - `code_freq_top_k` を `None` にすると全コードを返すため、「全体分布の確認時だけ増やす」などの戦略が立てられる。
 
 ---
 

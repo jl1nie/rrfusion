@@ -26,7 +26,6 @@ from ..models import (
     BlendResponse,
     BlendRunInput,
     Cond,
-    DBSearchResponse,
     FeatureScope,
     FulltextParams,
     GetPublicationRequest,
@@ -86,6 +85,7 @@ DEFAULT_TOP_M_PER_LANE = {
     "semantic": 10000,
 }
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
+DEFAULT_CODE_FREQ_TOP_K = 30
 
 
 def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
@@ -100,6 +100,20 @@ def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
         taxonomy_counters["fi"].update(item.fi_codes)
         taxonomy_counters["ft"].update(item.ft_codes)
     return {taxonomy: dict(counter) for taxonomy, counter in taxonomy_counters.items()}
+
+
+def _trim_code_freqs(
+    freqs: dict[str, dict[str, int]] | None, top_k: int | None
+) -> dict[str, dict[str, int]] | None:
+    """Return a truncated view of the frequency table for the response."""
+    if not freqs or not top_k or top_k <= 0:
+        return freqs
+    trimmed: dict[str, dict[str, int]] = {}
+    for taxonomy, distribution in freqs.items():
+        sorted_codes = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
+        limited = sorted_codes[:top_k]
+        trimmed[taxonomy] = {code: count for code, count in limited}
+    return trimmed
 
 
 SearchParams = FulltextParams | SemanticParams
@@ -212,6 +226,7 @@ class MCPService:
         semantic_style: SemanticStyle = "default",
         field_boosts: dict[str, float] | None = None,
         feature_scope: FeatureScope | None = None,
+        code_freq_top_k: int | None = DEFAULT_CODE_FREQ_TOP_K,
     ) -> SearchToolResponse:
         start = perf_counter()
         backend = self.backend_registry.get_backend(lane)
@@ -282,6 +297,7 @@ class MCPService:
         meta = _search_meta(lane, params)
         metadata["params"] = meta.params
         freq_summary = db_payload.code_freqs or _code_freq_summary(db_payload.items)
+        trimmed_freq_summary = _trim_code_freqs(freq_summary, code_freq_top_k)
         await self.storage.store_lane_run(
             run_id=run_id,
             lane=lane,
@@ -291,21 +307,16 @@ class MCPService:
             freq_summary=freq_summary,
         )
 
-        response = DBSearchResponse(
-            items=db_payload.items,
-            code_freqs=freq_summary,
-            meta=meta,
-        )
         response = SearchToolResponse(
             lane=lane,
             run_id_lane=run_id,
-            response=response,
+            meta=meta,
             count_returned=count_returned,
             truncated=truncated,
-            code_freqs=freq_summary,
+            code_freqs=trimmed_freq_summary,
             cursor=None,
         )
-        response.response.meta.took_ms = _elapsed_ms(start)
+        response.meta.took_ms = _elapsed_ms(start)
         return response
 
     async def _fetch_snippets_from_backend(
