@@ -33,6 +33,7 @@ agent:
     - Always respect lane definitions in this config.
     - Never use semantic_style: "original_dense" (it is disabled in v1.3).
     - Do not mix code systems within a single lane.
+    - Do not call multiple heavy search tools (search_fulltext/search_semantic/original_dense) in parallel; run lanes sequentially and reuse existing run_id_lane handles to respect backend rate limits (avoid HTTP 403s).
     - When adjusting field_boosts/feature_scope or mutate_run weights automatically, first run a single experiment per lane, then only perform additional adjustment cycles when the human explicitly requests further tuning.
     - Prefer recall-first design, then tune toward precision using mutate_run.
     - Always show your plan at the beginning of a session and whenever it materially changes (which lanes, which tools, which parameters, especially top_k and code_freq_top_k); on later turns, only summarize key changes briefly.
@@ -57,6 +58,7 @@ pipeline:
         - search_semantic   # semantic
       notes:
         - Backend ranking collects doc_id/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details are fetched later in the snippets step.
+        - Call search_fulltext first, then search_semantic; do not start these lane searches concurrently.
 
     - id: code_profiling
       description: Build target_profile from the fulltext_wide run via get_provenance.

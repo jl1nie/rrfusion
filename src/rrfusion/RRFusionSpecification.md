@@ -700,7 +700,7 @@ field_hints:
    - コード制約：
      - 原則なし（技術分野の先入観を避ける）
    - 実行：
-     - `search_fulltext` を呼び、`fulltext_wide` レーン用の `run_id_fulltext_wide` を得る
+     - `search_fulltext` を呼び、`fulltext_wide` レーン用の `run_id_fulltext_wide` を得る（rate limit を避けるため、後続の `semantic` レーンとはシーケンシャルに実行する）
      - この `run_id_fulltext_wide` を **レーン名と紐付けて保存** しておく
 
 2. `semantic` レーン（`search_semantic`）
