@@ -735,6 +735,7 @@ field_hints:
      - `run_id_fulltext_wide`（Step 2 で得た wide レーンの run）
    - `get_provenance(run_id_fulltext_wide)` を呼び、
      - FI/FT/CPC/IPC のコード頻度分布（文献集合ごとの出現頻度）を取得する
+       - FT 項目は Patentfield の `fterms` 列（Fタームタグ）から収集されるため、`target_profile` の `F-term:...` もこの列を参照して得られる
 
 2. `target_profile` の構築（LLM ロジック）
 
@@ -751,6 +752,8 @@ field_hints:
      "FI:H01L33/20": 0.7
      ...
    ```
+
+   - `F-term:...` のようなエントリは Patentfield の `fterms` 列（Fタームタグ）から取得され、`target_profile` の FT 部分に対応する
 
    - 以降の Step 4〜5 では、この `target_profile` を使って
      - in-field fulltext レーン（recall / precision）のコード制約
@@ -1452,9 +1455,11 @@ search_fulltext(
 - `response: DBSearchResponse`  
   - `items: list[SearchItem]`  
     - 各 `SearchItem` は `doc_id`, `score`, `ipc_codes`, `cpc_codes`, `fi_codes`, `ft_codes` を持つ。  
-    - スコアは Patentfield 側の tfidf に基づく。
+    - ft_codes は Patentfield の `fterms` 列（Fタームタグ）から取得される。  
+    - スコアは Patentfield 側の tfidf に基づく。  
   - `code_freqs: dict[str, dict[str, int]]`  
-    - IPC/CPC/FI/FT ごとの頻度集計。
+    - IPC/CPC/FI/FT ごとの頻度集計。  
+    - FT 頻度も Patentfield の `fterms` 列から収集される（`code_freqs["ft"]` の元データ）。  
   - `meta: Meta`  
     - `meta.took_ms` など、検索に関するメタ情報。
 - `count_returned: int` / `truncated: bool`  

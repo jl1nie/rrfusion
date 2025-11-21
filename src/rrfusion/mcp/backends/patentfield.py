@@ -42,7 +42,7 @@ FIELD_FILTER_MAP: dict[str, str] = {
     "country": "country",
 }
 
-CODE_FIELDS = ("ipcs", "cpcs", "fis", "fts")
+CODE_FIELDS = ("ipcs", "cpcs", "fis", "fterms")
 
 
 class PatentfieldBackend(HttpLaneBackend):
@@ -269,7 +269,7 @@ class PatentfieldBackend(HttpLaneBackend):
                     ipc_codes=self._normalize_codes(hit, "ipcs", "ipc_codes"),
                     cpc_codes=self._normalize_codes(hit, "cpcs", "cpc_codes"),
                     fi_codes=self._normalize_codes(hit, "fis", "fi_codes"),
-                    ft_codes=self._normalize_codes(hit, "fts", "ft_codes"),
+                    ft_codes=self._normalize_codes(hit, "fterms", "fts", "ft_codes"),
                 )
             )
         meta_params = {"query": getattr(request, "query", getattr(request, "text", ""))}
