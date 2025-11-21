@@ -286,7 +286,7 @@ def _normalize_blend_runs(runs: list[Any] | None) -> list[BlendRunInput]:
 
 
 def _normalize_target_profile(
-    target_profile: dict[str, Any] | None,
+    target_profile: Any | None,
 ) -> dict[str, dict[str, float]] | None:
     """
     Coerce a flat or partially-specified target_profile into
@@ -296,7 +296,7 @@ def _normalize_target_profile(
       as {"fi": {...}}.
     - If dict[str,dict] is given, coerce inner values to float.
     """
-    if not target_profile:
+    if not target_profile or not isinstance(target_profile, dict):
         return None
     # Detect flat dict: all values are scalar numbers
     if all(
@@ -472,11 +472,11 @@ async def search_semantic(
 
 @mcp.tool
 async def blend_frontier_codeaware(
-    runs: list[BlendRunInput],
+    runs: list[Any] | None = None,
     weights: dict[str, float] | None = None,
     rrf_k: int = 60,
     beta_fuse: float = 1.0,
-    target_profile: dict[str, dict[str, float]] | None = None,
+    target_profile: Any | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,
     peek: PeekConfig | None = None,
@@ -488,9 +488,9 @@ async def blend_frontier_codeaware(
       - Use when you need a single fused ranking plus precision/recall-style frontier metrics.
     arguments:
       runs:
-        type: list[BlendRunInput]
+        type: list[object]
         required: true
-        description: Lane/run_id pairs referencing existing lane search runs.
+        description: Lane/run_id handles (either strings like \"fulltext-<id>\" or dicts with lane/run_id_lane) referencing existing lane search runs.
       weights:
         type: dict[str, float]
         required: false
@@ -504,9 +504,9 @@ async def blend_frontier_codeaware(
         required: false
         description: F-beta-like bias for frontier computation (>1 for recall, <1 for precision).
       target_profile:
-        type: dict[str, dict[str, float]]
+        type: object
         required: false
-        description: Code prior by taxonomy (e.g., {"ipc":{"H04L":0.7}, "fi":{"H04L1/00":1.0}}) for code-aware boosts.
+        description: Code prior; either taxonomy->code->weight dict (e.g., {"fi":{"H04L1/00":1.0}}) or a flat code->weight dict that the host will normalize.
       top_m_per_lane:
         type: dict[str, int]
         required: false
