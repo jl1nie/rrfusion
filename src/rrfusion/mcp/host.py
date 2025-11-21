@@ -171,6 +171,23 @@ def _normalize_optional_str(value: Any) -> Any:
     return value
 
 
+def _normalize_date_value(value: Any) -> Any:
+    def _format(v: Any) -> Any:
+        if isinstance(v, int):
+            s = str(v)
+            if len(s) == 8 and s.isdigit():
+                return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        if isinstance(v, str) and len(v) == 8 and v.isdigit():
+            return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+        return v
+
+    if isinstance(value, (list, tuple)):
+        return [_format(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _format(v) for k, v in value.items()}
+    return _format(value)
+
+
 def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
     """Coerce incoming filters to a list of Cond models."""
     if not filters:
@@ -180,7 +197,10 @@ def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
         if isinstance(entry, Cond):
             normalized.append(entry)
         elif isinstance(entry, dict):
-            normalized.append(Cond.model_validate(entry))
+            payload = dict(entry)
+            if "value" in payload:
+                payload["value"] = _normalize_date_value(payload["value"])
+            normalized.append(Cond.model_validate(payload))
         else:
             raise RuntimeError(f"unexpected filter type: {type(entry)}")
     return normalized
