@@ -243,6 +243,37 @@ def _normalize_blend_runs(runs: list[Any] | None) -> list[BlendRunInput]:
     return normalized
 
 
+def _normalize_target_profile(
+    target_profile: dict[str, Any] | None,
+) -> dict[str, dict[str, float]] | None:
+    """
+    Coerce a flat or partially-specified target_profile into
+    taxonomy -> {code -> weight} form.
+
+    - If a flat dict[str,float|int] is given, assume FI taxonomy and wrap
+      as {"fi": {...}}.
+    - If dict[str,dict] is given, coerce inner values to float.
+    """
+    if not target_profile:
+        return None
+    # Detect flat dict: all values are scalar numbers
+    if all(
+        not isinstance(value, dict) and isinstance(value, (int, float))
+        for value in target_profile.values()
+    ):
+        return {"fi": {code: float(weight) for code, weight in target_profile.items()}}
+    # Otherwise assume taxonomy->dict
+    normalized: dict[str, dict[str, float]] = {}
+    for taxonomy, codes in target_profile.items():
+        if not isinstance(codes, dict):
+            # Skip unexpected shapes to avoid crashing
+            continue
+        normalized[taxonomy] = {
+            code: float(weight) for code, weight in codes.items()
+        }
+    return normalized or None
+
+
 # ============================
 # Prompts
 # ============================
@@ -461,7 +492,7 @@ async def blend_frontier_codeaware(
         weights=weights,
         rrf_k=rrf_k,
         beta_fuse=beta_fuse,
-        target_profile=target_profile,
+        target_profile=_normalize_target_profile(target_profile),
         top_m_per_lane=top_m_per_lane,
         k_grid=k_grid,
         peek=peek,
