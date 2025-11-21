@@ -349,22 +349,34 @@ class PatentfieldBackend(HttpLaneBackend):
                 columns.append(doc_key)
         limit = min(len(request.ids), self.settings.patentfield_max_results)
         query_ids = [str(doc_id).strip() for doc_id in request.ids if str(doc_id).strip()]
-        if query_ids:
-            q_entries = [f'pub_id:"{doc_id}"' for doc_id in query_ids]
-            q_string = " OR ".join(q_entries)
-        else:
-            q_string = "*"
+        numbers = []
+        for doc_id in query_ids:
+            numbers.append(
+                {
+                    "n": doc_id,
+                    "t": self._guess_id_type(doc_id),
+                }
+            )
+
         payload: dict[str, object] = {
             "search_type": "fulltext",
-            "q": q_string,
             "limit": max(1, limit),
             "offset": 0,
             "columns": columns,
             "targets": columns,
             "score_type": "tfidf",
             "sort_keys": list(self.settings.patentfield_sort_keys),
+            "numbers": numbers,
         }
         return payload
+
+    def _guess_id_type(self, identifier: str) -> str:
+        identifier = identifier.upper()
+        if identifier.startswith("APP"):
+            return "app_id"
+        if identifier.startswith("EXAM"):
+            return "exam_id"
+        return "pub_id"
 
     async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
         payload = self._build_search_payload(request, lane)

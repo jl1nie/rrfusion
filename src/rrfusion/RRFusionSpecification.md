@@ -1506,7 +1506,7 @@ search_fulltext(
 > **注意**：`search_semantic` も `budget_bytes` を受け取らず、`top_k` だけを使って ranking を保持します。  
 > スニペットを byte で制御したい場合は `peek_snippets` / `get_snippets` に `budget_bytes` / `per_field_chars` を指定してください。
 
-> 実装ノート：semantic もテキストを返さず、`get_snippets` は `doc_id` リストを `pub_id` の OR クエリに変換して再検索し、必要なセクションを拾います（backend はこのような検索をサポートしている必要があります）。
+> 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、doc_id リストを `{"n": "<pair>", "t": "pub_id"}` 形式に変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
 
 **シグネチャ（`mcp.host` と一致）**
 
