@@ -47,7 +47,7 @@ class Cond(BaseModel):
     def _normalize_case(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
-    return value
+        return value
 
 
 class FilterEntry(BaseModel):
