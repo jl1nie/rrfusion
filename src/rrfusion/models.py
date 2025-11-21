@@ -43,7 +43,7 @@ class Cond(BaseModel):
     op: Literal["in", "range", "eq", "neq"]
     value: Any
 
-    @field_validator("lop", "op", pre=True)
+    @field_validator("lop", "op", mode="before")
     def _normalize_case(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower()
