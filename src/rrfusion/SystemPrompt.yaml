@@ -264,6 +264,7 @@ tool_usage:
       - Phrase search: wrap terms in double quotes to search for an exact phrase, e.g. `"solar panel"`.
       - NEAR search: use commands like `*N5"太陽 電池"` (unordered) or `*ONP5"太陽 電池"` (ordered) to require terms to appear within a given character distance.
       - Inside a NEAR expression, do not use nested parentheses or additional AND/OR/NOT; only simple term lists and optional top-level groups are supported.
+      - When you need a date range filter, always create a `Cond` with `op="range"` and `value=["2020-01-01","2020-12-31"]` or a simple `{"from":"2020-01-01","to":"2020-12-31"}` dictionary; the host will canonicalize `from/to` into the list for you. Never reference `q1`/`q2`; the backend will translate the `value` list into the required `q1`/`q2` keys automatically.
 
   search_semantic:
     when_to_use:

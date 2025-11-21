@@ -200,6 +200,12 @@ def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
             payload = dict(entry)
             if "value" in payload:
                 payload["value"] = _normalize_date_value(payload["value"])
+            if payload.get("op") == "range" and isinstance(payload.get("value"), dict):
+                value_dict = payload["value"]
+                start = value_dict.get("from") or value_dict.get("start")
+                end = value_dict.get("to") or value_dict.get("end")
+                if start is not None and end is not None:
+                    payload["value"] = [start, end]
             normalized.append(Cond.model_validate(payload))
         else:
             raise RuntimeError(f"unexpected filter type: {type(entry)}")
