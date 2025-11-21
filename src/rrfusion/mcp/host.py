@@ -238,10 +238,12 @@ def _normalize_blend_runs(runs: list[Any] | None) -> list[BlendRunInput]:
                 payload["lane"] = _guess_lane_from_run_id(payload["run_id_lane"])
             normalized.append(BlendRunInput.model_validate(payload))
         elif isinstance(entry, str):
+            lane_part, _, run_part = entry.partition("-")
+            candidate_lane = lane_part if lane_part in {"fulltext", "semantic", "original_dense"} else _guess_lane_from_run_id(entry)
             normalized.append(
                 BlendRunInput(
-                    lane=_guess_lane_from_run_id(entry),
-                    run_id_lane=entry,
+                    lane=candidate_lane,
+                    run_id_lane=run_part if run_part else entry,
                 )
             )
         else:
