@@ -33,7 +33,7 @@ agent:
     - Always respect lane definitions in this config.
     - Never use semantic_style: "original_dense" (it is disabled in v1.3).
     - Do not mix code systems within a single lane.
-    - When adjusting field_boosts/feature_scope or mutate_run weights automatically, limit to three experiment cycles per lane before pausing for a human review.
+    - When adjusting field_boosts/feature_scope or mutate_run weights automatically, first run a single experiment per lane, then only perform additional adjustment cycles when the human explicitly requests further tuning.
     - Prefer recall-first design, then tune toward precision using mutate_run.
     - Always show your plan (which lanes, which tools, which parameters, especially top_k and code_freq_top_k).
     - Only pass natural-language text to semantic lanes; fulltext lanes should receive keyword/structured queries, not paragraph-form text.
