@@ -178,7 +178,8 @@ class PatentfieldBackend(HttpLaneBackend):
         conditions: list[dict[str, Any]] = []
         for cond in filters:
             key = FIELD_FILTER_MAP.get(cond.field, cond.field)
-            entry: dict[str, Any] = {"key": key, "lop": cond.lop, "op": cond.op}
+            lop = cond.lop.lower()
+            entry: dict[str, Any] = {"key": key, "lop": lop, "op": cond.op}
             if (
                 cond.op == "range"
                 and isinstance(cond.value, (list, tuple))
@@ -187,7 +188,22 @@ class PatentfieldBackend(HttpLaneBackend):
                 entry["q1"] = cond.value[0]
                 entry["q2"] = cond.value[1]
             else:
-                entry["q"] = cond.value
+                if cond.op == "in":
+                    q_value = cond.value
+                    normalized: list[object] = []
+                    if isinstance(q_value, dict):
+                        for value in q_value.values():
+                            if isinstance(value, (list, tuple)):
+                                normalized.extend(value)
+                            else:
+                                normalized.append(value)
+                    elif isinstance(q_value, (list, tuple)):
+                        normalized.extend(q_value)
+                    else:
+                        normalized.append(q_value)
+                    entry["q"] = normalized
+                else:
+                    entry["q"] = cond.value
             conditions.append(entry)
         return conditions
 

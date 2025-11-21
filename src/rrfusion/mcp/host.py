@@ -171,6 +171,21 @@ def _normalize_optional_str(value: Any) -> Any:
     return value
 
 
+def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
+    """Coerce incoming filters to a list of Cond models."""
+    if not filters:
+        return []
+    normalized: list[Cond] = []
+    for entry in filters:
+        if isinstance(entry, Cond):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            normalized.append(Cond.model_validate(entry))
+        else:
+            raise RuntimeError(f"unexpected filter type: {type(entry)}")
+    return normalized
+
+
 # ============================
 # Prompts
 # ============================
@@ -238,7 +253,7 @@ async def search_fulltext(
     response = await _require_service().search_lane(
         "fulltext",
         query=query,
-        filters=_normalize_optional_list(filters),
+        filters=_normalize_filters(filters),
         fields=_normalize_optional_list(fields),
         field_boosts=_normalize_optional_dict(field_boosts),
         top_k=top_k,
@@ -313,7 +328,7 @@ async def search_semantic(
     response = await _require_service().search_lane(
         lane,
         text=text,
-        filters=_normalize_optional_list(filters),
+        filters=_normalize_filters(filters),
         fields=_normalize_optional_list(fields),
         feature_scope=_normalize_optional_str(feature_scope),
         top_k=top_k,
