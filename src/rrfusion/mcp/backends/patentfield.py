@@ -348,23 +348,21 @@ class PatentfieldBackend(HttpLaneBackend):
             if doc_key not in columns:
                 columns.append(doc_key)
         limit = min(len(request.ids), self.settings.patentfield_max_results)
+        query_ids = [str(doc_id).strip() for doc_id in request.ids if str(doc_id).strip()]
+        if query_ids:
+            q_entries = [f'pub_id:"{doc_id}"' for doc_id in query_ids]
+            q_string = " OR ".join(q_entries)
+        else:
+            q_string = "*"
         payload: dict[str, object] = {
             "search_type": "fulltext",
-            "q": "*",
+            "q": q_string,
             "limit": max(1, limit),
             "offset": 0,
             "columns": columns,
             "targets": columns,
             "score_type": "tfidf",
             "sort_keys": list(self.settings.patentfield_sort_keys),
-            "conditions": [
-                {
-                    "key": "pub_id",
-                    "lop": "and",
-                    "op": "in",
-                    "q": request.ids,
-                }
-            ],
         }
         return payload
 
