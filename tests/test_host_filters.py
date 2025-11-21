@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from rrfusion.mcp import host
-from rrfusion.models import Cond
 
 
 def test_normalize_filters_accepts_range_dict() -> None:
