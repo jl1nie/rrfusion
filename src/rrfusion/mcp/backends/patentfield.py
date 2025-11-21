@@ -30,6 +30,8 @@ FIELD_COLUMN_MAP: dict[str, str] = {
     "app_id": "app_id",
     "pub_id": "pub_id",
     "exam_id": "exam_id",
+    "apm_applicants": "apm_applicants",
+    "cross_en_applicants": "cross_en_applicants",
 }
 
 FIELD_FILTER_MAP: dict[str, str] = {

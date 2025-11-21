@@ -98,6 +98,8 @@ def _doc_meta(doc_id: str) -> dict:
     app_doc_id = doc_id
     pub_id = f"DOC{doc_id[-6:]}"
     exam_id = f"EXAM{doc_id[-5:].upper()}"
+    apm_applicants = f"Applicant JP{doc_id[-4:]}"
+    cross_en_applicants = f"Cross Applicant EN{doc_id[-4:]}"
     return {
         "doc_id": doc_id,
         "title": title,
@@ -107,6 +109,8 @@ def _doc_meta(doc_id: str) -> dict:
         "app_doc_id": app_doc_id,
         "pub_id": pub_id,
         "exam_id": exam_id,
+        "apm_applicants": apm_applicants,
+        "cross_en_applicants": cross_en_applicants,
         "ipc_codes": ipc_codes,
         "cpc_codes": cpc_codes,
         "fi_codes": fi_codes,

@@ -23,6 +23,8 @@ SnippetField = Literal[
     "app_doc_id",
     "pub_id",
     "exam_id",
+    "apm_applicants",
+    "cross_en_applicants",
 ]
 
 SEARCH_FIELDS_DEFAULT: list[SnippetField] = ["abst", "title", "claim"]
@@ -147,9 +149,17 @@ class PeekSnippetsRequest(BaseModel):
     run_id: str
     offset: int = 0
     limit: int = 12
-    fields: list[SnippetField] = Field(default_factory=lambda: ["title", "abst", "claim"])
+    fields: list[SnippetField] = Field(
+        default_factory=lambda: ["title", "abst", "claim", "apm_applicants", "cross_en_applicants"]
+    )
     per_field_chars: dict[SnippetField, int] = Field(
-        default_factory=lambda: {"title": 80, "abst": 320, "claim": 320}
+        default_factory=lambda: {
+            "title": 80,
+            "abst": 320,
+            "claim": 320,
+            "apm_applicants": 128,
+            "cross_en_applicants": 128,
+        }
     )
     budget_bytes: int = 12_288
     trace_id: str | None = None
@@ -178,9 +188,18 @@ class PeekSnippetsResponse(BaseModel):
 
 class GetSnippetsRequest(BaseModel):
     ids: list[str]
-    fields: list[SnippetField] = Field(default_factory=lambda: ["title", "abst", "claim", "desc"])
+    fields: list[SnippetField] = Field(
+        default_factory=lambda: ["title", "abst", "claim", "desc", "apm_applicants", "cross_en_applicants"]
+    )
     per_field_chars: dict[SnippetField, int] = Field(
-        default_factory=lambda: {"title": 160, "abst": 480, "claim": 800, "desc": 800}
+        default_factory=lambda: {
+            "title": 160,
+            "abst": 480,
+            "claim": 800,
+            "desc": 800,
+            "apm_applicants": 128,
+            "cross_en_applicants": 128,
+        }
     )
     trace_id: str | None = None
 

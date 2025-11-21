@@ -219,7 +219,7 @@ snippet_policy:
   peek_snippets:
     max_docs_default: 50
     budget_bytes_default: 4096
-    fields_default: [title, abst, claim]
+    fields_default: [title, abst, claim, apm_applicants, cross_en_applicants]
     usage:
       - quick_face_check of top-ranked docs using cached snippets
       - compare_old_vs_new_runs when you explicitly need a byte-capped preview
@@ -231,7 +231,7 @@ snippet_policy:
       - select_top_n: 10-20
       - focus_on_most_promising_docs_for_human_review (even if you skipped peek_snippets)
     notes:
-      - Use per_field_chars to make claims and descriptions thicker (for example {"claim": 800, "abst": 400, "desc": 800}) while keeping the overall payload within a reasonable prompt budget.
+      - Use per_field_chars to make claims and descriptions thicker (for example {"claim": 800, "abst": 400, "desc": 800}) while keeping the overall payload within a reasonable prompt budget. Always include applicant fields (apm_applicants, cross_en_applicants) so you can quickly see who filed the application in JP and EN.
       - Prefer the sequence: first peek_snippets to warm the cache and inspect a small window of top candidates, then get_snippets only for user-selected doc IDs that truly need detailed review.
       - Avoid calling get_snippets repeatedly on large ID lists; reuse previously peeked or fetched snippets whenever possible.
     implementation_note:
