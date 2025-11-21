@@ -328,7 +328,7 @@ def _normalize_target_profile(
 @mcp.tool
 async def search_fulltext(
     query: str,
-    filters: list[Cond] | None = None,
+    filters: list[Any] | None = None,
     fields: list[SnippetField] | None = None,
     field_boosts: dict[str, float] | None = None,
     top_k: int = 800,
@@ -346,9 +346,9 @@ async def search_fulltext(
         required: true
         description: Search expression describing the technical idea in the corpus language.
       filters:
-        type: list[Cond]
+        type: list[object]
         required: false
-        description: Optional structured filters (e.g., years, jurisdictions, classification codes).
+        description: High-level filters ({field, include_values/include_codes/include_range}); host converts them into low-level conditions.
       fields:
         type: list[SnippetField]
         required: false
@@ -397,7 +397,7 @@ async def search_fulltext(
 @mcp.tool
 async def search_semantic(
     text: str,
-    filters: list[Cond] | None = None,
+    filters: list[Any] | None = None,
     fields: list[SnippetField] | None = None,
     feature_scope: str | None = None,
     top_k: int = 800,
@@ -416,9 +416,9 @@ async def search_semantic(
         required: true
         description: Natural language description of the technical idea (1–3 paragraphs).
       filters:
-        type: list[Cond]
+        type: list[object]
         required: false
-        description: Restrict by years, jurisdictions, languages, or other metadata fields.
+        description: High-level filters ({field, include_values/include_codes/include_range}); host converts them into low-level conditions.
       fields:
         type: list[SnippetField]
         required: false
