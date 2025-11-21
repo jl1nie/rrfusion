@@ -173,7 +173,7 @@ The MCP loop always starts with independent lane searches, continues with fusion
 
 1. Run both `search_fulltext` and `search_semantic` with identical query/filters to mint lane handles, choosing between `search_fulltext.wide`, `.focused`, or `.hybrid` to match your recall/precision trade-off before fusion.
 2. Feed the resulting `run_id_lane` values to `blend_frontier_codeaware` to decide which `k` frontier to review.
-3. Use `peek_snippets` sparingly to preview the fused ordering, then `get_snippets` for the short-listed doc IDs. When budgets should not trim the payload, call `get_publication` instead; it pulls the uncapped publication text via the backend (`id_type` selects `pub_id`, `app_doc_id`, or `exam_id`).
+3. Use `peek_snippets` sparingly to preview the fused ordering, then `get_snippets` for the short-listed doc IDs. When budgets should not trim the payload, call `get_publication` instead; it pulls the uncapped publication text via the backend (`id_type` selects `pub_id`, `app_doc_id`, `app_id`, or `exam_id`).
 4. When you need to branch on weights, RRF constants, or code targeting, call `mutate_run` instead of issuing new lane searches.
 5. Preserve provenance by logging the fusion `run_id` and, when necessary, resolve it later via `get_provenance`.
 
@@ -315,7 +315,7 @@ async def peek_snippets(
 
 `peek_snippets` is the budget-gated way to inspect the fused ordering. Keep requests under `PEEK_MAX_DOCS` and watch the `peek_cursor` if you need to paginate through the ranking.
 
-By default it returns up to 12 items with `["title","abst","claim"]`, clamping each field to 160/480/320 characters so the total size stays under 12 KB (`PEEK_BUDGET_BYTES`). You can also request `desc`, `app_doc_id`, `pub_id`, or `exam_id` to see the patent identifiers (note `doc_id` is modeled as the publication number/backed `pub_id`). When you need the uncapped payload, call `get_publication` to retrieve the full text via the backend without enforcing the snippet budget.
+By default it returns up to 12 items with `["title","abst","claim"]`, clamping each field to 160/480/320 characters so the total size stays under 12 KB (`PEEK_BUDGET_BYTES`). You can also request `desc`, `app_doc_id`, `pub_id`, or `exam_id` to see the patent identifiers (note `doc_id` now represents the primary EPODOC-style application number, i.e., `app_id`). When you need the uncapped payload, call `get_publication` to retrieve the full text via the backend without enforcing the snippet budget.
 
 ### `get_publication`
 
@@ -325,11 +325,11 @@ from rrfusion.mcp.host import mcp
 @mcp.tool
 async def get_publication(
     ids: list[str],
-    id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id",
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
     fields: list[str] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
-    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","exam_id"], fields: list[str] | None = None)
+    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","app_id","exam_id"], fields: list[str] | None = None)
     prompts/list:
     - "Get the publication text for the selected IDs {ids}"
     - "Show the publication/app/exam identifiers for {ids}"

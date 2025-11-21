@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, HTTPException
+from pydantic import ValidationError
 
 from rrfusion.db_stub.generator import (
     generate_search_results,
@@ -17,6 +20,7 @@ from rrfusion.models import (
     SemanticParams,
 )
 
+logger = logging.getLogger("rrfusion-db-stub")
 app = FastAPI(title="rrfusion-db-stub", version="0.1.0")
 
 COLUMN_FIELD_MAP: dict[str, str] = {
@@ -93,18 +97,49 @@ async def search_lane(request_body: dict[str, object]) -> DBSearchResponse:
             trace_id=request_body.get("trace_id"),
         )
     elif lane == "fulltext":
-        request = FulltextParams.model_validate(request_body)
+        try:
+            request = FulltextParams.model_validate(request_body)
+        except ValidationError as exc:
+            logger.warning("FulltextParams validation failed payload=%s error=%s", request_body, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if filters:
             request.filters = [*request.filters, *filters]
     else:
-        request = SemanticParams.model_validate(request_body)
+        try:
+            request = SemanticParams.model_validate(request_body)
+        except ValidationError as exc:
+            logger.warning("SemanticParams validation failed payload=%s error=%s", request_body, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if filters:
             request.filters = [*request.filters, *filters]
     return generate_search_results(request, lane=lane)
 
 
 @app.post("/snippets")
-async def snippets(request: GetSnippetsRequest) -> dict[str, dict[str, str]]:
+async def snippets(request_body: dict[str, object]) -> dict[str, dict[str, str]]:
+    request: GetSnippetsRequest
+    if "numbers" in request_body:
+        numbers = request_body.get("numbers") or []
+        ids = [
+            entry.get("n")
+            for entry in numbers
+            if isinstance(entry, dict) and entry.get("n")
+        ]
+        if not ids:
+            raise HTTPException(status_code=400, detail="numbers require at least one id")
+        fields = _columns_to_fields(request_body.get("columns"))
+        per_field_chars = request_body.get("per_field_chars") or {}
+        request = GetSnippetsRequest(
+            ids=ids,
+            fields=fields,
+            per_field_chars=per_field_chars,
+        )
+    else:
+        try:
+            request = GetSnippetsRequest.model_validate(request_body)
+        except ValidationError as exc:
+            logger.warning("GetSnippetsRequest validation failed payload=%s error=%s", request_body, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not request.ids:
         raise HTTPException(status_code=400, detail="ids required")
     return snippets_from_request(request)

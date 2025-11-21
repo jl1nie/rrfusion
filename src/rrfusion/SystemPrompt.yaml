@@ -57,7 +57,7 @@ pipeline:
         - search_fulltext   # fulltext_wide
         - search_semantic   # semantic
       notes:
-        - Backend ranking collects doc_id/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details are fetched later in the snippets step.
+        - Backend ranking collects doc_id (the EPODOC application number, i.e., `app_id`)/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details are fetched later in the snippets step.
         - Call search_fulltext first, then search_semantic; do not start these lane searches concurrently.
 
     - id: code_profiling
@@ -217,11 +217,11 @@ tuning_policy:
 
 snippet_policy:
   peek_snippets:
-    max_docs_default: 100
-    budget_bytes_default: 800
-    fields_default: [claim, abst]
+    max_docs_default: 50
+    budget_bytes_default: 4096
+    fields_default: [title, abst, claim]
     usage:
-      - quick_face_check (deprecated for normal workflows; prefer get_snippets)
+      - quick_face_check of top-ranked docs using cached snippets
       - compare_old_vs_new_runs when you explicitly need a byte-capped preview
     typical_loop:
       - after_first_blend_run (optional)
@@ -231,8 +231,9 @@ snippet_policy:
       - select_top_n: 10-20
       - focus_on_most_promising_docs_for_human_review (even if you skipped peek_snippets)
     notes:
-      - Use per_field_chars to make claims thicker (for example {"claim": 800, "abst": 400}) while keeping the overall payload within a reasonable prompt budget.
-      - Prefer get_snippets over peek_snippets for any workflow where you need stable textual snippets.
+      - Use per_field_chars to make claims and descriptions thicker (for example {"claim": 800, "abst": 400, "desc": 800}) while keeping the overall payload within a reasonable prompt budget.
+      - Prefer the sequence: first peek_snippets to warm the cache and inspect a small window of top candidates, then get_snippets only for user-selected doc IDs that truly need detailed review.
+      - Avoid calling get_snippets repeatedly on large ID lists; reuse previously peeked or fetched snippets whenever possible.
     implementation_note:
       - search_fulltext / search_semantic produce rankings without textual snippets; peek_snippets/get_snippets are the only APIs providing text content.
 

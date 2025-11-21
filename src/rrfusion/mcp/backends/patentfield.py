@@ -118,7 +118,7 @@ class PatentfieldBackend(HttpLaneBackend):
         return []
 
     def _doc_id_from_record(self, record: dict[str, Any]) -> str | None:
-        for key in ("app_id", "doc_id", "pub_id", "exam_id"):
+        for key in ("app_doc_id", "app_id", "doc_id", "pub_id", "exam_id"):
             value = record.get(key)
             if value:
                 return str(value)
@@ -348,7 +348,9 @@ class PatentfieldBackend(HttpLaneBackend):
             if doc_key not in columns:
                 columns.append(doc_key)
         limit = min(len(request.ids), self.settings.patentfield_max_results)
-        query_ids = [str(doc_id).strip() for doc_id in request.ids if str(doc_id).strip()]
+        query_ids = [
+            str(doc_id).strip() for doc_id in request.ids if str(doc_id).strip()
+        ]
         numbers = []
         for doc_id in query_ids:
             numbers.append(
@@ -359,24 +361,22 @@ class PatentfieldBackend(HttpLaneBackend):
             )
 
         payload: dict[str, object] = {
-            "search_type": "fulltext",
             "limit": max(1, limit),
             "offset": 0,
             "columns": columns,
-            "targets": columns,
-            "score_type": "tfidf",
-            "sort_keys": list(self.settings.patentfield_sort_keys),
             "numbers": numbers,
         }
         return payload
 
     def _guess_id_type(self, identifier: str) -> str:
         identifier = identifier.upper()
-        if identifier.startswith("APP"):
-            return "app_id"
         if identifier.startswith("EXAM"):
             return "exam_id"
-        return "pub_id"
+        if identifier.startswith("APP"):
+            return "app_doc_id"
+        if identifier and identifier[-1].isalpha():
+            return "app_doc_id"
+        return "app_id"
 
     async def search(self, request: SearchParams, lane: str) -> DBSearchResponse:
         payload = self._build_search_payload(request, lane)
@@ -416,7 +416,7 @@ class PatentfieldBackend(HttpLaneBackend):
             return {}
         logger.info("Patentfield snippet search payload: %s", payload)
         try:
-            response = await self.http.post(f"{self.search_path}", json=payload)
+            response = await self.http.post(f"{self.snippets_path}", json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             resp = exc.response
@@ -431,7 +431,9 @@ class PatentfieldBackend(HttpLaneBackend):
                 if text:
                     error_message = text[:512]
             if error_message:
-                logger.warning("Patentfield snippets HTTP %s: %s", status, error_message)
+                logger.warning(
+                    "Patentfield snippets HTTP %s: %s", status, error_message
+                )
             else:
                 logger.warning("Patentfield snippets HTTP %s", status)
             if status == 404:
@@ -471,7 +473,9 @@ class PatentfieldBackend(HttpLaneBackend):
                 if text:
                     error_message = text[:512]
             if error_message:
-                logger.warning("Patentfield publication HTTP %s: %s", status, error_message)
+                logger.warning(
+                    "Patentfield publication HTTP %s: %s", status, error_message
+                )
             else:
                 logger.warning("Patentfield publication HTTP %s", status)
             if status == 404:

@@ -149,7 +149,7 @@ class PeekSnippetsRequest(BaseModel):
     limit: int = 12
     fields: list[SnippetField] = Field(default_factory=lambda: ["title", "abst", "claim"])
     per_field_chars: dict[SnippetField, int] = Field(
-        default_factory=lambda: {"title": 160, "abst": 480, "claim": 320}
+        default_factory=lambda: {"title": 80, "abst": 320, "claim": 320}
     )
     budget_bytes: int = 12_288
     trace_id: str | None = None
@@ -178,16 +178,16 @@ class PeekSnippetsResponse(BaseModel):
 
 class GetSnippetsRequest(BaseModel):
     ids: list[str]
-    fields: list[SnippetField] = Field(default_factory=lambda: ["title", "abst", "claim"])
+    fields: list[SnippetField] = Field(default_factory=lambda: ["title", "abst", "claim", "desc"])
     per_field_chars: dict[SnippetField, int] = Field(
-        default_factory=lambda: {"title": 160, "abst": 480, "claim": 320}
+        default_factory=lambda: {"title": 160, "abst": 480, "claim": 800, "desc": 800}
     )
     trace_id: str | None = None
 
 
 class GetPublicationRequest(BaseModel):
     ids: list[str]
-    id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id"
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id"
     fields: list[SnippetField] = Field(
         default_factory=lambda: ["title", "abst", "claim", "desc", "app_doc_id", "pub_id", "exam_id"]
     )

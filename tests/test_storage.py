@@ -33,14 +33,14 @@ async def test_store_lane_run_records_fi_and_ft_frequencies_and_doc_meta() -> No
     }
     docs = [
         {
-            "doc_id": "DOC-01",
+            "doc_id": "JP20230000001A",
             "score": 1.0,
             "title": "Title",
             "abst": "Abstract",
             "claim": "Claim",
             "desc": "Desc",
-            "app_doc_id": "APP-01",
-            "pub_id": "PUB-01",
+            "app_doc_id": "JP20230000001A",
+            "pub_id": "DOC000001",
             "exam_id": "EXM-01",
             "ipc_codes": ["H04L"],
             "cpc_codes": ["H04L9/32"],

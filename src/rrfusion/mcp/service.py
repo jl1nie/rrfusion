@@ -707,7 +707,7 @@ class MCPService:
         self,
         *,
         ids: list[str],
-        id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id",
+        id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
         fields: list[str] | None = None,
     ) -> dict[str, dict[str, str]]:
         request_kwargs: dict[str, Any] = {

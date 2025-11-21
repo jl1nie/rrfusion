@@ -127,12 +127,12 @@ async def test_get_publication_returns_full_fields():
 
         publication = await service.get_publication(
             ids=[doc_id],
-            id_type="pub_id",
+            id_type="app_id",
             fields=["title", "abst", "desc", "app_doc_id", "pub_id", "exam_id"],
         )
         snippet = publication.get(doc_id, {})
-        assert snippet.get("pub_id") == doc_id
-        assert snippet.get("app_doc_id"), "app_doc_id should appear in publication"
+        assert snippet.get("app_doc_id") == doc_id
+        assert snippet.get("pub_id"), "pub_id should appear in publication"
         assert snippet.get("exam_id"), "exam_id should appear in publication"
         assert snippet.get("desc"), "Full description should be present"
 
@@ -250,6 +250,6 @@ async def test_snippet_identifier_fields_available():
 
         for doc_id in doc_ids:
             snippet = snippets.get(doc_id, {})
-            assert snippet.get("pub_id") == doc_id
-            assert snippet.get("app_doc_id"), "app_doc_id should be populated"
+            assert snippet.get("app_doc_id") == doc_id
+            assert snippet.get("pub_id"), "pub_id should be populated"
             assert snippet.get("exam_id"), "exam_id should be populated"

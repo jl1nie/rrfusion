@@ -619,7 +619,7 @@ async def get_snippets(
       ids:
         type: list[string]
         required: true
-        description: Document identifiers to fetch snippets for (typically pub_id values from rankings).
+        description: Document identifiers to fetch snippets for (typically EPODOC-style application IDs from rankings).
       fields:
         type: list[string]
         required: false
@@ -646,7 +646,7 @@ async def get_snippets(
 @mcp.tool
 async def get_publication(
     ids: list[str],
-    id_type: Literal["pub_id", "app_doc_id", "exam_id"] = "pub_id",
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
     fields: list[str] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
@@ -660,9 +660,9 @@ async def get_publication(
         required: true
         description: Identifiers whose publication records you want to fetch.
       id_type:
-        type: '"pub_id" | "app_doc_id" | "exam_id"'
+        type: '"pub_id" | "app_doc_id" | "app_id" | "exam_id"'
         required: false
-        description: Which identifier namespace the ids list refers to (defaults to "pub_id").
+        description: Which identifier namespace the ids list refers to (defaults to "app_id").
       fields:
         type: list[string]
         required: false

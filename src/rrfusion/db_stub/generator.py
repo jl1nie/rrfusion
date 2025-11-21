@@ -95,8 +95,8 @@ def _doc_meta(doc_id: str) -> dict:
     abst = _paragraph(rng, sentences=2, words=10)
     claim = _paragraph(rng, sentences=1, words=14)
     description = _paragraph(rng, sentences=4, words=12)
-    app_doc_id = f"APP{doc_id[-6:].upper()}"
-    pub_id = doc_id
+    app_doc_id = doc_id
+    pub_id = f"DOC{doc_id[-6:]}"
     exam_id = f"EXAM{doc_id[-5:].upper()}"
     return {
         "doc_id": doc_id,

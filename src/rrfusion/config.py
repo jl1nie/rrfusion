@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     peek_max_docs: int = Field(100, alias="PEEK_MAX_DOCS")
     peek_budget_bytes: int = Field(12_288, alias="PEEK_BUDGET_BYTES")
     data_ttl_hours: int = Field(12)
-    snippet_ttl_hours: int = Field(24)
+    snippet_ttl_hours: int = Field(1)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field("INFO")
     mcp_api_token: str | None = Field(default=None, alias="MCP_API_TOKEN")
     patentfield_url: str = Field("http://localhost:8080", alias="PATENTFIELD_URL")

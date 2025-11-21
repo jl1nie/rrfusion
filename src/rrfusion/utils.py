@@ -17,7 +17,9 @@ def hash_query(query: str, filters: dict | None = None) -> str:
 
 def random_doc_id(rng: random.Random | None = None) -> str:
     rng = rng or random
-    return "".join(rng.choice(string.digits) for _ in range(12))
+    digits = "".join(rng.choice(string.digits) for _ in range(10))
+    letter = rng.choice(string.ascii_uppercase)
+    return f"JP{digits}{letter}"
 
 
 def truncate_field(value: str, max_chars: int) -> str:

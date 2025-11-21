@@ -872,12 +872,12 @@ target_profile: {...}  # Step 3 で構築したもの
 
 ここでは、`run_id_blend` を人間が確認しやすい形に落とし込むためのステップです。
 
-LLM エージェント側でもこのステップを踏むことが前提ですが、実務上は `get_snippets` を主とし、`peek_snippets` は軽量プレビュー用途に限定する想定です。`get_snippets` では `per_field_chars` を使って peek 相当の文字数制限をかけることで、プロンプト予算を抑えつつ安定したスニペットを得ます。
+LLM エージェント側でもこのステップを踏むことが前提ですが、実務上は `peek_snippets` で上位を軽く確認しながら Redis の doc キャッシュを温め、`get_snippets` で選んだ候補の詳細（特に desc）を厚めに取るという使い分けをする想定です。`peek_snippets` は title 80, abstract 320, claim 320 文字程度の限られた箇所を見て候補感を掴み、`get_snippets` では claims 800 文字＋description 800 文字程度を `per_field_chars` で指定して精読する、といった流れがプロンプト予算と API レイテンシのバランスを保つコツです。Redis の doc キャッシュ（`h:doc:{doc_id}`）には snippet_ttl_hours（現在 1 時間）で TTL が設定されており、短時間内は peek/get の結果が再利用されます。
 
 #### 6.1 `peek_snippets` による軽量ビュー（任意）
 
-- 目的：
-  - 上位 50〜100 件程度を「薄く広く」眺めて、  
+ - 目的：
+   - 上位 30〜50 件程度を「薄く広く」眺めて、  
     - 「顔ぶれが妥当か？」
     - 「分野外が多すぎないか？」
     - 「請求項の書きぶりが期待に近いか？」
@@ -903,13 +903,13 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 
 - 運用ポリシー（推奨）：
   - `peek_snippets` は必要なときだけ使い、通常は直接 `get_snippets` で上位候補を読む。
-  - `peek_snippets` を使う場合も、「上位 50〜100 件をざっと確認して候補を絞る」軽い用途に限定し、テキストの精読は `get_snippets` 側で行う。
+  - `peek_snippets` を使う場合も、「上位 30〜50 件をざっと確認して候補を絞る」軽い用途に限定し、テキストの精読および description の確認は `get_snippets` 側で行う。
 
 #### 6.2 `get_snippets` による詳細ビュー
 
-- 目的：
-  - 上位候補の中で、「本当に読み込むべき文献」を選ぶために  
-    claim の先頭数項や要約（abst）をもう少し厚く確認する
+ - 目的：
+   - 上位候補の中で、「本当に読み込むべき文献」を選ぶために  
+     description を含めた詳細をしっかり確認する
 - 呼び出し例：
 
 ```jsonc
@@ -926,10 +926,10 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 }
 ```
 
- - `fields`：
-   - 返すフィールド（例：`claims`, `abstract`）
- - `per_field_chars`：
-   - 項目ごとの文字数上限。`peek_snippets` は総バイト `budget_bytes` を優先するため `get_snippets` では `per_field_chars` で厚めに指定するとよい。
+- `fields`：
+  - 返すフィールドには description (`desc`) を含めるのが望ましく、claims/abst/desc を同時に指定することで merged doc を得られる。
+- `per_field_chars`：
+  - 項目ごとの文字数上限。`peek_snippets` は総バイト `budget_bytes` を優先するため `get_snippets` では `per_field_chars` で厚めに指定するとよい（例: claim 800, desc 800, abst 480）。
 
 このように、
 
@@ -1396,7 +1396,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 - `run_id`：
   - あるツール呼び出しの結果集合を識別する ID
 - `doc_id`：
-  - 個々の文献（特許公報）を識別する ID（INPADOC形式等）
+  - 個々の文献（特許公報）を識別する ID。現在は EPODOC 形式の出願番号（`app_id`）を用いる。
 - `Filters`：
   - 年、国、言語、コード体系などのフィルタ情報
   - 日付（例：`pubyear` や監視対象の期間）を指定するときは、バックエンドが文字列 `yyyy-mm-dd` 形式を想定しているため、そのまま文字列で渡す。日付範囲は `op="range"` で、`value` に `[ "2023-01-01", "2023-12-31" ]` のように `yyyy-mm-dd` 文字列リストを使うと誤填にならない。
@@ -1528,7 +1528,7 @@ search_fulltext(
 > **注意**：`search_semantic` も `budget_bytes` を受け取らず、`top_k` だけを使って ranking を保持します。  
 > スニペットを byte で制御したい場合は `peek_snippets` / `get_snippets` に `budget_bytes` / `per_field_chars` を指定してください。
 
-> 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、doc_id リストを `{"n": "<pair>", "t": "pub_id"}` 形式に変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
+> 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、doc_id リストを `{"n": "<pair>", "t": "app_id"}` 形式に変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
 
 **シグネチャ（`mcp.host` と一致）**
 

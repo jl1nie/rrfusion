@@ -132,8 +132,8 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
     }
   }
   ```
-  - `doc_id` values are deterministic random strings; `score` variance differs per lane.
-  - `doc_id` is treated as the publication number (`pub_id`) by the backend, so snippet fields that expose `pub_id` will echo the `doc_id` you received from the lane.
+- `doc_id` values are the EPODOC-style application identifier (app_id) returned by each lane, so snippet fields that expose `app_doc_id`/`app_id` will echo the `doc_id` you received from the lane.
+- `pub_id` remains available as a separate field for the publication number when needed.
   - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
   Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...} }`.  
@@ -300,16 +300,16 @@ Return snippets for a run, honoring doc count + byte budgets.
 ---
 
 ### 5.4 `get_publication`
-Fetch the full publication payload (no byte budget applied). Use `id_type` to declare whether the provided identifiers are `pub_id`, `app_doc_id`, or `exam_id`.
+Fetch the full publication payload (no byte budget applied). Use `id_type` to declare whether the provided identifiers are `pub_id`, `app_doc_id`, `app_id`, or `exam_id`.
 
 **Input**
 ```json
-{ "ids": ["DOC1"], "id_type": "pub_id", "fields": ["title","abst","desc","app_doc_id","pub_id","exam_id"] }
+{ "ids": ["JP20230123456"], "id_type": "app_id", "fields": ["title","abst","desc","app_doc_id","pub_id","exam_id"] }
 ```
 
 **Output**
 ```json
-{ "DOC1": { "title":"...", "abst":"...", "desc":"...", "app_doc_id":"APP123", "pub_id":"DOC1", "exam_id":"EXAM001" } }
+{ "JP20230123456": { "title":"...", "abst":"...", "desc":"...", "app_doc_id":"JP20230123456A", "pub_id":"DOC1", "exam_id":"EXAM001" } }
 ```
 
 Hold this tool for detail views when budgets would otherwise trim the text; backend adapters may fetch/cached full payloads as needed but the MCP host does not persist them in Redis.
