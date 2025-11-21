@@ -358,21 +358,26 @@ class PatentfieldBackend(HttpLaneBackend):
             response = await self.http.post(f"{self.search_path}", json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
+            resp = exc.response
+            status = resp.status_code
             error_message = ""
             try:
-                payload = exc.response.json()
-                error_message = payload.get("message") or payload.get("detail") or ""
+                data = resp.json()
+                if isinstance(data, dict):
+                    error_message = data.get("message") or data.get("detail") or ""
             except ValueError:
-                pass
-            log_msg = "Patentfield search returned %s%s"
-            logger.warning(
-                log_msg,
-                status,
-                (f": {error_message}" if error_message else ""),
-            )
+                text = resp.text
+                if text:
+                    error_message = text[:512]
+            if error_message:
+                logger.warning("Patentfield search HTTP %s: %s", status, error_message)
+            else:
+                logger.warning("Patentfield search HTTP %s", status)
             if status == 404:
                 return DBSearchResponse(items=[], code_freqs=None, meta=Meta(lane=lane))
+            raise
+        except httpx.RequestError as exc:
+            logger.error("Patentfield search request error: %s", exc)
             raise
         logger.info("Patentfield search status: %s", response.status_code)
         return self._parse_search_response(response.json(), request, lane)
@@ -388,9 +393,26 @@ class PatentfieldBackend(HttpLaneBackend):
             response = await self.http.post(f"{self.search_path}", json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.warning("Patentfield snippets status: %s", exc.response.status_code)
-            if exc.response.status_code == 404:
+            resp = exc.response
+            status = resp.status_code
+            error_message = ""
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    error_message = data.get("message") or data.get("detail") or ""
+            except ValueError:
+                text = resp.text
+                if text:
+                    error_message = text[:512]
+            if error_message:
+                logger.warning("Patentfield snippets HTTP %s: %s", status, error_message)
+            else:
+                logger.warning("Patentfield snippets HTTP %s", status)
+            if status == 404:
                 return {}
+            raise
+        except httpx.RequestError as exc:
+            logger.error("Patentfield snippets request error: %s", exc)
             raise
         logger.info("Patentfield snippets status: %s", response.status_code)
         return self._parse_snippet_response(response.json(), request.fields)
@@ -411,11 +433,26 @@ class PatentfieldBackend(HttpLaneBackend):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "Patentfield publication status: %s", exc.response.status_code
-            )
-            if exc.response.status_code == 404:
+            resp = exc.response
+            status = resp.status_code
+            error_message = ""
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    error_message = data.get("message") or data.get("detail") or ""
+            except ValueError:
+                text = resp.text
+                if text:
+                    error_message = text[:512]
+            if error_message:
+                logger.warning("Patentfield publication HTTP %s: %s", status, error_message)
+            else:
+                logger.warning("Patentfield publication HTTP %s", status)
+            if status == 404:
                 return {}
+            raise
+        except httpx.RequestError as exc:
+            logger.error("Patentfield publication request error: %s", exc)
             raise
         logger.info("Patentfield publication status: %s", response.status_code)
         return self._parse_publication_response(response.json(), request)
