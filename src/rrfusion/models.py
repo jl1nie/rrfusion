@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Lane = Literal["fulltext", "semantic", "original_dense"]
 SemanticStyle = Literal["default", "original_dense"]
@@ -42,6 +42,12 @@ class Cond(BaseModel):
     field: Literal["ipc", "fi", "cpc", "pubyear", "assignee", "country", "ft"]
     op: Literal["in", "range", "eq", "neq"]
     value: Any
+
+    @field_validator("lop", "op", pre=True)
+    def _normalize_case(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
 
 class IncludeOpts(BaseModel):
