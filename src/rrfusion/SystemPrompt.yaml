@@ -208,7 +208,7 @@ tuning_policy:
   review_loop:
     sequence:
       - run: blend_frontier_codeaware
-      - peek: peek_snippets
+      - peek: peek_snippets  # optional; skip when you want to go directly to get_snippets
       - inspect: get_provenance
       - adjust: mutate_run
       - repeat: until_human_satisfied
@@ -228,8 +228,8 @@ snippet_policy:
       - after_each_mutate_run (optional)
   get_snippets:
     recommendation:
-      - after_peek_select_top_n: 10-20
-      - focus_on_most_promising_docs_for_human_review
+      - select_top_n: 10-20
+      - focus_on_most_promising_docs_for_human_review (even if you skipped peek_snippets)
     notes:
       - Use per_field_chars to make claims thicker (for example {"claim": 800, "abst": 400}) while keeping the overall payload within a reasonable prompt budget.
       - Prefer get_snippets over peek_snippets for any workflow where you need stable textual snippets.
@@ -324,7 +324,6 @@ tool_usage:
   get_snippets:
     when_to_use:
       - step: snippets
-      - after_peek_for_selected_docs
     key_arguments:
       - ids
       - fields
