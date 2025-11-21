@@ -577,7 +577,7 @@ class MCPService:
         if missing_ids and backend:
             fetched = await self._fetch_snippets_from_backend(
                 backend=backend,
-                lane=lane,
+                lane=snippet_lane,
                 ids=missing_ids,
                 fields=fields,
                 per_field_chars=per_field_chars,
