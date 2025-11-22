@@ -205,6 +205,53 @@ async def scenario_run_multilane_search_batch(cfg: RunnerConfig) -> None:
     await redis_client.aclose()
 
 
+async def scenario_run_multilane_search_batch_lite(cfg: RunnerConfig) -> None:
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        lanes = [
+            {
+                "lane_name": "lite_fulltext",
+                "tool": "search_fulltext",
+                "lane": "fulltext",
+                "params": {"query": "lite integration query", "top_k": 60},
+            },
+            {
+                "lane_name": "lite_semantic",
+                "tool": "search_semantic",
+                "lane": "semantic",
+                "params": {"text": "lite integration query", "top_k": 60},
+            },
+        ]
+        payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch-lite"}
+        response = await _call_tool(
+            client, "run_multilane_search_lite", payload, timeout=cfg.timeout
+        )
+        summaries = response.get("lanes") or []
+        trace_id = response.get("trace_id")
+        if trace_id and trace_id != payload["trace_id"]:
+            raise AssertionError("Lite multi-lane trace_id mismatch")
+        if len(summaries) != len(lanes):
+            raise AssertionError("Lite multi-lane returned unexpected count")
+        success_count = sum(1 for entry in summaries if entry.get("status") == "success")
+        if success_count != len(lanes):
+            raise AssertionError("Some lite lanes failed")
+        for entry, lane in zip(summaries, lanes):
+            if entry.get("lane") != lane["lane"]:
+                raise AssertionError("Lite lane lane mismatch")
+            if not entry.get("run_id_lane"):
+                raise AssertionError("Lite lane missing run_id_lane")
+            meta_payload = entry.get("meta") or {}
+            if meta_payload.get("top_k") != lane["params"]["top_k"]:
+                raise AssertionError("Lite lane meta top_k mismatch")
+            code_summary = entry.get("code_summary") or {}
+            if not code_summary.get("top_codes"):
+                raise AssertionError("Lite lane missing code_summary")
+
+    await redis_client.aclose()
+
+
 async def scenario_freq_snapshot(cfg: RunnerConfig) -> None:
     redis_client = Redis.from_url(cfg.redis_url)
     await redis_client.ping()
@@ -515,6 +562,8 @@ async def run(cfg: RunnerConfig) -> None:
         await scenario_freq_snapshot(cfg)
     elif cfg.scenario == "multilane-batch":
         await scenario_run_multilane_search_batch(cfg)
+    elif cfg.scenario == "multilane-batch-lite":
+        await scenario_run_multilane_search_batch_lite(cfg)
     elif cfg.scenario == "peek-multi-cycle":
         await scenario_peek_multi_cycle(cfg)
     elif cfg.scenario == "snippets-missing-id":
@@ -570,6 +619,7 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
             "mutate-missing-run",
             "semantic-style-dense",
             "multilane-batch",
+            "multilane-batch-lite",
         ],
         default="peek-large",
         help="Scenario to execute",

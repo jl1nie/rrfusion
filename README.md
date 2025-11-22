@@ -12,6 +12,8 @@ This scaffold includes:
 - `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
 - `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
+> **Note:** Detailed pipeline/tool definitions (including the multi-lane guidance formerly captured in `src/rrfusion/multirunspec.md`) live in `src/rrfusion/RRFusionSpecification.md`. Keep this README as a high-level overview and consult the spec for authoritative behavior.
+
 ## Contents
 
 - [Quick start (Docker)](#quick-start-docker)
@@ -281,6 +283,8 @@ async def blend_frontier_codeaware(
 ```
 
 Fusion consumes multiple lane handles, applies RRF plus optional code-aware boosts, and returns the final ranking with a `frontier` summary. Reuse the `run_id` it emits for snippet peeks, provenance, or further mutation.
+
+When an LLM only needs the fused handle, frontier stats, and a few top codes, call `blend_frontier_codeaware_lite`. It shares the same arguments as `blend_frontier_codeaware` but returns a `BlendLite` payload containing `run_id`, up to 20 `top_ids`, a trimmed `frontier`, and taxonomy summaries; the heavy `pairs_top`, `contrib`, and `recipe` fields are omitted to keep the context slim.
 
 ### `peek_snippets`
 

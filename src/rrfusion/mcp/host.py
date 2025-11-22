@@ -34,7 +34,10 @@ from rrfusion.models import (
     SemanticParams,
     SemanticStyle,
     SnippetField,
+    BlendLite,
+    MultiLaneSearchLite,
 )
+from rrfusion.mcp.llm_views import build_blend_lite, build_multi_lane_search_lite
 
 settings = get_settings()
 logging.basicConfig(
@@ -149,6 +152,9 @@ def _record_tool_timing(response: Any, took_ms: int) -> None:
     elif isinstance(response, ProvenanceResponse):
         response.meta["took_ms"] = took_ms
 
+#
+# Normalization helpers
+#
 
 def _normalize_optional_list(value: Any) -> Any:
     """Coerce empty objects/lists for optional list-typed tool arguments to None."""
@@ -463,6 +469,41 @@ def _normalize_multilane_params(
     return SemanticParams.model_validate(payload)
 
 
+#
+# Execution helpers
+#
+
+async def _execute_multilane_search(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None,
+) -> MultiLaneSearchResponse:
+    normalized = _normalize_multilane_entries(lanes)
+    request = MultiLaneSearchRequest(lanes=normalized, trace_id=trace_id)
+    return await _require_service().multi_lane_search(request)
+
+
+async def _execute_blend_frontier(
+    runs: list[Any] | None,
+    weights: dict[str, float] | None,
+    rrf_k: int,
+    beta_fuse: float,
+    target_profile: Any | None,
+    top_m_per_lane: dict[str, int] | None,
+    k_grid: list[int] | None,
+    peek: PeekConfig | None,
+) -> BlendResponse:
+    return await _require_service().blend(
+        runs=_normalize_blend_runs(runs),
+        weights=weights,
+        rrf_k=rrf_k,
+        beta_fuse=beta_fuse,
+        target_profile=_normalize_target_profile(target_profile),
+        top_m_per_lane=top_m_per_lane,
+        k_grid=k_grid,
+        peek=peek,
+    )
+
+
 # ============================
 # Prompts
 # ============================
@@ -647,9 +688,36 @@ async def run_multilane_search(
       meta:
         description: Aggregated timing, trace_id, and counts for the batch.
     """
-    normalized_lanes = _normalize_multilane_entries(lanes)
-    request = MultiLaneSearchRequest(lanes=normalized_lanes, trace_id=trace_id)
-    return await _require_service().multi_lane_search(request)
+    return await _execute_multilane_search(lanes, trace_id)
+
+
+@mcp.tool
+async def run_multilane_search_lite(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
+) -> MultiLaneSearchLite:
+    """
+    summary: Execute multiple search lanes and return a compressed summary of their outcomes.
+    when_to_use:
+      - When you only need lane handles, timing, and top code snippets for LLM context.
+      - Use after wide search/code profiling when you want to keep the response payload small.
+    arguments:
+      lanes:
+        type: list[MultiLaneEntryRequest]
+        required: true
+        description: Same lane specification as `run_multilane_search`.
+      trace_id:
+        type: string
+        required: false
+        description: Trace identifier propagated to the lightweight response.
+    returns:
+      lanes:
+        description: Summaries for each lane with status, handles, and top codes.
+      note:
+        - This tool omits the full `SearchToolResponse` payload; use `run_multilane_search` if you need detailed meta/code_freqs.
+    """
+    response = await _execute_multilane_search(lanes, trace_id)
+    return build_multi_lane_search_lite(response)
 
 
 @mcp.tool
@@ -711,18 +779,56 @@ async def blend_frontier_codeaware(
         - Response includes pairs_top (ranking), frontier stats, code frequency summaries, and contribution breakdowns.
     """
     start = perf_counter()
-    response = await _require_service().blend(
-        runs=_normalize_blend_runs(runs),
+    response = await _execute_blend_frontier(
+        runs=runs,
         weights=weights,
         rrf_k=rrf_k,
         beta_fuse=beta_fuse,
-        target_profile=_normalize_target_profile(target_profile),
+        target_profile=target_profile,
         top_m_per_lane=top_m_per_lane,
         k_grid=k_grid,
         peek=peek,
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response
+
+
+@mcp.tool
+async def blend_frontier_codeaware_lite(
+    runs: list[Any] | None = None,
+    weights: dict[str, float] | None = None,
+    rrf_k: int = 60,
+    beta_fuse: float = 1.0,
+    target_profile: Any | None = None,
+    top_m_per_lane: dict[str, int] | None = None,
+    k_grid: list[int] | None = None,
+    peek: PeekConfig | None = None,
+) -> BlendLite:
+    """
+    summary: Run the blend frontier tool and return a compact recap optimized for LLM prompts.
+    when_to_use:
+      - When you only need fused run_id + top doc_ids + frontier/code hints.
+      - Combine with `peek_snippets` if you want document text without bloating the fusion payload.
+    arguments: (same as blend_frontier_codeaware)
+    returns:
+      - run_id: fusion handle
+      - top_ids: up to 20 fused doc_ids
+      - frontier: trimmed frontier points for quick precision/recall checks
+      - top_codes: taxonomy summaries
+    """
+    start = perf_counter()
+    response = await _execute_blend_frontier(
+        runs=runs,
+        weights=weights,
+        rrf_k=rrf_k,
+        beta_fuse=beta_fuse,
+        target_profile=target_profile,
+        top_m_per_lane=top_m_per_lane,
+        k_grid=k_grid,
+        peek=peek,
+    )
+    _record_tool_timing(response, _elapsed_ms(start))
+    return build_blend_lite(response)
 
 
 @mcp.tool

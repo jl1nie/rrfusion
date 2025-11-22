@@ -1687,6 +1687,38 @@ blend_frontier_codeaware(
 - wide/recall/precision レーンのランを集めた直後に run_id をまとめ、frontier を確認したいとき。
 - `target_profile` に基づくコード優先順位と、`peek_snippets` でサンプルを取得するセットで用途。
 
+### 8.4.1 `blend_frontier_codeaware_lite`
+
+**役割**
+
+- 既存の `blend_frontier_codeaware` と同じレーン融合を行うが、LLMのプロンプトコンテキストを節約するため、`run_id` + 上位 doc_idリスト + トリム済み `frontier` + 税onomies ごとの上位コードのみを返す。
+- `pairs_top`/`contrib`/`recipe` など、詳細なランキングや貢献率を返さない代わりに、軽量な `BlendLite` オブジェクトを返すので、重複情報や large JSON を避けたい場面に最適。
+
+**シグネチャ（`mcp.host` と一致）**
+
+```python
+blend_frontier_codeaware_lite(
+    runs: list[BlendRunInput],
+    weights: dict[str, float] | None = None,
+    rrf_k: int = 60,
+    beta_fuse: float = 1.0,
+    target_profile: dict[str, dict[str, float]] | None = None,
+    top_m_per_lane: dict[str, int] | None = None,
+    k_grid: list[int] | None = None,
+    peek: PeekConfig | None = None,
+) -> BlendLite
+```
+
+**戻り値（`BlendLite` 概要）**
+
+- `run_id`: フュージョン結果。
+- `top_ids`: 上位 `pairs_top` から抽出した doc_id リスト（デフォルト 20 件）。
+- `frontier`: `BlendFrontierEntry` のうち、最上位数点だけを返す。
+- `top_codes`: `freqs_topk` の各 taxonomy について、上位 few code のリスト。
+- `meta`: `took_ms` など、極小のメタ情報。
+
+> システムプロンプトでは、コンテキストを抑えたいときに本ツールを使い、詳細確認や `mutate_run` に備えている場合は従来の `blend_frontier_codeaware` を呼ぶ運用とする。
+
 ---
 
 ### 8.5 `peek_snippets`
@@ -1926,6 +1958,31 @@ run_multilane_search(
 - wide 検索と code profiling が終わり、`fulltext_recall` / `fulltext_precision` / 追加 semantic レーンのクエリ・フィルタ・`field_boosts`／`feature_scope` がすべて決まった段階で、  
   それらを `lanes` 配列としてまとめて投げる。
 - LLM 側の SystemPrompt では、「Phase 1 までは従来どおり lane ごとに個別ツールを呼び、Phase 2 以降は `enable_multi_run` が true なら `run_multilane_search` を使ってよい」という方針を明示している。
+
+### 8.9.1 `run_multilane_search_lite`
+
+**役割**
+
+- `run_multilane_search` と同じ複数レーン実行を行うが、LLM のプロンプトコンテキストに配慮して `MultiLaneSearchLite` という軽量ペイロードを返す。
+- 各レーンについて `run_id_lane`/`status`/`took_ms`/`code_summary.top_codes` および簡易メタ（`top_k`/`count_returned`/`truncated`/`took_ms`）だけを提供し、`SearchToolResponse` 本体や詳細な `code_freqs` は省く。
+
+**シグネチャ（`mcp.host` と一致）**
+
+```python
+run_multilane_search_lite(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
+) -> MultiLaneSearchLite
+```
+
+**戻り値（`MultiLaneSearchLite` 概要）**
+
+- `lanes`: `MultiLaneLaneSummary` のリスト（`lane_name`/`tool`/`lane`/`status`/`run_id_lane` + `meta` + `code_summary` + `error` 情報）。
+- `trace_id`: 一致する trace_id。
+- `took_ms_total`: バッチ全体の実行時間。
+- `success_count` / `error_count`: 再びの成否件数。
+
+> 利用方針として「コンテキストを節約しつつ複数レーンを一気に走らせ、後続ツールで必要なランIDを抽出する」ケースでは本ツールを使い、詳細を確認したくなったタイミングで通常版 `run_multilane_search` を追加呼び出しするのがよい。
 
 ## 9. 開発・テスト環境の手順
 

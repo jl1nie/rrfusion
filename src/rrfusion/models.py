@@ -378,6 +378,45 @@ class MultiLaneSearchResponse(BaseModel):
     meta: MultiLaneSearchMeta | None = None
 
 
+class SearchMetaLite(BaseModel):
+    top_k: int | None = None
+    count_returned: int | None = None
+    truncated: bool | None = None
+    took_ms: int | None = None
+
+
+class LaneCodeSummary(BaseModel):
+    top_codes: dict[str, list[str]] | None = None
+
+
+class MultiLaneLaneSummary(BaseModel):
+    lane_name: str
+    tool: MultiLaneTool
+    lane: Lane
+    status: MultiLaneStatus
+    run_id_lane: str | None = None
+    meta: SearchMetaLite | None = None
+    code_summary: LaneCodeSummary | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class MultiLaneSearchLite(BaseModel):
+    lanes: list[MultiLaneLaneSummary]
+    trace_id: str | None = None
+    took_ms_total: int | None = None
+    success_count: int | None = None
+    error_count: int | None = None
+
+
+class BlendLite(BaseModel):
+    run_id: str
+    top_ids: list[str]
+    frontier: list[BlendFrontierEntry]
+    top_codes: dict[str, list[str]] | None = None
+    meta: dict[str, Any] | None = None
+
+
 __all__ = [
     "Lane",
     "SemanticStyle",
@@ -421,4 +460,9 @@ __all__ = [
     "MultiLaneEntryResponse",
     "MultiLaneSearchMeta",
     "MultiLaneSearchResponse",
+    "MultiLaneSearchLite",
+    "MultiLaneLaneSummary",
+    "SearchMetaLite",
+    "LaneCodeSummary",
+    "BlendLite",
 ]
