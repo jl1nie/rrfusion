@@ -18,15 +18,20 @@ from rrfusion.models import (
     BlendRunInput,
     Cond,
     FilterEntry,
+    FulltextParams,
+    Lane,
     MutateDelta,
     MutateResponse,
     MultiLaneEntryRequest,
     MultiLaneSearchRequest,
     MultiLaneSearchResponse,
+    MultiLaneTool,
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
+    SearchParams,
     SearchToolResponse,
+    SemanticParams,
     SemanticStyle,
     SnippetField,
 )
@@ -319,6 +324,145 @@ def _normalize_target_profile(
     return normalized or None
 
 
+def _normalize_multilane_entries(
+    entries: list[Any] | None,
+) -> list[MultiLaneEntryRequest]:
+    normalized: list[MultiLaneEntryRequest] = []
+    if not entries:
+        return normalized
+    for entry in entries:
+        if isinstance(entry, MultiLaneEntryRequest):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            normalized.append(_normalize_multilane_entry_dict(entry))
+        else:
+            raise RuntimeError(f"invalid multi-lane entry type: {type(entry)}")
+    return normalized
+
+
+def _normalize_multilane_entry_dict(payload: dict[str, Any]) -> MultiLaneEntryRequest:
+    data = dict(payload)
+    tool = _normalize_multilane_tool(data.get("tool"), data.get("lane"))
+    lane = _normalize_multilane_lane(data.get("lane"), tool, data.get("params"))
+    params = _normalize_multilane_params(data.pop("params", None), tool, lane)
+    lane_name = _normalize_multilane_lane_name(data, tool, lane)
+    return MultiLaneEntryRequest(
+        lane_name=lane_name,
+        tool=tool,
+        lane=lane,
+        params=params,
+    )
+
+
+def _normalize_multilane_tool(
+    value: Any | None,
+    lane_hint: Any | None = None,
+) -> MultiLaneTool:
+    if isinstance(value, MultiLaneTool):
+        return value
+    if isinstance(value, str):
+        normalized = value.lower()
+        if normalized in {"search_fulltext", "fulltext"}:
+            return "search_fulltext"
+        if normalized in {"search_semantic", "semantic"}:
+            return "search_semantic"
+    if isinstance(lane_hint, str):
+        normalized = lane_hint.lower()
+        if normalized in {"semantic", "original_dense"}:
+            return "search_semantic"
+        if normalized == "fulltext":
+            return "search_fulltext"
+    raise ValueError(f"unsupported multi-lane tool: {value!r}")
+
+
+def _normalize_multilane_lane(
+    candidate: Any | None,
+    tool: MultiLaneTool,
+    params: Any | None,
+) -> Lane:
+    if isinstance(candidate, str):
+        normalized = candidate.lower()
+        if normalized in {"fulltext", "semantic", "original_dense"}:
+            return normalized
+    if tool == "search_semantic":
+        if isinstance(params, dict):
+            style = params.get("semantic_style")
+            if isinstance(style, str) and style.lower() == "original_dense":
+                return "original_dense"
+        return "semantic"
+    return "fulltext"
+
+
+def _normalize_multilane_lane_name(
+    payload: dict[str, Any],
+    tool: MultiLaneTool,
+    lane: Lane,
+) -> str:
+    for key in ("lane_name", "name", "alias", "label"):
+        candidate = payload.get(key)
+        if candidate:
+            return str(candidate)
+    return f"{tool}_{lane}"
+
+
+def _normalize_multilane_params(
+    raw: Any | None,
+    tool: MultiLaneTool,
+    lane: Lane,
+) -> SearchParams:
+    if isinstance(raw, (FulltextParams, SemanticParams)):
+        return raw
+    if raw is None:
+        raise ValueError("params required for multi-lane entry")
+    if isinstance(raw, str):
+        payload: dict[str, Any] = {"query" if tool == "search_fulltext" else "text": raw}
+    elif isinstance(raw, dict):
+        payload = dict(raw)
+    else:
+        raise ValueError(f"unsupported params type: {type(raw)}")
+
+    payload["filters"] = _normalize_filters(payload.get("filters"))
+
+    fields_value = _normalize_optional_list(payload.get("fields"))
+    if fields_value is None:
+        payload.pop("fields", None)
+    else:
+        payload["fields"] = fields_value
+
+    field_boosts_value = _normalize_optional_dict(payload.get("field_boosts"))
+    if field_boosts_value is None:
+        payload.pop("field_boosts", None)
+    else:
+        payload["field_boosts"] = field_boosts_value
+
+    feature_scope_value = _normalize_optional_str(payload.get("feature_scope"))
+    if feature_scope_value is None:
+        payload.pop("feature_scope", None)
+    else:
+        payload["feature_scope"] = feature_scope_value
+
+    def _coerce_key(dest: str, candidates: tuple[str, ...]) -> None:
+        if dest in payload:
+            return
+        for key in candidates:
+            value = payload.pop(key, None)
+            if value is not None:
+                payload[dest] = value
+                break
+
+    if lane == "fulltext":
+        _coerce_key("query", ("query", "q", "text"))
+        if "query" not in payload:
+            raise ValueError("query required for fulltext multi-lane params")
+        return FulltextParams.model_validate(payload)
+    _coerce_key("text", ("text", "query", "q"))
+    if "text" not in payload:
+        raise ValueError("text required for semantic multi-lane params")
+    if lane == "original_dense":
+        payload["semantic_style"] = "original_dense"
+    return SemanticParams.model_validate(payload)
+
+
 # ============================
 # Prompts
 # ============================
@@ -503,7 +647,8 @@ async def run_multilane_search(
       meta:
         description: Aggregated timing, trace_id, and counts for the batch.
     """
-    request = MultiLaneSearchRequest(lanes=lanes, trace_id=trace_id)
+    normalized_lanes = _normalize_multilane_entries(lanes)
+    request = MultiLaneSearchRequest(lanes=normalized_lanes, trace_id=trace_id)
     return await _require_service().multi_lane_search(request)
 
 
