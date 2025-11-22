@@ -105,6 +105,15 @@ def test_blend_frontier_and_storage_cli(
     _run_cli_scenario(base_url, env, "blend-frontier")
 
 
+def test_run_multilane_search_batch_cli(
+    base_url: str,
+    redis_url: str,
+    stub_max_results: int,
+) -> None:
+    env = _build_cli_env(redis_url, stub_max_results)
+    _run_cli_scenario(base_url, env, "multilane-batch")
+
+
 def test_peek_snippets_pagination_and_budget_cli(
     base_url: str,
     redis_url: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -110,6 +111,12 @@ class SemanticParams(BaseModel):
     )
     semantic_style: SemanticStyle = "default"
     feature_scope: FeatureScope | None = None
+
+
+SearchParams = FulltextParams | SemanticParams
+
+
+MultiLaneTool = Literal["search_fulltext", "search_semantic"]
 
 
 class SearchToolResponse(BaseModel):
@@ -302,6 +309,75 @@ class MutateResponse(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class MultiLaneEntryError(BaseModel):
+    code: str = Field(
+        description="Machine-readable error code such as 'timeout', 'backend_403', or 'validation_error'."
+    )
+    message: str = Field(
+        description="Human-readable summary describing the failure."
+    )
+    details: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional backend-specific details (HTTP status, exception args, etc.).",
+    )
+
+
+class MultiLaneEntryRequest(BaseModel):
+    lane_name: str = Field(
+        description="Human/LLM friendly alias such as 'wide_fulltext' or 'precision_claims'."
+    )
+    tool: MultiLaneTool
+    lane: Lane
+    params: SearchParams
+
+
+class MultiLaneSearchRequest(BaseModel):
+    lanes: list[MultiLaneEntryRequest]
+    trace_id: str | None = Field(
+        default=None,
+        description="Trace identifier to correlate the batch on MCP logs and telemetry.",
+    )
+
+
+class MultiLaneStatus(str, Enum):
+    success = "success"
+    error = "error"
+    partial = "partial"
+
+
+class MultiLaneEntryResponse(BaseModel):
+    lane_name: str
+    tool: MultiLaneTool
+    lane: Lane
+    status: MultiLaneStatus = Field(
+        description="Execution status for this lane (`success`, `error`, or `partial`)."
+    )
+    took_ms: int | None = Field(
+        default=None,
+        description="Elapsed time in milliseconds for the lane execution if measured.",
+    )
+    response: SearchToolResponse | None = Field(
+        default=None,
+        description="Underlying search tool response when status == success.",
+    )
+    error: MultiLaneEntryError | None = Field(
+        default=None,
+        description="Structured error when the lane execution did not succeed.",
+    )
+
+
+class MultiLaneSearchMeta(BaseModel):
+    took_ms_total: int | None = None
+    trace_id: str | None = None
+    success_count: int | None = None
+    error_count: int | None = None
+
+
+class MultiLaneSearchResponse(BaseModel):
+    results: list[MultiLaneEntryResponse]
+    meta: MultiLaneSearchMeta | None = None
+
+
 __all__ = [
     "Lane",
     "SemanticStyle",
@@ -336,4 +412,13 @@ __all__ = [
     "BlendResponse",
     "MutateResponse",
     "SEARCH_FIELDS_DEFAULT",
+    "SearchParams",
+    "MultiLaneTool",
+    "MultiLaneEntryError",
+    "MultiLaneEntryRequest",
+    "MultiLaneSearchRequest",
+    "MultiLaneStatus",
+    "MultiLaneEntryResponse",
+    "MultiLaneSearchMeta",
+    "MultiLaneSearchResponse",
 ]

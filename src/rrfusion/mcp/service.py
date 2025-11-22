@@ -35,6 +35,14 @@ from ..models import (
     MutateDelta,
     MutateRequest,
     MutateResponse,
+    Lane,
+    MultiLaneEntryError,
+    MultiLaneEntryResponse,
+    MultiLaneSearchMeta,
+    MultiLaneSearchRequest,
+    MultiLaneSearchResponse,
+    MultiLaneStatus,
+    MultiLaneTool,
     PeekConfig,
     PeekMeta,
     PeekSnippet,
@@ -45,6 +53,7 @@ from ..models import (
     SemanticParams,
     SemanticStyle,
     SearchItem,
+    SearchParams,
     SearchToolResponse,
     SnippetField,
 )
@@ -86,6 +95,10 @@ DEFAULT_TOP_M_PER_LANE = {
 }
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 DEFAULT_CODE_FREQ_TOP_K = 30
+MULTI_LANE_TOOL_LANES: dict[MultiLaneTool, set[Lane]] = {
+    "search_fulltext": {"fulltext"},
+    "search_semantic": {"semantic", "original_dense"},
+}
 
 
 def _code_freq_summary(items: list[SearchItem]) -> dict[str, dict[str, int]]:
@@ -115,8 +128,6 @@ def _trim_code_freqs(
         trimmed[taxonomy] = {code: count for code, count in limited}
     return trimmed
 
-
-SearchParams = FulltextParams | SemanticParams
 
 
 def _elapsed_ms(start: float) -> int:
@@ -318,6 +329,76 @@ class MCPService:
         )
         response.meta.took_ms = _elapsed_ms(start)
         return response
+
+    async def multi_lane_search(
+        self, req: MultiLaneSearchRequest
+    ) -> MultiLaneSearchResponse:
+        """
+        Execute the requested lanes sequentially using existing search tools.
+        """
+        results: list[MultiLaneEntryResponse] = []
+        success_count = 0
+        error_count = 0
+        start = perf_counter()
+
+        for entry in req.lanes:
+            lane_start = perf_counter()
+            lane_status = MultiLaneStatus.success
+            response: SearchToolResponse | None = None
+            error: MultiLaneEntryError | None = None
+            allowed_lanes = MULTI_LANE_TOOL_LANES.get(entry.tool)
+            if not allowed_lanes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"unsupported tool {entry.tool} for multi-lane search",
+                )
+            try:
+                if entry.lane not in allowed_lanes:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"lane {entry.lane} incompatible with tool {entry.tool}",
+                    )
+
+                response = await self.search_lane(lane=entry.lane, params=entry.params)
+                success_count += 1
+            except HTTPException as exc:
+                lane_status = MultiLaneStatus.error
+                error_count += 1
+                error = MultiLaneEntryError(
+                    code=f"http_{exc.status_code}",
+                    message=str(exc.detail or exc),
+                    details={"status_code": exc.status_code, "detail": exc.detail},
+                )
+            except Exception as exc:
+                lane_status = MultiLaneStatus.error
+                error_count += 1
+                error = MultiLaneEntryError(
+                    code=type(exc).__name__,
+                    message=str(exc),
+                    details={},
+                )
+            finally:
+                lane_end = perf_counter()
+                results.append(
+                    MultiLaneEntryResponse(
+                        lane_name=entry.lane_name,
+                        tool=entry.tool,
+                        lane=entry.lane,
+                        status=lane_status,
+                        took_ms=int((lane_end - lane_start) * 1000),
+                        response=response if lane_status == MultiLaneStatus.success else None,
+                        error=error,
+                    )
+                )
+
+        total = int((perf_counter() - start) * 1000)
+        meta = MultiLaneSearchMeta(
+            took_ms_total=total,
+            trace_id=req.trace_id,
+            success_count=success_count,
+            error_count=error_count,
+        )
+        return MultiLaneSearchResponse(results=results, meta=meta)
 
     async def _fetch_snippets_from_backend(
         self,

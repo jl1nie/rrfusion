@@ -20,6 +20,9 @@ from rrfusion.models import (
     FilterEntry,
     MutateDelta,
     MutateResponse,
+    MultiLaneEntryRequest,
+    MultiLaneSearchRequest,
+    MultiLaneSearchResponse,
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
@@ -468,6 +471,40 @@ async def search_semantic(
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response
+
+
+@mcp.tool
+async def run_multilane_search(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
+) -> MultiLaneSearchResponse:
+    """
+    summary: Execute several search lanes sequentially in a single batch while respecting rate limits.
+    when_to_use:
+      - After finishing fulltext_wide and code_profiling, if enable_multi_run is true.
+      - To run additional semantic, recall, or precision lanes immediately before fusion.
+    arguments:
+      lanes:
+        type: list[MultiLaneEntryRequest]
+        required: true
+        description: Ordered batch of lane specifications (lane_name, tool, lane, params).
+      trace_id:
+        type: string
+        required: false
+        description: Trace identifier propagated to the batch response and logs.
+    constraints:
+      - Only search_fulltext and search_semantic are allowed tools.
+      - Each lane must target the correct physical lane (fulltext for search_fulltext, semantic/original_dense for search_semantic).
+      - Entries run sequentially; parallel execution is not supported to avoid 403 rate limits.
+      - Keep the batch to 3‑4 lanes for readability and response size.
+    returns:
+      results:
+        description: Ordered lane outcomes including success/error status and inner SearchToolResponse.
+      meta:
+        description: Aggregated timing, trace_id, and counts for the batch.
+    """
+    request = MultiLaneSearchRequest(lanes=lanes, trace_id=trace_id)
+    return await _require_service().multi_lane_search(request)
 
 
 @mcp.tool

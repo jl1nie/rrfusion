@@ -9,7 +9,15 @@ import pytest
 from rrfusion.config import Settings
 from rrfusion.mcp.backends import CIBackend, LaneBackendRegistry
 from rrfusion.mcp.service import MCPService
-from rrfusion.models import BlendRequest, PeekSnippetsRequest
+from rrfusion.models import (
+    BlendRequest,
+    FulltextParams,
+    MultiLaneEntryRequest,
+    MultiLaneSearchRequest,
+    MultiLaneStatus,
+    PeekSnippetsRequest,
+    SemanticParams,
+)
 
 
 @asynccontextmanager
@@ -53,6 +61,40 @@ async def _ensure_runs(service: MCPService) -> tuple[str, str]:
 def _assert_took_ms(value: int | None, source: str) -> None:
     if value is None or value < 0:
         raise AssertionError(f"{source} missing timing metadata took_ms={value}")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_multi_lane_search_batch_runs_sequential():
+    async with service_context() as service:
+        lanes = [
+            MultiLaneEntryRequest(
+                lane_name="multi_fulltext",
+                tool="search_fulltext",
+                lane="fulltext",
+                params=FulltextParams(query="multi lane integration", top_k=60),
+            ),
+            MultiLaneEntryRequest(
+                lane_name="multi_semantic",
+                tool="search_semantic",
+                lane="semantic",
+                params=SemanticParams(text="integration multi lane scenario", top_k=60),
+            ),
+        ]
+        request = MultiLaneSearchRequest(lanes=lanes, trace_id="integ-multi-lane")
+        response = await service.multi_lane_search(request)
+        assert response.meta is not None
+        assert response.meta.trace_id == "integ-multi-lane"
+        assert response.meta.success_count == 2
+        assert response.meta.error_count == 0
+        assert len(response.results) == 2
+        assert response.results[0].lane_name == "multi_fulltext"
+        assert response.results[1].lane_name == "multi_semantic"
+        for entry in response.results:
+            assert entry.status == MultiLaneStatus.success
+            assert entry.error is None
+            assert entry.response is not None
+            _assert_took_ms(entry.took_ms, f"{entry.lane_name} multi-lane timing")
 
 
 @pytest.mark.integration

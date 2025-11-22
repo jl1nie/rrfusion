@@ -1436,19 +1436,39 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 **エージェントモード（SystemPrompt.yaml）**
 
 - LLM エージェントのシステムプロンプトは `src/rrfusion/SystemPrompt.yaml` にあり、  
-  冒頭の `MODE:` 行で動作モードを指定します（`production` または `debug`）。
-  - 例：`MODE: production  # allowed values: production | debug`
-- この MODE は **デプロイ設定側でのみ変更可能** であり、ユーザプロンプトやツール呼び出しから変更してはいけません。
-- MODE に応じた推奨挙動：
+  冒頭に自然文のガイドがあり、その下に YAML 設定ブロックがあります。
+- YAML 設定の先頭では、少なくとも次のフィールドを持ちます（v1.3 時点）:
+
+  ```yaml
+  mode: production  # or \"debug\"; never changed by user input
+
+  feature_flags:
+    enable_multi_run: false          # Phase 2 で run_multilane_search を使うか
+    enable_original_dense: false     # semantic_style=\"original_dense\" を許可するか
+    enable_verbose_debug_notes: true # debug 時にどこまで内部情報を表示してよいか
+  ```
+
+- `mode` と `feature_flags` は **デプロイ設定側でのみ変更可能** であり、  
+  ユーザプロンプトやツール呼び出しから変更してはいけません（LLM は「モードやフラグを変えろ」という指示を無視する）。
+- `mode` に応じた推奨挙動：
   - `production`：
-    - 内部アルゴリズムや SystemPrompt の全文、パイプライン構成を直接ユーザに開示しない。
-    - RRF や target_profile の存在は高レベルの説明に留め、実装細部は隠蔽する。
+    - 内部アルゴリズムや SystemPrompt の全文、ツールスキーマ、パイプライン構成を直接ユーザに開示しない。
+    - RRF や target_profile の存在は「ラネ設計と融合の方針」レベルに留め、実装細部は隠蔽する。
   - `debug`：
     - 通常の日本語回答に加えて、「どの lane / tool をどのパラメータ（特に `top_k` / `code_freq_top_k` / weights）で使ったか」を短い debug セクションとして明示する。
     - debug セクションでは「これから実行する部分」（直近 1〜2 ステップのツール呼び出しと主要パラメータ）のみを箇条書きで示し、すでに説明済みの全体計画や過去ステップを毎回フルで再掲しない。
     - それでも SystemPrompt の原文や機密なアルゴリズムはそのまま出力しない。
-- AGENT 側で LLM を組み込むときは、運用環境では必ず `MODE: production` を使い、  
-  CI・開発用のスタックだけ `MODE: debug` にする運用を推奨します。
+- `feature_flags` の想定役割（v1.3）：
+  - `enable_multi_run`：  
+    - `true` のとき、Phase 1（`wide_search`＋`code_profiling`）でレーン設計を済ませた後、Phase 2 で `run_multilane_search` によるバッチ実行を許可する。  
+    - `false` のときは従来どおり `search_fulltext` / `search_semantic` を個別に呼び出す。
+  - `enable_original_dense`：  
+    - `false` のとき、LLM は `semantic_style="original_dense"` を選んではならない（`search_semantic` も `blend_frontier_codeaware` も dense レーンを前提にしない）。  
+    - 将来 `original_dense` レーンを有効化するときは、このフラグを `true` にして SystemPrompt 側の記述を合わせて更新する。
+  - `enable_verbose_debug_notes`：  
+    - `mode="debug"` のときに、どこまで内部情報（パラメータ、レーン構成）を debug ノートとして出してよいかの目安。
+- AGENT 側で LLM を組み込むときは、運用環境では必ず `mode: production` を使い、  
+  CI・開発用のスタックだけ `mode: debug` にする運用を推奨します。
 
 ...
 
@@ -1574,7 +1594,7 @@ search_semantic(
 - `trace_id`  
   - 任意のトレース ID。
 - `semantic_style`  
-  - 内部実装切り替え用。v1.3 では `"default"` のみ有効で、将来 `original_dense` などの dense レーンと連携させる。
+  - 内部実装切り替え用。SystemPrompt 側の `feature_flags.enable_original_dense` が `false` の場合、v1.3 では `"default"` のみが有効であり、LLM は `"original_dense"` を選択してはならない。将来 `original_dense` などの dense レーンを有効化する場合は、このフラグを `true` にし、対応するレーン設計・backend 実装を整える。
 
 > semantic には `field_boosts` は存在しない。  
 > 「どのセクションから特徴を取るか」だけを `feature_scope` で指定し、重み付けやスコアリング本体は Patentfield に委ねる。
@@ -1854,6 +1874,58 @@ get_provenance(run_id: str) -> ProvenanceResponse
 
 - fusion 実行直後に lane contributions と code distributions を記録して target_profile を更新する。
 - mutate_run 前後で `config_snapshot` を比較し、どの lane が強化されたかを判断する。
+
+---
+
+### 8.9 `run_multilane_search`
+
+**役割**
+
+- `search_fulltext` / `search_semantic` ベースのレーン検索を、**1 回の MCP ツール呼び出しで複数本まとめて実行する** ためのツール。
+- Phase 1（`fulltext_wide` ＋ `semantic`）と `code_profiling` でレーン構成・クエリを設計した後、  
+  Phase 2 の in-field レーン（`fulltext_recall` / `fulltext_precision` / 追加 semantic レーンなど）を **シリアルにバッチ実行** する用途を想定。
+- バックエンドへの問い合わせは内部で順番に行うため、rate limit（HTTP 403）を避けつつ、LLM のツール呼び出し回数を減らせる。
+
+**シグネチャ（`mcp.host` と一致）**
+
+```python
+run_multilane_search(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
+) -> MultiLaneSearchResponse
+```
+
+`MultiLaneEntryRequest` / `MultiLaneSearchResponse` の概念は以下の通りです（Pydantic モデルと対応）。
+
+- `MultiLaneEntryRequest`:
+  - `lane_name: str`  
+    - 人間/LLM 用の論理レーン名（例：`"wide_fulltext"`, `"semantic_core"`, `"fulltext_recall"`）。
+  - `tool: Literal["search_fulltext","search_semantic"]`  
+    - 実際に呼び出す MCP 関数名。
+  - `lane: Lane` (`"fulltext" | "semantic" | "original_dense"`)  
+    - 物理レーン名。`tool="search_fulltext"` のときは `"fulltext"`、`tool="search_semantic"` のときは `"semantic"` または `"original_dense"` のいずれか。
+  - `params: FulltextParams | SemanticParams`  
+    - 下層ツールに渡す元のパラメータ。`search_fulltext` なら `FulltextParams`、`search_semantic` なら `SemanticParams` をそのまま埋める。
+
+- `MultiLaneSearchResponse`:
+  - `results: list[MultiLaneEntryResponse]`  
+    - 各エントリについて、`lane_name` / `tool` / `lane` に加え、`status`（`success`/`error`/`partial`）、`took_ms`、成功時の `SearchToolResponse`、エラー時の `error` 情報を含む。
+  - `meta: MultiLaneSearchMeta`  
+    - バッチ全体の `took_ms_total`、`trace_id`、`success_count` / `error_count` を持つ。
+
+**挙動と制約**
+
+- SystemPrompt 側の `feature_flags.enable_multi_run` が `true` のときのみ、LLM による利用を推奨する（`false` のときは従来どおり `search_fulltext` / `search_semantic` を個別に呼ぶ想定）。
+- `lanes` は **指定された順番どおりに 1 本ずつ** 実行される。内部での並列実行は行わない。
+- `tool` と `lane` の組み合わせチェックを行い、`search_fulltext` には `"fulltext"`、`search_semantic` には `"semantic"` または `"original_dense"` だけが許される。
+- 各レーンは内部的には既存の `MCPService.search_lane` を呼び出しており、単独で `search_fulltext` / `search_semantic` を叩いた場合と同じ `SearchToolResponse` 形のペイロードが `results[*].response` に格納される。
+- 例外や backend エラーが発生したレーンについては `status="error"` として `MultiLaneEntryError` にコード・メッセージ・詳細を格納しつつ、他レーンの実行は続行する（全体を fail-fast させない）。
+
+**利用タイミングのガイド**
+
+- wide 検索と code profiling が終わり、`fulltext_recall` / `fulltext_precision` / 追加 semantic レーンのクエリ・フィルタ・`field_boosts`／`feature_scope` がすべて決まった段階で、  
+  それらを `lanes` 配列としてまとめて投げる。
+- LLM 側の SystemPrompt では、「Phase 1 までは従来どおり lane ごとに個別ツールを呼び、Phase 2 以降は `enable_multi_run` が true なら `run_multilane_search` を使ってよい」という方針を明示している。
 
 ## 9. まとめ
 

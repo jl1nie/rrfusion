@@ -161,6 +161,50 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
     await redis_client.aclose()
 
 
+async def scenario_run_multilane_search_batch(cfg: RunnerConfig) -> None:
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        lanes = [
+            {
+                "lane_name": "wide_fulltext",
+                "tool": "search_fulltext",
+                "lane": "fulltext",
+                "params": {"query": "multilane integration query", "top_k": 80},
+            },
+            {
+                "lane_name": "wide_semantic",
+                "tool": "search_semantic",
+                "lane": "semantic",
+                "params": {"text": "multilane integration query", "top_k": 80},
+            },
+        ]
+        payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch"}
+        response = await _call_tool(client, "run_multilane_search", payload, timeout=cfg.timeout)
+        results = response.get("results") or []
+        if len(results) != len(lanes):
+            raise AssertionError("run_multilane_search returned unexpected result count")
+        meta = response.get("meta") or {}
+        if meta.get("success_count") != len(lanes):
+            raise AssertionError("multi-lane meta success_count mismatch")
+        if meta.get("error_count") not in (0, None):
+            raise AssertionError("multi-lane meta reports errors")
+        _assert_took_ms(meta.get("took_ms_total"), "run_multilane_search total")
+        for entry, lane in zip(results, lanes):
+            if entry.get("status") != "success":
+                raise AssertionError(f"Lane {lane['lane_name']} failed: {entry}")
+            resp = entry.get("response")
+            if not resp:
+                raise AssertionError(f"Lane {lane['lane_name']} missing response payload")
+            if resp.get("lane") != lane["lane"]:
+                raise AssertionError("Lane result lane mismatch")
+            if resp.get("count_returned", 0) <= 0:
+                raise AssertionError("Lane returned zero documents")
+
+    await redis_client.aclose()
+
+
 async def scenario_freq_snapshot(cfg: RunnerConfig) -> None:
     redis_client = Redis.from_url(cfg.redis_url)
     await redis_client.ping()
@@ -469,6 +513,8 @@ async def run(cfg: RunnerConfig) -> None:
         await scenario_blend_frontier(cfg)
     elif cfg.scenario == "freq-snapshot":
         await scenario_freq_snapshot(cfg)
+    elif cfg.scenario == "multilane-batch":
+        await scenario_run_multilane_search_batch(cfg)
     elif cfg.scenario == "peek-multi-cycle":
         await scenario_peek_multi_cycle(cfg)
     elif cfg.scenario == "snippets-missing-id":
@@ -523,6 +569,7 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
             "mutate-chain",
             "mutate-missing-run",
             "semantic-style-dense",
+            "multilane-batch",
         ],
         default="peek-large",
         help="Scenario to execute",
