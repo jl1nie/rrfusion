@@ -1927,7 +1927,32 @@ run_multilane_search(
   それらを `lanes` 配列としてまとめて投げる。
 - LLM 側の SystemPrompt では、「Phase 1 までは従来どおり lane ごとに個別ツールを呼び、Phase 2 以降は `enable_multi_run` が true なら `run_multilane_search` を使ってよい」という方針を明示している。
 
-## 9. まとめ
+## 9. 開発・テスト環境の手順
+
+このドキュメントを「神様」として扱いながら実装やCIを進める場合、以下のような環境・コマンドで整合性を確認するとよいです。
+
+- **Cargo Make / DevOps 概要**  
+  - `cargo make` が Orchestrator で、`Makefile.toml` に記載されたタスク群を通じて Docker スタックやテストを管理しています。  
+    - `cargo make build-cli`：FastMCP CLI を含む `infra-rrfusion-tests` イメージをビルド。ほとんどのタスクはこのイメージ上で動作します。  
+    - `cargo make start-stub` / `stop-stub`: stub ベースのローカルスタック（Redis + DB stub + MCP）を制御。素早く再現可能なローカル E2E を回したいときに使います。  
+    - `cargo make start-prod` / `stop-prod`: production に近い構成（prod compose）で `redis` + `mcp` を起動。モードや flag を本番想定で確認したいときの手順です。  
+    - `cargo make start-ci` / `stop-ci`: CI 用の compose（Redis + DB stub + MCP + テストコンテナ）を動かす。integration/e2e を一連で実施するテストベッドを用意するための underpin です。  
+    - `cargo make integration` / `cargo make e2e`: CI スタック上でそれぞれ `pytest -m integration` / `pytest -m e2e` を実行。`multilane-batch` シナリオは E2E スイートに含まれるので、CI はこのコマンドを通すこと。  
+    - `cargo make lint` / `cargo make unit` / `cargo make ci`: lint → unit → (integration + e2e) を順に回す full CI タスク。PR 前には `cargo make ci` を通すと回帰リスクを減らせます。  
+    - `cargo make logs`: CI スタックのログを追跡するときに `docker compose logs` をフォローする補助。  
+  - これらは `infra/.env` や環境変数（`REDIS_URL` / `PATENTFIELD_URL` / `STUB_MAX_RESULTS`）に依存しており、テストコンテナ起動時には適切に設定してください。
+
+- **開発/CI環境**  
+  - `mode: debug` + `feature_flags.enable_multi_run=true` で複数レーンをまとめて試す。`settings` で `STUB_MAX_RESULTS` や `CI_DB_STUB_URL` を調整し、integration/e2eで安定して稼働するようにしてください。
+  - Integration では `tests/integration/test_mcp_integration.py` を `pytest` で走らせ、`service.search_lane` と `run_multilane_search` の結果を確認します。
+  - E2E CLI（`python -m rrfusion.scripts.run_fastmcp_e2e --scenario ...`）は `tests/e2e/test_mcp_tools.py` 経由でも呼び出せます。`multilane-batch` シナリオを追加してあるので、CI は全シナリオ＋この新シナリオを一通り実行してください。
+  - Redis/Patentfield スタブは `REDIS_URL` / `PATENTFIELD_URL` 環境変数で切り分けられるので、`docker-compose` や test container の立ち上げ時にはそれらを適切に設定してください。
+
+- **プロダクション環境**  
+  - `mode: production` + `feature_flags.enable_multi_run=false` を前提に `SystemPrompt.yaml` をデプロイし、LLMには内部構成を明かさず結果と簡潔な戦略だけを返す。本番では `python -m uvicorn ...` 等で FastMCP を起動し、`mode` 変更やフラグ切り替えはデプロイパイプラインでのみ行います。
+  - 本番タスクでは `run_multilane_search` を呼ぶケースは `enable_multi_run=true` でなくても `search_fulltext`/`search_semantic` の個別呼出しで十分なため、マルチレーンは内部運用の共通モードでのみ有効化します。
+
+## 10. まとめ
 
 この専門版ドキュメントでは、
 
