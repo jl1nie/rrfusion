@@ -591,9 +591,9 @@ LLM が search_fulltext の `query` を組み立てる際は、上記の構文�
 
 **フィールド設計**
 
-- claims を最重視。
+- claims を最重視しつつ、abstract と description も対象とする。
 - abstract は補助的に見る。
-- description は原則として弱め（もしくは無効）にしてもよい。
+- description については、v1.3 の prior_art プリセットでは実施形態・背景の記述から重要なバリエーションを拾うために「弱めだが有効なシグナル」として扱う（完全に無効化せず、claims/abstract より軽いが無視はしない程度の重み付けを推奨する）。
 
 **コード制約**
 
@@ -636,15 +636,18 @@ LLM が search_fulltext の `query` を組み立てる際は、上記の構文�
 
 ### 3.7 レーン設計の運用パターン
 
-RRFusion MCP v1.3 の標準的な運用パターンは次の通りです。
+RRFusion MCP v1.3 の標準的な運用パターン（JP/先行技術サーチを想定）は次の通りです。
 
 1. `fulltext_wide` で広く当たりを取り、  
-   - その結果から `target_profile` を作成する。
-2. `semantic` レーンで、概念的に近い候補群を補完する。  
-   - ツール呼び出しでは `search_semantic(semantic_style="default")` を用いる（`"original_dense"` は v1.3 では使用禁止）。
-3. `fulltext_recall` で、`target_profile` を使ってターゲット分野を厚く拾う。
-4. `fulltext_precision` で、本命候補を絞り込む。
-5. 必要に応じてコード専用レーンを追加し、ど真ん中の文献を軽く押し上げる。
+   - その結果から `target_profile`（FI/FT または CPC/IPC のいずれか一体系）を作成する。
+2. `fulltext_recall` / `fulltext_precision` / `semantic` を in-field レーンとして設計し、  
+   - 初回の in-field パスでは、これら 2〜3 レーンを multi-lane でまとめて実行する（`run_multilane_search`）。
+3. `fulltext_recall` で、`target_profile` を使ってターゲット分野を厚く拾う（claims＋abstract＋description）。
+4. `fulltext_precision` で、本命候補を絞り込む（claims を中心にしつつ、description も弱めに効かせる）。
+5. `semantic` レーンで、「部分遮蔽」「背景説明」などクレームからは拾いにくい概念的な近接候補を補完する。
+6. JP/先行技術サーチでは、`fulltext_wide` は原則として **コードプロファイル用＋安全ネット** として扱い、  
+   - 初回 fusion には含めず、recall 不足が明らかになったときに code-aware gating を強く効かせた上で追加する。
+7. コード専用レーンはオプション機能であり、v1.3 の prior_art プリセットではデフォルトでは使わない（将来の `claim_focus` など別プリセットで導入する余地として残す）。
 
 これらのレーンをまとめて `blend_frontier_codeaware` に渡し、  
 RRF + コード情報による融合スコアを得る、というのが v1.3 の基本設計です。
@@ -799,11 +802,10 @@ Step 3 で得た `target_profile` を用いて、
 
 ここまでで、少なくとも次の run_id が揃っています：
 
-- `run_id_fulltext_wide`
 - `run_id_fulltext_recall`
 - `run_id_fulltext_precision`
 - （通常は）Step 4 の最初の in-field バッチで実行した semantic レーンの run_id（例：`run_id_semantic_infield`）
-- （任意）コード専用レーンの run_id
+- （任意）wide レーン（`fulltext_wide`）やコード専用レーンの run_id
 
 これらを `blend_frontier_codeaware` に渡し、RRF + コード情報に基づく融合を行います。
 
@@ -811,10 +813,11 @@ Step 3 で得た `target_profile` を用いて、
 
 ```yaml
 runs:
-  fulltext_wide:        run_id_fulltext_wide
   semantic:             run_id_semantic_infield   # 最初の in-field バッチで実行した semantic レーン（存在する場合）
   fulltext_recall:      run_id_fulltext_recall
   fulltext_precision:   run_id_fulltext_precision
+  # optional:
+  # fulltext_wide:      run_id_fulltext_wide      # recall 不足時に code-aware gating 付きで安全ネットとして追加する
   # optional:
   # code_lane:          run_id_code_only
 weights:
@@ -1034,9 +1037,22 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 - `fulltext_wide` の OR 展開が広すぎる
 - 特徴語の選定が甘く、一般語が多い
 
-**対処**
+**対処（v1.3, JP/先行技術サーチを想定）**
 
-...
+- **役割分担を明確にする**
+  - `fulltext_wide` は「コードプロファイリング用の wide 母集団」として位置付け、JP 先行技術サーチでは **初期 fusion に必ずしも含めない**。
+  - まずは `fulltext_recall` / `fulltext_precision` / `semantic` の in-field トラックだけで fusion を組み、Recall/Precision のバランスを確認する。
+- **wide を safety net として限定的に使う**
+  - 上記の in-field fusion とスニペットレビューの結果、「明らかに recall が足りない」「FI/FT だけでは拾えていない周辺技術がある」と判断された場合に限り、
+    - `fulltext_wide` を追加の run として `blend_frontier_codeaware` に渡す。
+    - このとき、`target_profile` による code-aware gating を強く効かせ、「target_profile によく一致するコードを持つ wide 文献だけをブーストし、オフプロファイルな wide 文献はスコアを大きく下げる」ようにする。
+- **クエリ設計の見直し**
+  - それでも wide 側の FI/FT 分布が明らかにおかしい場合は、
+    - `feature_terms` / `synonym_clusters` を見直して一般語を減らす
+    - negative hints を追加し、用途や分野が明らかに違うものを NOT で弾く
+  といったクエリ調整を行う。
+
+このように、`fulltext_wide` を「常に fusion の一員」としてではなく、「コードプロファイル＋必要なときだけ safety net」として扱うことで、ノイズを抑えつつ wide の利点を活かせる。
 
 ### 5.4 precision が不足している
 
@@ -1436,6 +1452,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
     enable_multi_run: true           # Phase 2 で run_multilane_search（lite）を使うか
     enable_original_dense: false     # semantic_style="original_dense" を許可するか
     enable_verbose_debug_notes: true # debug 時にどこまで内部情報を表示してよいか
+    search_preset: prior_art         # v1.3 ではデプロイ単位で固定される検索プリセット（LLM は runtime で変更しない）。prior_art=先行技術サーチ用（実施形態も広く見る）、将来 claim_focus=権利範囲レビュー用などを追加する余地がある。
   ```
 
 - `mode` と `feature_flags` は **デプロイ設定側でのみ変更可能** であり、  
@@ -1467,6 +1484,8 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
     - 将来 `original_dense` レーンを有効化するときは、このフラグを `true` にして SystemPrompt 側の記述を合わせて更新する。
   - `enable_verbose_debug_notes`：  
     - `mode="debug"` のときに、どこまで内部情報（パラメータ、レーン構成）を debug ノートとして出してよいかの目安。
+  - `search_preset`：  
+    - v1.3 時点ではデプロイ時に固定される「検索プリセット」であり、LLM は runtime でこの値を変更しない。`prior_art` プリセットでは先行技術サーチ向けに wide / recall / precision / semantic を「実施形態・背景も含めた広めの技術調査」にチューニングし、JP では FI/FT を主体系とする。将来、権利範囲レビュー用などの `claim_focus` プリセットを追加し、claims/title 寄りの構成に切り替える余地がある。
 - AGENT 側で LLM を組み込むときは、運用環境では必ず `mode: production` を使い、  
   CI・開発用のスタックだけ `mode: debug` にする運用を推奨します。
 
