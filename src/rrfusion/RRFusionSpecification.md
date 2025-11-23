@@ -688,43 +688,29 @@ field_hints:
 
 ---
 
-### Step 2. Wide Recall（wide + semantic）
+### Step 2. Wide Keyword Recall（`fulltext_wide`）
 
-ここでは、「まず大きな網を張る」ために `fulltext_wide` と `semantic` の 2 レーンを実行し、  
-後続のコード解析やチューニングの母集団（wide pool）を作ります。
+ここでは、「まず大きな網を張る」ために **キーワード中心の wide レーン（`fulltext_wide`）だけ** を実行し、  
+後続のコード解析や in-field レーン設計の母集団（wide pool）を作ります。
 
 1. `fulltext_wide` レーン（`search_fulltext`）
 
    - クエリ：
-     - feature_terms ＋ synonym_clusters を広く含む自然文／キーワード列
+     - feature_terms ＋ synonym_clusters を広く含むキーワード／Boolean 式
      - negative_hints はできる範囲で除外条件として反映（NOT / must_not）
    - フィールド：
      - title, abstract, claims, description を広く対象とする
    - コード制約：
      - 原則なし（技術分野の先入観を避ける）
    - 実行：
-     - `search_fulltext` を呼び、`fulltext_wide` レーン用の `run_id_fulltext_wide` を得る（rate limit を避けるため、後続の `semantic` レーンとはシーケンシャルに実行する）
+     - `search_fulltext` を呼び、`fulltext_wide` レーン用の `run_id_fulltext_wide` を得る
      - この `run_id_fulltext_wide` を **レーン名と紐付けて保存** しておく
 
-2. `semantic` レーン（`search_semantic`）
+2. wide pool の構成
 
-   - クエリ：
-     - LLM が「発明の肝」を 1〜3 段落程度に要約したテキスト
-   - フィールド：
-     - claims＋abstract＋title を主対象
-   - コード制約：
-     - 原則なし、もしくはごく緩いコードフィルタのみ
-   - 実行：
-     - `search_semantic` を `semantic_style="default"` で呼ぶ  
-       （`"original_dense"` は v1.3 では **disabled** のため使用しない）
-     - 得られた `run_id_semantic` を **`semantic` レーンと紐付けて保存** しておく
-
-3. wide pool の構成
-
-   - 上記 2 つの run（`run_id_fulltext_wide`, `run_id_semantic`）から上位数百件を統合し、
-     - 「この問題に関係しそうな分野の粗い候補集合（wide pool）」として扱う
-   - 以降の Step 3〜5 で、この wide pool を材料にコード解析・レーン設計・融合を行う
-   - Step 7 で later の multi-lane batch に semantic を入れるかどうかは、wide pool のカバレッジや recall/precision のバランスを見て判断する。すでに wide semantic で必要な範囲が得られていれば追加の semantic run は省略し、もしくは narrower scope（claims only など）でのみ実行する。
+   - `run_id_fulltext_wide` の上位数百件を、「この問題に関係しそうな分野の粗い候補集合（wide pool）」として扱う
+   - 以降の Step 3〜5 で、この wide pool を材料にコード解析・in-field レーン設計・融合を行う
+   - semantic レーンによる概念的な補完は、**Step 4 の in-field multi-lane バッチ（`fulltext_recall` / `fulltext_precision` と組み合わせた最初のセット）で追加する**。wide フェーズでは semantic をまだ走らせず、`target_profile` 構築後に必要な scope・観点を絞り込んだうえで semantic を使う。
 
 ---
 
@@ -760,16 +746,17 @@ field_hints:
    - `F-term:...` のようなエントリは Patentfield の `fterms` 列（Fタームタグ）から取得され、`target_profile` の FT 部分に対応する
 
    - 以降の Step 4〜5 では、この `target_profile` を使って
-     - in-field fulltext レーン（recall / precision）のコード制約
+     - in-field fulltext / semantic レーン（recall / precision / conceptual）のコード制約
      - RRF のコード-aware 調整
      を行う。
 
 ---
 
-### Step 4. In-field Fulltext Lanes（再現・精度レーン）
+### Step 4. In-field Lanes（再現・精度・semantic レーン）
 
 Step 3 で得た `target_profile` を用いて、  
-`fulltext_recall` と `fulltext_precision` の 2 レーンを構築します。
+`fulltext_recall` と `fulltext_precision` を中心とする in-field レーン群を構築し、  
+最初の in-field パスでは semantic レーンも含めた multi-lane バッチを 1 度実行します。
 
 #### 4.1 `fulltext_recall` レーン
 
@@ -813,9 +800,9 @@ Step 3 で得た `target_profile` を用いて、
 ここまでで、少なくとも次の run_id が揃っています：
 
 - `run_id_fulltext_wide`
-- `run_id_semantic`
 - `run_id_fulltext_recall`
 - `run_id_fulltext_precision`
+- （通常は）Step 4 の最初の in-field バッチで実行した semantic レーンの run_id（例：`run_id_semantic_infield`）
 - （任意）コード専用レーンの run_id
 
 これらを `blend_frontier_codeaware` に渡し、RRF + コード情報に基づく融合を行います。
@@ -825,7 +812,7 @@ Step 3 で得た `target_profile` を用いて、
 ```yaml
 runs:
   fulltext_wide:        run_id_fulltext_wide
-  semantic:             run_id_semantic
+  semantic:             run_id_semantic_infield   # 最初の in-field バッチで実行した semantic レーン（存在する場合）
   fulltext_recall:      run_id_fulltext_recall
   fulltext_precision:   run_id_fulltext_precision
   # optional:
@@ -1473,7 +1460,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
     - `presentation_format.final_results` の `match_summary` / `lane_evidence` を用いて、「技術的な類似性」と「どの検索トラックがどの程度効いているか（もしくは効きすぎているか）」を検索プロがレビューできるレベルで可視化する。
 - `feature_flags` の想定役割（v1.3）：
   - `enable_multi_run`：  
-    - `true` のとき、Phase 2（`infield_lanes`）で `run_multilane_search` をデフォルトにして複数レーンをまとめて呼び出せるようにする（詳細な `SearchToolResponse` が必要なときは `run_multilane_search_precise` を追加で呼ぶ）。  
+    - `true` のとき、Phase 2（`infield_lanes`）の**最初のパス**で semantic ＋ `fulltext_recall` ＋ `fulltext_precision` など 2〜3 本のレーンを `run_multilane_search` でまとめて呼び出せるようにする（詳細な `SearchToolResponse` が必要なときは `run_multilane_search_precise` を追加で呼ぶ）。以降のパスでは、新たに追加・調整したレーンだけを `search_fulltext` / `search_semantic` で個別に実行し、既存 run と合わせて `blend_frontier_codeaware` で融合する運用を想定する。  
     - `false` のときは従来どおり `search_fulltext` / `search_semantic` を個別に呼び出す。
   - `enable_original_dense`：  
     - `false` のとき、LLM は `semantic_style="original_dense"` を選んではならない（`search_semantic` も `blend_frontier_codeaware` も dense レーンを前提にしない）。  
@@ -1738,7 +1725,7 @@ blend_frontier_codeaware_lite(
 
 **役割**
 
-- 指定 fusion run の上位 50〜100 件を `budget_bytes` 以内で preview し、人間の顔ぶれ確認を助ける軽量ツール。
+- 指定 fusion run の上位 30〜60 件程度を `budget_bytes` 以内で preview し、人間の顔ぶれ確認を助ける軽量ツール（80〜100 件まで広げるのは、広く診断したい場合などに限る）。
 - `per_field_chars` / `budget_bytes` で出力 fields を調整し、必要な field のみを JSON に含める。
 
 **シグネチャ**
