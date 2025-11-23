@@ -471,6 +471,16 @@ tool_usage:
     notes:
       - Only specify fields you want to change; others are inherited from the original run.
 
+  get_provenance:
+    when_to_use:
+      - step: code_profiling
+      - step: tuning
+    key_arguments:
+      - run_id
+    notes:
+      - Always pass the argument name as `run_id`. For lane runs, use the `run_id_lane` string returned by search_fulltext/search_semantic as the value of `run_id` (e.g., `{"run_id": "<run_id_lane>"}`), not as a separate key.
+      - Do not send an argument named `run_id_lane` to this tool; the only accepted identifier is `run_id`.
+
 semantic_feature_presets:
   wide: word_weights
   title_abst_claims: claims_weights
