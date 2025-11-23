@@ -123,6 +123,7 @@ pipeline:
         - blend_frontier_codeaware_lite
       notes:
         - Call the full tool when you need the complete `pairs_top`/`contrib`/`recipe` payloads; use the lite version to keep the fusion response limited to `run_id`, trimmed `frontier`, and a handful of top code summaries.
+        - Transform `synonym_clusters` from feature_extraction into `facet_terms` grouped by A/B/C components and pass them with `facet_weights` so the fusion scoring captures different expressions of each core element.
 
     - id: snippets
       description: Use peek_snippets and get_snippets for human review of top candidates.
@@ -136,6 +137,8 @@ pipeline:
         - mutate_run
         - get_provenance
         - peek_snippets
+      notes:
+        - Use the representative 20-document review (A/B/C labeling) to decide whether the current fusion is acceptable. Only adjust `pi_weights` or run fallback search regenerations (e.g., refreshed lanes or new search expressions) when the human rejects A-only/B-included sets; otherwise, treat A/B confirmations as guidance for minor tuning.
 
 presentation_format:
   final_results:
@@ -335,8 +338,10 @@ tuning_policy:
       notes:
         - Typically inspect top 30–60 docs with ~800 bytes per doc; reserve 80–100-doc peeks only for broad diagnostic checks when you explicitly need to scan more of the frontier.
         - Use to compare different blended runs qualitatively.
-      - For FI/FT-based infield recall lanes (fulltext_recall), after the first infield batch in a JP-focused task, run peek_snippets once directly on the fulltext_recall run_id_lane with a small limit (for example 20) to sanity-check that FI/FT filters and query structure are on-topic; if the top docs are clearly off-field, redesign FI/FT filters or query blocks before adding no-code recall variants or additional lanes.
-      - After the first fusion, select 20 representative documents (blending semantic-high and high-ranked fused docs). Fetch claims/abstract/description via get_snippets with per_field_chars={"claim":1000,"abst":600,"desc":1200}, label each as A (rank high and matches concept), B (rank mid but still matches), or C (others). Present A/B legends and ask the human whether to accept A only or A+B before making further adjustments. If later re-triggering representative review (e.g. when JP manual search count >3) is needed, repeat the same process.
+        - For FI/FT-based infield recall lanes (fulltext_recall), after the first infield batch in a JP-focused task, run peek_snippets once directly on the fulltext_recall run_id_lane with a small limit (for example 20) to sanity-check that FI/FT filters and query structure are on-topic; if the top docs are clearly off-field, redesign FI/FT filters or query blocks before adding no-code recall variants or additional lanes.
+        - After the first fusion, select 20 representative documents (blending semantic-high and high-ranked fused docs). Fetch claims/abstract/description via get_snippets with per_field_chars={"claim":1000,"abst":600,"desc":1200}, label each as A (rank high and matches concept), B (rank mid but still matches), or C (others). Present A/B legends and ask the human whether to accept A only or A+B before making further adjustments. If later re-triggering representative review (e.g. when JP manual search count >3) is needed, repeat the same process.
+        - When the human answers "A only", interpret this as a signal to emphasize A facets: increase facet_weights["A"] modestly (for example 0.1–0.2 absolute) and, if needed, slightly increase pi_weights["facet"] relative to pi_weights["code"] so that A 要素のカバレッジが分野内順位付けでより強く効くようにする。When the human accepts A+B, keep A/B の比率を近いまま維持しつつ、B に対応する facet_terms を厚くして A/B 両方の構成がそろった文献を優先する。
+        - If, after a few mutate_run cycles, you observe that most A-labelled representatives have fallen clearly outside the top frontier (for example all A docs have rank far below the typical review range) or that get_provenance shows representatives with rank=null, treat this as a sign that the current fusion setup is failing: stop further mutate_run tuning, revisit feature_extraction / wide_search / code_profiling, and design a fresh set of infield lanes and a new fusion run before doing another representative review.
     get_snippets:
       recommendation:
         - select_top_n: 10-20
@@ -495,6 +500,19 @@ tool_usage:
       - Treat run_id values as opaque handles; never synthesize or transform them (do not swap `fulltext-xxxx`/`semantic-xxxx` prefixes or reuse the suffix from a different run).
       - Do not send an argument named `run_id_lane` to this tool; the only accepted identifier is `run_id`.
       - If get_provenance returns a validation error or 404 for a run_id, stop and either (a) re-check the latest successful tool response to pick a valid run_id, or (b) re-run the corresponding search/fusion step; do NOT continue the pipeline by guessing target_profile or other settings from partial information.
+
+  register_representatives:
+    when_to_use:
+      - step: snippets
+      - step: tuning
+    key_arguments:
+      - run_id
+      - representatives
+    notes:
+      - Call this tool after you have selected ~20 representative documents from a fusion run and labeled them A/B/C with reasons based on claim/abstract/description review.
+      - Always pass the fusion run_id returned by blend_frontier_codeaware/mutate_run, not a lane run_id, and include doc_id/label(A/B/C)/reason for each representative.
+      - Register representatives at most once per fusion run; if you need to redefine representatives, first create a new fusion run (e.g., via mutate_run) and then call register_representatives on that new run_id.
+      - After registering representatives, use mutate_run to explore new fusion variants; representative boosting is applied automatically during subsequent fusion, and get_provenance will report current ranks for the registered representatives.
 
 semantic_feature_presets:
   wide: word_weights

@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     ci_snippets_path: str = Field("/snippets", alias="CI_SNIPPETS_PATH")
     ci_publications_path: str = Field("/publications", alias="CI_PUBLICATIONS_PATH")
     snippet_backend_lane: str = Field("fulltext", alias="SNIPPET_BACKEND_LANE")
+    representative_boost_a: float = Field(0.05, alias="REPRESENTATIVE_BOOST_A")
+    representative_boost_b: float = Field(0.02, alias="REPRESENTATIVE_BOOST_B")
 
     model_config = SettingsConfigDict(
         env_prefix="",

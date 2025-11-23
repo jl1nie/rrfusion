@@ -17,7 +17,8 @@ from ..fusion import (
     aggregate_code_freqs,
     apply_code_boosts,
     compute_frontier,
-    compute_relevance_flags,
+    compute_lane_ranks,
+    compute_pi_scores,
     compute_rrf_scores,
     sort_scores,
 )
@@ -49,6 +50,7 @@ from ..models import (
     PeekSnippetsRequest,
     PeekSnippetsResponse,
     ProvenanceResponse,
+    RepresentativeEntry,
     SEARCH_FIELDS_DEFAULT,
     SemanticParams,
     SemanticStyle,
@@ -452,6 +454,7 @@ class MCPService:
         k_grid: list[int] | None = None,
         peek: PeekConfig | None = None,
         parent_meta: dict[str, Any] | None = None,
+        representatives: list[RepresentativeEntry] | None = None,
     ) -> BlendResponse:
         start = perf_counter()
         if not runs:
@@ -467,6 +470,7 @@ class MCPService:
             top_m_per_lane=(top_m_per_lane or DEFAULT_TOP_M_PER_LANE.copy()),
             k_grid=(k_grid or DEFAULT_K_GRID.copy()),
             peek=peek,
+            representatives=representatives or [],
         )
         if not request.runs:
             raise HTTPException(
@@ -516,12 +520,42 @@ class MCPService:
             request.target_profile,
             request.weights,
         )
+        if request.representatives:
+            max_score = max(scores.values()) if scores else 0.0
+            if max_score > 0.0:
+                label_boosts = {
+                    "A": self.settings.representative_boost_a,
+                    "B": self.settings.representative_boost_b,
+                    "C": 0.0,
+                }
+                for rep in request.representatives:
+                    boost_factor = label_boosts.get(rep.label, 0.0)
+                    if boost_factor <= 0.0:
+                        continue
+                    doc_id = rep.doc_id
+                    if doc_id not in scores:
+                        continue
+                    boost = max_score * boost_factor
+                    if boost <= 0.0:
+                        continue
+                    scores[doc_id] += boost
+                    contributions[doc_id]["representative"] = (
+                        contributions[doc_id].get("representative", 0.0) + boost
+                    )
         ordered = sort_scores(scores)
         ordered_ids = [doc_id for doc_id, _ in ordered]
-
-        relevant_flags = compute_relevance_flags(doc_metadata, request.target_profile)
+        lane_ranks = compute_lane_ranks(lane_docs)
+        pi_scores = compute_pi_scores(
+            doc_metadata,
+            request.target_profile,
+            request.facet_terms,
+            request.facet_weights,
+            lane_ranks,
+            request.lane_weights,
+            request.pi_weights,
+        )
         frontier = compute_frontier(
-            ordered_ids, request.k_grid, relevant_flags, request.beta_fuse
+            ordered_ids, request.k_grid, pi_scores, request.beta_fuse
         )
 
         max_k = max(request.k_grid) if request.k_grid else len(ordered_ids)
@@ -564,6 +598,11 @@ class MCPService:
             "top_m_per_lane": request.top_m_per_lane,
             "k_grid": request.k_grid,
             "peek": request.peek.model_dump() if request.peek else None,
+            "representatives": [
+                rep.model_dump(exclude_none=True) for rep in request.representatives
+            ]
+            if request.representatives
+            else [],
         }
         history = list(parent_meta.get("history", [])) if parent_meta else []
         if parent_meta:
@@ -580,6 +619,7 @@ class MCPService:
                 "history": history,
                 "freqs_topk": freqs_topk,
                 "contrib": contrib_payload,
+                "representatives": recipe.get("representatives", []),
             },
         )
 
@@ -856,6 +896,8 @@ class MCPService:
         updated_recipe.setdefault(
             "target_profile", base_recipe.get("target_profile", {})
         )
+        if "representatives" not in updated_recipe:
+            updated_recipe["representatives"] = base_recipe.get("representatives", [])
 
         normalized_runs = []
         for run in meta.get("source_runs", []):
@@ -877,6 +919,10 @@ class MCPService:
             ),
             k_grid=updated_recipe.get("k_grid", [10, 20, 30, 40, 50]),
             peek=None,
+            representatives=[
+                RepresentativeEntry.model_validate(rep)
+                for rep in updated_recipe.get("representatives", []) or []
+            ],
         )
 
         response = await self.blend(
@@ -889,6 +935,7 @@ class MCPService:
             k_grid=blend_request.k_grid,
             peek=blend_request.peek,
             parent_meta=meta,
+            representatives=blend_request.representatives,
         )
         delta_payload = request.delta.model_dump(exclude_none=True)
         response.recipe["delta"] = delta_payload
@@ -920,6 +967,8 @@ class MCPService:
         lane_contributions: dict[str, dict[str, float]] | None = None
         config_snapshot: dict[str, Any] | None = None
 
+        representatives: list[RepresentativeEntry] | None = None
+
         if run_type == "lane":
             lane = meta.get("lane")
             if lane:
@@ -936,6 +985,25 @@ class MCPService:
             code_distributions = meta.get("freqs_topk")
             lane_contributions = meta.get("contrib")
             config_snapshot = meta.get("recipe")
+            raw_reps = meta.get("representatives") or (config_snapshot or {}).get("representatives", [])
+            if raw_reps:
+                key = meta.get("rrf_key")
+                ranks: dict[str, int] = {}
+                scores: dict[str, float] = {}
+                if key:
+                    rows = await self.storage.zrange_all(key, desc=True)
+                    for idx, (doc_id, score) in enumerate(rows, start=1):
+                        ranks[doc_id] = idx
+                        scores[doc_id] = score
+                representatives = []
+                for payload in raw_reps:
+                    try:
+                        rep = RepresentativeEntry.model_validate(payload)
+                    except Exception:
+                        continue
+                    rep.rank = ranks.get(rep.doc_id)
+                    rep.score = scores.get(rep.doc_id)
+                    representatives.append(rep)
 
         meta_with_timing = {**meta, "took_ms": _elapsed_ms(start)}
         return ProvenanceResponse(
@@ -945,7 +1013,37 @@ class MCPService:
             lane_contributions=lane_contributions,
             code_distributions=code_distributions,
             config_snapshot=config_snapshot,
+            representatives=representatives,
         )
+
+    # ------------------------------------------------------------------ #
+    async def register_representatives(
+        self,
+        *,
+        run_id: str,
+        representatives: list[RepresentativeEntry],
+    ) -> ProvenanceResponse:
+        meta = await self.storage.get_run_meta(run_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="run not found")
+        if meta.get("run_type") != "fusion":
+            raise HTTPException(
+                status_code=400, detail="representatives can only be registered for fusion runs"
+            )
+        existing = meta.get("representatives") or (meta.get("recipe") or {}).get("representatives")
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="representatives already registered for this fusion run; create a new fusion run if you need to redefine representatives",
+            )
+        reps_payload = [rep.model_dump(exclude_none=True) for rep in representatives]
+        meta["representatives"] = reps_payload
+        recipe = meta.get("recipe")
+        if isinstance(recipe, dict):
+            recipe["representatives"] = reps_payload
+            meta["recipe"] = recipe
+        await self.storage.set_run_meta(run_id, meta)
+        return await self.provenance(run_id)
 
 
 __all__ = ["MCPService"]

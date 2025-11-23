@@ -947,9 +947,16 @@ Prior to any tuning or mode change, the agent should present a *representative s
 - Presentation: summarize how many attendees are in each bucket and highlight 1–2 examples from A/B. Ask the human whether to treat A alone or A+B as accepted correspondences before proceeding to tuning.  
 - When the system considers expanding to non-JP pipelines (e.g., after adding >3 manual in-field searches with no coverage gain), re-run this representative review and present the results alongside the question about launching the WO/EP/US pipeline so the human can see what the current JP set looks like before deciding.
 
+### 6.4 Representative feedback, facet weighting, and fallback search regeneration
+
+- Convert `synonym_clusters` from Step 1 into the `facet_terms` payload that goes into every fusion request, grouping the same technical idea under a single facet (A/B/C) and including multiple synonymous expressions within that facet so `compute_facet_score` can reward semantic coverage. 代表レビューで得た A/B の判断もこの facet 情報とセットで扱い、`facet_weights` の値をレビュー後の判断に応じて書き換えます。たとえば `facet_weights["A"]` を引き上げて `pi′(d)` が A に素直に反応するようにしたり、B を含めて採用する場合は B を含む synonym_cluster を厚めにする、といった運用が想定されます。
+- 代表レビューの結果を基にした A/B の採用範囲が上位候補の受け入れ条件です。人間が「A のみ」受け入れると答えたときは facet_weights で A を重くし、B と C の重みを落としたうえで `pi_weights` の B 信号を抑えてください。A+B を受け入れると返答したときは B を含む facet_terms を厚くし、A と B の両方が一定以上のスコアを獲得するように `pi_weights` を調整します。
+- 代表レビューで C しか残らず A/B が得られなかった場合は、現在の fusion 構成を一度リセットしてフォールバック検索を走らせます。具体的には、Step 1〜4（feature_extraction → fulltext_wide → code_profiling → infield_lanes）を見直し、新しい synonym_clusters や field_hints を反映したキーワード／semantic 式を再構築し、それらで再度 run を取得してから blend_frontier_codeaware を呼び直します。`mutate_run` による微調整はこの再スタートの後、「A/B の範囲が確認できたとき」に実行してください。
+- このフォールバック検索サイクルを終えるまで、非JP パイプライン（WO/EP/US）への展開は提案せず、必要があれば代表レビュー結果を人間に再提示してから追加の corpus を検討してください。
+
 ---
 
-#### 6.3 キャッシュ拡張案：REST + Redis 再利用
+#### 6.5 キャッシュ拡張案：REST + Redis 再利用
 
 - 現状 `PatentfieldBackend`/`HttpLaneBackend` は `httpx.AsyncClient` を直接使っているため、同一クエリ・filters・fields・lane でも毎回 Patentfield を叩いています。ここに `httpx` の `transport` や `event_hooks` を使ったキャッシュアダプタを挟み、クエリと構成パラメータを正規化したキー（例：`fields` をソート・`sort_keys` を含める）で Redis やローカルストレージに TTL 付きで保存する実装にすれば、REST レベルでの重複呼び出しを減らせます。
   - 既存ライブラリ（`httpx-cache`, `httpx-cache-control` など）を `HttpLaneBackend` の AsyncClient 初期化時に組み込めば、最小限のコード変更でキャッシュが効きます。401/5xx のようなエラー時にはキャッシュを使わず再フェッチし、成功時は TTL を挟んで更新するルールを明示するのが実装例です。
@@ -1312,21 +1319,21 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 上記の $\pi'(d)$ によるシグモイド型のプロキシは、現時点では **将来拡張案** であり、  
 実装ではもう少し素朴な形でフロンティアを計算しています。
 
-- `target_profile` に基づいて、各文献ごとに「関連ラベル相当」のフラグ（関連あり/なし）を付与する  
-  - 実装では `compute_relevance_flags`（`src/rrfusion/fusion.py`）で、  
-    ターゲット側のコード重みの総和が 0 を超えるかどうかで 2 値フラグを決めている
+- `target_profile` に基づいて、各文献ごとに「コード一致度スコア」を計算する  
+  - 実装では `compute_code_scores`（`src/rrfusion/fusion.py`）で、  
+    IPC/CPC/FI/FT それぞれについて `target_profile` の重みを合計し、最大値で正規化した値（0〜1）を `code_scores[doc_id]` としている
 - 指定された $k_{\text{grid}}$ それぞれについて、上位 k 件における  
-  - precision（関連フラグが立っている件数 / k）
-  - recall（関連フラグが立っている件数 / 全関連文献数）
+  - $P_\ast(k)$：top-k の `code_scores` の平均値（「コード的な正しさ」の平均）
+  - $R_\ast(k)$：top-k の `code_scores` の総和 / 全文献の `code_scores` の総和（「コード的に見た coverage」）
   を計算し、通常の Fβ 式で $F_{\beta,\ast}(k)$ を求める  
   - 実装では `compute_frontier`（`src/rrfusion/fusion.py`）で計算している
 
 このため、現行実装の $P_\ast(k), R_\ast(k), F_{\beta,\ast}(k)$ は、
 
-- 「完全にラベル付きデータがある場合の Precision / Recall / Fβ」を模した **簡易版の proxy**
+- コード分布に基づいて、「どのくらい target_profile に沿った文献が上位に集中しているか」「どのくらい target_profile をカバーできているか」を見る **簡易版の proxy**
 
 として動作しており、  
-将来的にはここで説明したシグモイド変換や coverage ベースの指標に置き換える余地があります。
+将来的にはここで説明したシグモイド変換や coverage ベースの指標、クエリ要素カバレッジなども組み合わせた、よりリッチな $\pi'(d)$ へ置き換える余地があります。
 
 ---
 
@@ -1940,6 +1947,54 @@ get_provenance(run_id: str) -> ProvenanceResponse
 - mutate_run 前後で `config_snapshot` を比較し、どの lane が強化されたかを判断する。
 
 ---
+
+### 8.8.1 `register_representatives`
+
+**役割**
+
+- 代表レビューで選定した代表公報（A/B/C ラベル＋理由つき）を、特定の fusion run に紐付けて Redis メタに保存する。
+- 保存された代表公報情報は、今後の `mutate_run` で再計算される fusion に対して「代表公報ブースト」として効き、`get_provenance` からは各代表公報の現在のランク／スコアを確認できる。
+
+**シグネチャ**
+
+```python
+register_representatives(run_id: str, representatives: list[RepresentativeEntry]) -> ProvenanceResponse
+```
+
+`RepresentativeEntry` は次のような構造：
+
+```python
+class RepresentativeEntry(BaseModel):
+    doc_id: str          # 代表公報の doc_id（run_id_blend のランキングに存在する必要がある）
+    label: Literal["A","B","C"]  # A:高確度、B:中程度、C:その他
+    reason: str | None = None    # 選定理由（請求項・実施形態を見たコメント）
+    rank: int | None = None      # get_provenance 側で付与される現在ランク
+    score: float | None = None   # get_provenance 側で付与される現在スコア
+```
+
+**主な引数**
+
+- `run_id`:
+  - `blend_frontier_codeaware` または `mutate_run` が返した fusion run の ID。
+  - lane run（`search_fulltext` や `search_semantic`）には使えない。
+- `representatives`:
+  - 代表レビューで選んだ 20 件程度の文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト。
+
+**挙動（実装ノート）**
+
+- `register_representatives` は指定された fusion run のメタデータを更新し、`meta["representatives"]` と `meta["recipe"]["representatives"]` の両方に代表公報リストを書き込む。同じ run_id に対しては原則 1 回だけ登録でき、2 回目以降の登録試行は 400 エラーになる（代表をやり直したい場合は新しい fusion run を作る）。
+- 代表情報を書き込んだ後、内部で `get_provenance(run_id)` を呼び出し、現在のランキングに基づいて各代表公報の `rank` と `score` を付与した `ProvenanceResponse` を返す。
+- その後 `mutate_run` を呼ぶと、保存された `recipe["representatives"]` が新しい fusion のレシピに引き継がれ、RRF スコア計算後に
+  - A ラベルは `max_score * representative_boost_a`、
+  - B ラベルは `max_score * representative_boost_b`、
+  - C ラベルはブーストなし、
+ という形でスコアに加算される。`representative_boost_a`/`representative_boost_b` は `Settings`（環境変数 `REPRESENTATIVE_BOOST_A` / `REPRESENTATIVE_BOOST_B`）で管理されるため、デプロイごとに「代表をどの程度アンカーとして扱うか」を調整できる。
+- `get_provenance` を fusion run に対して呼ぶと、`representatives` フィールドに現在のランク付き代表公報リストが含まれるため、「もともと代表に選んだ文献が、最新の調整後でも上位に残っているか？」を常に確認できる。rank が `null` のエントリは、現在のランキング集合（融合結果）には含まれていない代表公報であることを意味する。
+
+**典型的な場面**
+
+- 初回 fusion ＋ representative-review で 20 件の候補を A/B/C に分類し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
+- JP パイプラインで十分な A/B が得られたか確認しながら、代表公報が大きくランクアウトしていないか監視する用途。
 
 ### 8.9 `run_multilane_search`
 

@@ -55,32 +55,155 @@ def sort_scores(scores: dict[str, float]) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)
 
 
+def compute_code_scores(
+    doc_meta: dict[str, dict[str, list[str]]],
+    target_profile: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """Compute normalized code overlap scores (0-1) per document."""
+    if not target_profile:
+        return {doc_id: 1.0 for doc_id in doc_meta.keys()}
+
+    raw_scores: dict[str, float] = {}
+    max_score = 0.0
+    for doc_id, meta in doc_meta.items():
+        score = 0.0
+        for taxonomy in ("ipc", "cpc", "fi", "ft"):
+            desired = target_profile.get(taxonomy, {})
+            for code in meta.get(f"{taxonomy}_codes", []):
+                score += desired.get(code, 0.0)
+        raw_scores[doc_id] = score
+        max_score = max(max_score, score)
+
+    if max_score <= 0:
+        return {doc_id: 1.0 for doc_id in doc_meta.keys()}
+    return {doc_id: score / max_score for doc_id, score in raw_scores.items()}
+
+
+def compute_facet_score(
+    doc_meta: dict[str, dict[str, str]],
+    facet_terms: dict[str, Sequence[str]],
+    facet_weights: dict[str, float] | None = None,
+) -> dict[str, float]:
+    """Compute coverage scores for A/B/C components using claim/abst/desc text."""
+    if not facet_terms:
+        return {doc_id: 1.0 for doc_id in doc_meta.keys()}
+
+    field_weights = {"claim": 0.5, "abst": 0.3, "desc": 0.2}
+    normalized_weights = {}
+    total_weight = 0.0
+    for comp in facet_terms:
+        weight = facet_weights.get(comp, 1.0) if facet_weights else 1.0
+        normalized_weights[comp] = max(weight, 0.0)
+        total_weight += normalized_weights[comp]
+    if total_weight == 0:
+        total_weight = float(len(facet_terms))
+
+    facet_scores: dict[str, float] = {}
+    for doc_id, meta in doc_meta.items():
+        score = 0.0
+        for comp, terms in facet_terms.items():
+            comp_score = 0.0
+            for field, weight in field_weights.items():
+                text = meta.get(field, "").lower()
+                if not text:
+                    continue
+                for term in terms:
+                    if term.lower() in text:
+                        comp_score += weight
+                        break
+            score += normalized_weights.get(comp, 1.0) * comp_score
+        facet_scores[doc_id] = min(score / total_weight, 1.0)
+    return facet_scores
+
+
+def compute_lane_consistency(
+    lane_ranks: dict[str, dict[str, int]],
+    lane_weights: dict[str, float],
+) -> dict[str, float]:
+    """Reward documents that rank highly across multiple lanes."""
+    consistency: dict[str, float] = {}
+    max_score = 0.0
+    for doc_id, ranks in lane_ranks.items():
+        score = 0.0
+        for lane, rank in ranks.items():
+            weight = lane_weights.get(lane, 1.0)
+            score += weight / (rank + 1)
+        consistency[doc_id] = score
+        max_score = max(max_score, score)
+    if max_score == 0:
+        return {doc_id: 0.0 for doc_id in lane_ranks.keys()}
+    return {doc_id: score / max_score for doc_id, score in consistency.items()}
+
+
+def compute_pi_scores(
+    doc_meta: dict[str, dict[str, str]],
+    target_profile: dict[str, dict[str, float]],
+    facet_terms: dict[str, Sequence[str]],
+    facet_weights: dict[str, float],
+    lane_ranks: dict[str, dict[str, int]],
+    lane_weights: dict[str, float],
+    pi_weights: dict[str, float],
+) -> dict[str, float]:
+    """Combine code/facet/lane signals into a normalized π'(d)."""
+    code_scores = compute_code_scores(doc_meta, target_profile)
+    facet_scores = compute_facet_score(doc_meta, facet_terms, facet_weights)
+    consistency_scores = compute_lane_consistency(lane_ranks, lane_weights)
+
+    pi_scores: dict[str, float] = {}
+    for doc_id in doc_meta.keys():
+        raw = (
+            pi_weights.get("code", 0.0) * code_scores.get(doc_id, 0.0)
+            + pi_weights.get("facet", 0.0) * facet_scores.get(doc_id, 0.0)
+            + pi_weights.get("lane", 0.0) * consistency_scores.get(doc_id, 0.0)
+        )
+        pi_scores[doc_id] = 1 / (1 + pow(2.71828, -raw))
+    return pi_scores
+
+
+def compute_lane_ranks(lane_docs: dict[str, Sequence[tuple[str, float]]]) -> dict[str, dict[str, int]]:
+    ranks: dict[str, dict[str, int]] = defaultdict(dict)
+    for lane, docs in lane_docs.items():
+        for idx, (doc_id, _) in enumerate(docs, start=1):
+            ranks[doc_id][lane] = idx
+    return ranks
+
+
 def compute_frontier(
     ordered_docs: list[str],
     k_grid: Sequence[int],
-    relevant_flags: dict[str, bool],
+    pi_scores: dict[str, float],
     beta_fuse: float,
 ) -> list[BlendFrontierEntry]:
-    total_relevant = sum(1 for flag in relevant_flags.values() if flag)
-    if total_relevant == 0:
-        total_relevant = max(1, len(ordered_docs))
+    """Estimate precision/recall/Fβ frontier using π'(d) scores."""
+    if not ordered_docs:
+        return []
+
+    total_score = sum(pi_scores.get(doc_id, 0.0) for doc_id in ordered_docs)
+    if total_score <= 0.0:
+        # evenly distribute if all scores zero
+        total_score = float(len(ordered_docs))
+        uniform = {doc_id: 1.0 for doc_id in ordered_docs}
+    else:
+        uniform = {doc_id: pi_scores.get(doc_id, 0.0) for doc_id in ordered_docs}
 
     frontier: list[BlendFrontierEntry] = []
+    beta_sq = beta_fuse * beta_fuse
     for k in k_grid:
-        if k <= 0 or not ordered_docs:
+        if k <= 0:
             continue
-        top_subset = ordered_docs[: min(k, len(ordered_docs))]
-        relevant_found = sum(1 for doc_id in top_subset if relevant_flags.get(doc_id))
-        precision = relevant_found / len(top_subset)
-        recall = relevant_found / total_relevant
-        beta_sq = beta_fuse * beta_fuse
-        if precision == 0 and recall == 0:
+        subset = ordered_docs[: min(k, len(ordered_docs))]
+        if not subset:
+            continue
+        sum_top = sum(uniform.get(doc_id, 0.0) for doc_id in subset)
+        precision = sum_top / len(subset)
+        recall = sum_top / total_score if total_score > 0 else 0.0
+        if precision == 0.0 and recall == 0.0:
             f_beta = 0.0
         else:
             f_beta = (1 + beta_sq) * precision * recall / (beta_sq * precision + recall)
         frontier.append(
             BlendFrontierEntry(
-                k=len(top_subset),
+                k=len(subset),
                 P_star=round(precision, 3),
                 R_star=round(recall, 3),
                 F_beta_star=round(f_beta, 3),
@@ -134,7 +257,12 @@ __all__ = [
     "compute_rrf_scores",
     "apply_code_boosts",
     "sort_scores",
+    "compute_code_scores",
+    "compute_facet_score",
     "compute_frontier",
+    "compute_lane_consistency",
+    "compute_lane_ranks",
+    "compute_pi_scores",
     "aggregate_code_freqs",
     "compute_relevance_flags",
 ]

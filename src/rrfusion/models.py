@@ -373,6 +373,14 @@ class ProvenanceResponse(BaseModel):
     config_snapshot: dict[str, Any] | None = None
 
 
+class RepresentativeEntry(BaseModel):
+    doc_id: str
+    label: Literal["A", "B", "C"]
+    reason: str | None = None
+    rank: int | None = None
+    score: float | None = None
+
+
 class BlendRunInput(BaseModel):
     lane: Literal["fulltext", "semantic", "original_dense"]
     run_id_lane: str
@@ -391,6 +399,17 @@ class BlendRequest(BaseModel):
     )
     k_grid: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50, 80, 100])
     peek: PeekConfig | None = None
+    facet_terms: dict[str, list[str]] = Field(default_factory=dict)
+    facet_weights: dict[str, float] = Field(
+        default_factory=lambda: {"A": 0.5, "B": 0.3, "C": 0.2}
+    )
+    lane_weights: dict[str, float] = Field(
+        default_factory=lambda: {"recall": 1.0, "precision": 1.0, "semantic": 0.7}
+    )
+    pi_weights: dict[str, float] = Field(
+        default_factory=lambda: {"code": 0.4, "facet": 0.4, "lane": 0.2}
+    )
+    representatives: list[RepresentativeEntry] = Field(default_factory=list)
 
 
 class PeekConfig(BaseModel):
@@ -584,4 +603,5 @@ __all__ = [
     "SearchMetaLite",
     "LaneCodeSummary",
     "BlendLite",
+    "RepresentativeEntry",
 ]
