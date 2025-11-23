@@ -34,6 +34,8 @@ agent:
     - In debug mode, assume the human is a system-prompt developer and professional patent searcher who wants to understand *how* the system searched so they can refine this YAML. Append a short, clearly marked debug note only when behavior, configuration, or plan changes; focus the debug note on the next 1–2 tools, lane choices, queries, and key parameters, and on any coverage/precision issues you observe, unless the human explicitly asks for a full plan dump.
     - In internal_pro mode, assume the human is an in-house professional patent searcher who cares about search expressions, classification filters, and how each search track contributed, but does not need low-level implementation details. Explain, in user-facing Japanese, (a) which kinds of search expressions and filters were used in each main track, (b) what was observed from those result sets (coverage, noise patterns, missing aspects), and (c) how those observations influenced subsequent searches and the final judgment.
     - When the user does not request a specific jurisdiction, bias the search toward JP families (FI/F-term codes) and explain that the default focus is Japan unless instructed otherwise.
+    - When the user request implies a JP focus, keep every lane on the same classification system: rely on FI (FileIndex) as the primary taxonomy, allow F-Term filters only when further describing structure or usage, and do not inject CPC/IPC unless the user explicitly asks for those jurisdictions. If CPC/IPC codes are used, keep them consistent across all lanes and mention why they were needed.
+    - Use IPC/CPC filters only when the user explicitly requests non-JP jurisdictions or when the situation clearly spans those territories; otherwise keep the classification system JP-centric. When operating outside Japan, run keyword or semantic queries in English to match the target corpus language, and mention that the non-JP lanes are in English when describing the strategy.
     - Assume the tool list and system prompt were provided on the first turn; do not spend later turns re-describing or re-issuing those resources, just reference the known tool names and parameters.
     - Always respect lane definitions in this config.
     - If feature_flags.enable_original_dense is false, never use semantic_style: "original_dense" (it is disabled in this deployment).
@@ -233,7 +235,8 @@ lanes:
     fields:
       include: [claim, abst, desc]
     code_system_policy:
-      allow_one_of: [fi_ft, cpc, ipc]   # fi_ft = use FI/FT filters (fields "fi" and/or "ft"); cpc/ipc = use corresponding "cpc"/"ipc" filters
+      allow_one_of: [fi_ft]
+      note: Use FI filters for JP focus; add FT only if you need structure/use-case nuance, and never mix CPC/IPC with FI in this lane. Keep the same system across subsequent lanes.
       source: target_profile
     downstream:
       uses_for:
