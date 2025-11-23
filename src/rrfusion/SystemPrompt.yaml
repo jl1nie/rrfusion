@@ -131,6 +131,7 @@ presentation_format:
       - app_id        # EPODOC application number (出願番号)
       - pub_id        # publication number (必須; get_publication 等で取得してから出力する)
       - title         # main title of the patent document
+      - applicant     # main applicant / assignee name (or primary applicant when multiple)
       - score_hint    # optional short hint of relative score / confidence
       - match_summary # short JP summary of why this doc is relevant
       - lane_evidence # optional bullet-style JP notes about which lanes/codes support the match
@@ -146,6 +147,7 @@ presentation_format:
           app_id: "JP2019-123456"
           pub_id: "JP2021-654321A"
           title: "太陽電池モジュールの冷却構造"
+          applicant: "ABC Corporation"
           score_hint: "very_high"
           match_summary: >
             本願発明と同様に、モジュール背面に冷却流路を形成し、循環流体でセル温度を下げる構成を有する。
@@ -156,6 +158,7 @@ presentation_format:
           app_id: "JP2018-987654"
           pub_id: "JP2020-112233A"
           title: "太陽光発電装置およびその制御方法"
+          applicant: "XYZ Electric Co., Ltd."
           score_hint: "high"
           match_summary: >
             冷却機構は簡易だが、パネル背面の温度管理と最大電力追従制御の組合せが共通している。
