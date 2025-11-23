@@ -318,6 +318,7 @@ tuning_policy:
       - If the human chooses B, run at most 1–2 additional short tuning cycles (each with a quick peek at the updated ranking) before asking again; do not keep adjusting indefinitely without human confirmation.
       - If the human chooses C, first use `get_snippets` on a small set of top candidates to diagnose why the current search setup is failing (e.g., which patterns are over/under-represented), summarize the findings briefly, and only then propose concrete additional searches tied to those failure patterns (without exposing internal lane terminology). When FI/FT-based infield lanes appear to be misconfigured (e.g., recall is clearly missing known variants or dominated by off-topic codes), use peek_snippets/get_snippets on those lanes to inspect representative documents and then redesign the FI/FT filters or query blocks before adding no-code recall variants.
       - In JP-focused tasks, track how many new infield search lanes (search_fulltext/search_semantic calls, excluding mutate_run) you have added manually. If you have added more than 3 such searches without achieving satisfactory coverage or precision, explicitly ask the human whether to start a separate non-JP pipeline (WO/EP/US with CPC/IPC and English queries) and only proceed with that expansion when they agree.
+      - Before entering that "WO/EP/US pipeline" discussion, repeat the representative 20-document review (A/B/C labeling) to ensure the current JP fusion candidates are still reasonable, and present the revised recommendation alongside the question about expanding to non-JP corpora.
       - After each loop iteration, return a concise summary of changes and findings to the human before running further tools.
 
   snippet_policy:
@@ -334,7 +335,8 @@ tuning_policy:
       notes:
         - Typically inspect top 30–60 docs with ~800 bytes per doc; reserve 80–100-doc peeks only for broad diagnostic checks when you explicitly need to scan more of the frontier.
         - Use to compare different blended runs qualitatively.
-        - For FI/FT-based infield recall lanes (fulltext_recall), after the first infield batch in a JP-focused task, run peek_snippets once directly on the fulltext_recall run_id_lane with a small limit (for example 20) to sanity-check that FI/FT filters and query structure are on-topic; if the top docs are clearly off-field, redesign FI/FT filters or query blocks before adding no-code recall variants or additional lanes.
+      - For FI/FT-based infield recall lanes (fulltext_recall), after the first infield batch in a JP-focused task, run peek_snippets once directly on the fulltext_recall run_id_lane with a small limit (for example 20) to sanity-check that FI/FT filters and query structure are on-topic; if the top docs are clearly off-field, redesign FI/FT filters or query blocks before adding no-code recall variants or additional lanes.
+      - After the first fusion, select 20 representative documents (blending semantic-high and high-ranked fused docs). Fetch claims/abstract/description via get_snippets with per_field_chars={"claim":1000,"abst":600,"desc":1200}, label each as A (rank high and matches concept), B (rank mid but still matches), or C (others). Present A/B legends and ask the human whether to accept A only or A+B before making further adjustments. If later re-triggering representative review (e.g. when JP manual search count >3) is needed, repeat the same process.
     get_snippets:
       recommendation:
         - select_top_n: 10-20

@@ -926,13 +926,26 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 
  このように、
 
- - `peek_snippets`：広く薄く
- - `get_snippets`：狭く厚く
+- `peek_snippets`：広く薄く
+- `get_snippets`：狭く厚く
 
  という 2 段階で、`run_id_blend` の上位を人間がレビューできるようにします。
 
 #### Snippet backend selection
 - Snippet retrieval always targets the lane defined by `SNIPPET_BACKEND_LANE` (default `fulltext`). Even fusion runs without lane metadata use this configured backend, so peek/get can fetch text consistently through the same API (Patentfield in CI). Adjusting `SNIPPET_BACKEND_LANE` lets you swap in a different snippet backend without changing the tool flow.
+
+### 6.3 Representative-document review
+
+Prior to any tuning or mode change, the agent should present a *representative set* of about 20 documents selected from the latest blend result.
+
+- Selection: combine top-ranked fused documents with several semantic-high examples so that both lexical and conceptual matches are exposed.  
+- Fetch: use `get_snippets` with `fields=["claim","abst","desc"]` and `per_field_chars={"claim":1000,"abst":600,"desc":1200}` so the human can read a consistent chunk of text without overwhelming Redis.
+- Labeling: categorize each doc as  
+  * A – high fused rank and clear match to the core concept,  
+  * B – lower rank but still topically appropriate,  
+  * C – otherwise (off-topic or too distant).  
+- Presentation: summarize how many attendees are in each bucket and highlight 1–2 examples from A/B. Ask the human whether to treat A alone or A+B as accepted correspondences before proceeding to tuning.  
+- When the system considers expanding to non-JP pipelines (e.g., after adding >3 manual in-field searches with no coverage gain), re-run this representative review and present the results alongside the question about launching the WO/EP/US pipeline so the human can see what the current JP set looks like before deciding.
 
 ---
 
