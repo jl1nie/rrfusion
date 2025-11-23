@@ -367,6 +367,10 @@ class ProvenanceResponse(BaseModel):
     run_id: str
     meta: dict[str, Any]
     lineage: list[str]
+    # Optional structured views derived from meta / storage; fields may be absent
+    lane_contributions: dict[str, dict[str, float]] | None = None
+    code_distributions: dict[str, dict[str, int]] | None = None
+    config_snapshot: dict[str, Any] | None = None
 
 
 class BlendRunInput(BaseModel):

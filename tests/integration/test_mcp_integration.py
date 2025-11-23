@@ -17,6 +17,7 @@ from rrfusion.models import (
     MultiLaneStatus,
     PeekSnippetsRequest,
     SemanticParams,
+    ProvenanceResponse,
 )
 
 
@@ -257,6 +258,60 @@ async def test_large_search_and_peek_budget_flow():
 
         assert len(peek.snippets) >= 10
         _assert_took_ms(peek.meta.took_ms, "large peek")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_provenance_returns_structured_metadata_for_lane_and_fusion():
+    async with service_context() as service:
+        # Prepare a lane run (fulltext_wide 相当)
+        lane_resp = await service.search_lane("fulltext", query="provenance lane", top_k=200)
+        lane_prov = await service.provenance(lane_resp.run_id_lane)
+        assert isinstance(lane_prov, ProvenanceResponse)
+        # lane meta should at least include basic config
+        assert lane_prov.meta.get("lane") == "fulltext"
+        assert lane_prov.meta.get("query")
+        # code_distributions and config_snapshot are populated for lane runs
+        assert isinstance(lane_prov.code_distributions, dict)
+        assert "fi" in lane_prov.code_distributions
+        assert isinstance(lane_prov.config_snapshot, dict)
+        assert lane_prov.config_snapshot.get("lane") == "fulltext"
+        assert lane_prov.config_snapshot.get("query")
+
+        # Prepare a fusion run and check fusion provenance
+        semantic_resp = await service.search_lane("semantic", text="provenance semantic", top_k=200)
+        blend_request = BlendRequest(
+            runs=[
+                {"lane": "fulltext", "run_id_lane": lane_resp.run_id_lane},
+                {"lane": "semantic", "run_id_lane": semantic_resp.run_id_lane},
+            ],
+            weights={"fulltext": 1.0, "semantic": 1.0},
+            rrf_k=60,
+            beta_fuse=1.0,
+            target_profile={},
+            top_m_per_lane={"fulltext": 200, "semantic": 200},
+            k_grid=[10, 20, 50],
+        )
+        fusion = await service.blend(
+            runs=blend_request.runs,
+            weights=blend_request.weights,
+            rrf_k=blend_request.rrf_k,
+            beta_fuse=blend_request.beta_fuse,
+            target_profile=blend_request.target_profile,
+            top_m_per_lane=blend_request.top_m_per_lane,
+            k_grid=blend_request.k_grid,
+        )
+        fusion_prov = await service.provenance(fusion.run_id)
+        assert isinstance(fusion_prov, ProvenanceResponse)
+        # fusion meta must mark run_type and have a recipe
+        assert fusion_prov.meta.get("run_type") == "fusion"
+        assert isinstance(fusion_prov.meta.get("recipe"), dict)
+        # fusion provenance should expose lane_contributions and code_distributions
+        assert isinstance(fusion_prov.code_distributions, dict)
+        assert isinstance(fusion_prov.lane_contributions, dict)
+        # config_snapshot mirrors the recipe for fusion runs
+        assert isinstance(fusion_prov.config_snapshot, dict)
+        assert fusion_prov.config_snapshot.get("rrf_k") == 60
 
 
 @pytest.mark.integration

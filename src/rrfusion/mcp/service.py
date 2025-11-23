@@ -578,6 +578,8 @@ class MCPService:
                 "recipe": recipe,
                 "parent": parent_meta.get("run_id") if parent_meta else None,
                 "history": history,
+                "freqs_topk": freqs_topk,
+                "contrib": contrib_payload,
             },
         )
 
@@ -912,11 +914,37 @@ class MCPService:
         meta = await self.storage.get_run_meta(run_id)
         if not meta:
             raise HTTPException(status_code=404, detail="run not found")
+        run_type = meta.get("run_type")
+
+        code_distributions: dict[str, dict[str, int]] | None = None
+        lane_contributions: dict[str, dict[str, float]] | None = None
+        config_snapshot: dict[str, Any] | None = None
+
+        if run_type == "lane":
+            lane = meta.get("lane")
+            if lane:
+                code_distributions = await self.storage.get_freq_summary(run_id, lane)
+            config_snapshot = {
+                "lane": lane,
+                "query": meta.get("query"),
+                "filters": meta.get("filters"),
+                "top_k": meta.get("top_k"),
+                "params": meta.get("params", {}),
+            }
+        elif run_type == "fusion":
+            # For fusion runs, use stored frontier stats and recipe as the snapshot
+            code_distributions = meta.get("freqs_topk")
+            lane_contributions = meta.get("contrib")
+            config_snapshot = meta.get("recipe")
+
         meta_with_timing = {**meta, "took_ms": _elapsed_ms(start)}
         return ProvenanceResponse(
             run_id=run_id,
             meta=meta_with_timing,
             lineage=meta_with_timing.get("history", []),
+            lane_contributions=lane_contributions,
+            code_distributions=code_distributions,
+            config_snapshot=config_snapshot,
         )
 
 
