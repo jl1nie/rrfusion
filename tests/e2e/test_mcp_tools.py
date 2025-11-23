@@ -114,13 +114,13 @@ def test_run_multilane_search_batch_cli(
     _run_cli_scenario(base_url, env, "multilane-batch")
 
 
-def test_run_multilane_search_batch_lite_cli(
+def test_run_multilane_search_batch_precise_cli(
     base_url: str,
     redis_url: str,
     stub_max_results: int,
 ) -> None:
     env = _build_cli_env(redis_url, stub_max_results)
-    _run_cli_scenario(base_url, env, "multilane-batch-lite")
+    _run_cli_scenario(base_url, env, "multilane-batch-precise")
 
 
 def test_peek_snippets_pagination_and_budget_cli(
@@ -177,6 +177,15 @@ def test_multiple_blend_peek_cycles_cli(
 ) -> None:
     env = _build_cli_env(redis_url, stub_max_results)
     _run_cli_scenario(base_url, env, "peek-multi-cycle")
+
+
+def test_peek_mutate_snippets_cli(
+    base_url: str,
+    redis_url: str,
+    stub_max_results: int,
+) -> None:
+    env = _build_cli_env(redis_url, stub_max_results)
+    _run_cli_scenario(base_url, env, "peek-mutate-snippets")
 
 
 def test_error_handling_for_missing_ids_cli(

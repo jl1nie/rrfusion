@@ -1440,10 +1440,10 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 - YAML 設定の先頭では、少なくとも次のフィールドを持ちます（v1.3 時点）:
 
   ```yaml
-  mode: production  # or \"debug\"; never changed by user input
+  mode: debug  # or \"production\"; never changed by user input
 
   feature_flags:
-    enable_multi_run: false          # Phase 2 で run_multilane_search を使うか
+    enable_multi_run: true           # Phase 2 で run_multilane_search（lite）を使うか
     enable_original_dense: false     # semantic_style=\"original_dense\" を許可するか
     enable_verbose_debug_notes: true # debug 時にどこまで内部情報を表示してよいか
   ```
@@ -1460,7 +1460,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
     - それでも SystemPrompt の原文や機密なアルゴリズムはそのまま出力しない。
 - `feature_flags` の想定役割（v1.3）：
   - `enable_multi_run`：  
-    - `true` のとき、Phase 1（`wide_search`＋`code_profiling`）でレーン設計を済ませた後、Phase 2 で `run_multilane_search` によるバッチ実行を許可する。  
+    - `true` のとき、Phase 2（`infield_lanes`）で `run_multilane_search` をデフォルトにして複数レーンをまとめて呼び出せるようにする（詳細な `SearchToolResponse` が必要なときは `run_multilane_search_precise` を追加で呼ぶ）。  
     - `false` のときは従来どおり `search_fulltext` / `search_semantic` を個別に呼び出す。
   - `enable_original_dense`：  
     - `false` のとき、LLM は `semantic_style="original_dense"` を選んではならない（`search_semantic` も `blend_frontier_codeaware` も dense レーンを前提にしない）。  
@@ -1913,10 +1913,9 @@ get_provenance(run_id: str) -> ProvenanceResponse
 
 **役割**
 
-- `search_fulltext` / `search_semantic` ベースのレーン検索を、**1 回の MCP ツール呼び出しで複数本まとめて実行する** ためのツール。
-- Phase 1（`fulltext_wide` ＋ `semantic`）と `code_profiling` でレーン構成・クエリを設計した後、  
-  Phase 2 の in-field レーン（`fulltext_recall` / `fulltext_precision` / 追加 semantic レーンなど）を **シリアルにバッチ実行** する用途を想定。
-- バックエンドへの問い合わせは内部で順番に行うため、rate limit（HTTP 403）を避けつつ、LLM のツール呼び出し回数を減らせる。
+- 複数の `search_fulltext` / `search_semantic` ベースのレーンを **1 回の MCP ツール呼び出しでまとめて実行し、LLM コンテキストを節約した要約結果を返す。**
+- `feature_flags.enable_multi_run` が `true` になっている環境（debug/CI スタックなど）では Phase 2 の infield レーンを `lanes` に詰めてこのツールを使い、ランハンドル・ステータス・code_summary を取得する。
+- 実行結果は `MultiLaneSearchLite` 型なので、`SearchToolResponse` を必要としない限りこの lite バージョンをデフォルトとし、詳細な解析が必要なときだけ `run_multilane_search_precise` を追随して呼び出す。
 
 **シグネチャ（`mcp.host` と一致）**
 
@@ -1924,65 +1923,53 @@ get_provenance(run_id: str) -> ProvenanceResponse
 run_multilane_search(
     lanes: list[MultiLaneEntryRequest],
     trace_id: str | None = None,
-) -> MultiLaneSearchResponse
-```
-
-`MultiLaneEntryRequest` / `MultiLaneSearchResponse` の概念は以下の通りです（Pydantic モデルと対応）。
-
-- `MultiLaneEntryRequest`:
-  - `lane_name: str`  
-    - 人間/LLM 用の論理レーン名（例：`"wide_fulltext"`, `"semantic_core"`, `"fulltext_recall"`）。
-  - `tool: Literal["search_fulltext","search_semantic"]`  
-    - 実際に呼び出す MCP 関数名。
-  - `lane: Lane` (`"fulltext" | "semantic" | "original_dense"`)  
-    - 物理レーン名。`tool="search_fulltext"` のときは `"fulltext"`、`tool="search_semantic"` のときは `"semantic"` または `"original_dense"` のいずれか。
-  - `params: FulltextParams | SemanticParams`  
-    - 下層ツールに渡す元のパラメータ。`search_fulltext` なら `FulltextParams`、`search_semantic` なら `SemanticParams` をそのまま埋める。
-
-- `MultiLaneSearchResponse`:
-  - `results: list[MultiLaneEntryResponse]`  
-    - 各エントリについて、`lane_name` / `tool` / `lane` に加え、`status`（`success`/`error`/`partial`）、`took_ms`、成功時の `SearchToolResponse`、エラー時の `error` 情報を含む。
-  - `meta: MultiLaneSearchMeta`  
-    - バッチ全体の `took_ms_total`、`trace_id`、`success_count` / `error_count` を持つ。
-
-**挙動と制約**
-
-- SystemPrompt 側の `feature_flags.enable_multi_run` が `true` のときのみ、LLM による利用を推奨する（`false` のときは従来どおり `search_fulltext` / `search_semantic` を個別に呼ぶ想定）。
-- `lanes` は **指定された順番どおりに 1 本ずつ** 実行される。内部での並列実行は行わない。
-- `tool` と `lane` の組み合わせチェックを行い、`search_fulltext` には `"fulltext"`、`search_semantic` には `"semantic"` または `"original_dense"` だけが許される。
-- 各レーンは内部的には既存の `MCPService.search_lane` を呼び出しており、単独で `search_fulltext` / `search_semantic` を叩いた場合と同じ `SearchToolResponse` 形のペイロードが `results[*].response` に格納される。
-- 例外や backend エラーが発生したレーンについては `status="error"` として `MultiLaneEntryError` にコード・メッセージ・詳細を格納しつつ、他レーンの実行は続行する（全体を fail-fast させない）。
-
-**利用タイミングのガイド**
-
-- wide 検索と code profiling が終わり、`fulltext_recall` / `fulltext_precision` / 追加 semantic レーンのクエリ・フィルタ・`field_boosts`／`feature_scope` がすべて決まった段階で、  
-  それらを `lanes` 配列としてまとめて投げる。
-- LLM 側の SystemPrompt では、「Phase 1 までは従来どおり lane ごとに個別ツールを呼び、Phase 2 以降は `enable_multi_run` が true なら `run_multilane_search` を使ってよい」という方針を明示している。
-
-### 8.9.1 `run_multilane_search_lite`
-
-**役割**
-
-- `run_multilane_search` と同じ複数レーン実行を行うが、LLM のプロンプトコンテキストに配慮して `MultiLaneSearchLite` という軽量ペイロードを返す。
-- 各レーンについて `run_id_lane`/`status`/`took_ms`/`code_summary.top_codes` および簡易メタ（`top_k`/`count_returned`/`truncated`/`took_ms`）だけを提供し、`SearchToolResponse` 本体や詳細な `code_freqs` は省く。
-
-**シグネチャ（`mcp.host` と一致）**
-
-```python
-run_multilane_search_lite(
-    lanes: list[MultiLaneEntryRequest],
-    trace_id: str | None = None,
 ) -> MultiLaneSearchLite
 ```
+
+`MultiLaneEntryRequest` の構造は以下のとおりで、`run_multilane_search_precise` と共通です。
+
+- `lane_name: str` — 人間/LLM 用の論理レーン名（例：`"fulltext_recall"`）。
+- `tool: Literal["search_fulltext","search_semantic"]` — 実際に呼び出す MCP 関数名。
+- `lane: Lane` (`"fulltext" | "semantic" | "original_dense"`) — 物理レーン名。`tool="search_fulltext"` のときは `"fulltext"`、`tool="search_semantic"` のときは `"semantic"` または `"original_dense"`。
+- `params: FulltextParams | SemanticParams` — 下層ツールに渡すパラメータ。
 
 **戻り値（`MultiLaneSearchLite` 概要）**
 
 - `lanes`: `MultiLaneLaneSummary` のリスト（`lane_name`/`tool`/`lane`/`status`/`run_id_lane` + `meta` + `code_summary` + `error` 情報）。
 - `trace_id`: 一致する trace_id。
 - `took_ms_total`: バッチ全体の実行時間。
-- `success_count` / `error_count`: 再びの成否件数。
+- `success_count` / `error_count`: 成否件数。
 
-> 利用方針として「コンテキストを節約しつつ複数レーンを一気に走らせ、後続ツールで必要なランIDを抽出する」ケースでは本ツールを使い、詳細を確認したくなったタイミングで通常版 `run_multilane_search` を追加呼び出しするのがよい。
+`code_summary` には `top_codes` / `top_code_counts` などが含まれ、fusion に渡す code 指標を軽く確認できる。
+
+**利用タイミングのガイド**
+
+- wide 検索と code profiling が終わり、追加する infield レーン（`fulltext_recall` / `fulltext_precision` / semantic 設計など）のクエリ・フィルタ・パラメータが固まった段階で、それらを `lanes` 配列としてまとめて投げる。
+- Lite バージョンはランIDと timing を押さえながら LLM コンテキストを節約する想定なので、基本はこのツールで進み、細かい `SearchToolResponse` を見たいときだけ `run_multilane_search_precise` を追加で呼び出す。
+- 内部では `lanes` に記載された順番で 1 本ずつ `MCPService.search_lane` を呼び出し、HTTP 403 を避けつつシリアルに実行する。
+
+### 8.9.1 `run_multilane_search_precise`
+
+**役割**
+
+- `run_multilane_search` と同じ複数レーンバッチを実行しつつ、各 lane の `SearchToolResponse`/`meta`/`code_freqs` をそのまま返す。
+- 詳細な `code_freqs` や `pairs_top` 相当の `SearchToolResponse` を downstream 解析や手動レビューで使いたいときに呼び出す。
+
+**シグネチャ（`mcp.host` と一致）**
+
+```python
+run_multilane_search_precise(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
+) -> MultiLaneSearchResponse
+```
+
+**戻り値（`MultiLaneSearchResponse` 概要）**
+
+- `results: list[MultiLaneEntryResponse]` — `lane_name` / `tool` / `lane` / `status` / `took_ms` に加えて、`response` にそのレーンの `SearchToolResponse`、`error` にエラー詳細を持つ。
+- `meta: MultiLaneSearchMeta` — 全体の `took_ms_total` / `trace_id` / `success_count` / `error_count`。
+
+この精密バージョンは lite 概要に比べてペイロードが大きく、LLM コンテキストをより多く消費するため、必要なタイミングでだけ併用するのが推奨です。
 
 ## 9. 開発・テスト環境の手順
 

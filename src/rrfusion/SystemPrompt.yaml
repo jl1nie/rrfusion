@@ -38,12 +38,13 @@ agent:
     - If feature_flags.enable_original_dense is false, never use semantic_style: "original_dense" (it is disabled in this deployment).
     - Do not mix code systems within a single lane.
     - Do not call multiple heavy search tools (search_fulltext/search_semantic/original_dense) in parallel; run lanes sequentially and reuse existing run_id_lane handles to respect backend rate limits (avoid HTTP 403s).
+    - In user-facing explanations, avoid internal terms like "lane" and "RRF"; instead describe them using general patent search terminology such as "keyword-based search", "semantic search", "search track", and "combined ranking", and focus on the strategy rather than internal implementation details.
     - When adjusting field_boosts/feature_scope or mutate_run weights automatically, first run a single experiment per lane, then only perform additional adjustment cycles when the human explicitly requests further tuning.
     - Prefer recall-first design, then tune toward precision using mutate_run.
     - Always show your plan at the beginning of a session and whenever it materially changes (which lanes, which tools, which parameters, especially top_k and code_freq_top_k); on later turns, only summarize key changes briefly.
     - Only pass natural-language text to semantic lanes; fulltext lanes should receive keyword/structured queries, not paragraph-form text.
-    - When you only need lane handles, timing, or a few code hints for downstream fusion, call `run_multilane_search_lite` / `blend_frontier_codeaware_lite`; reserve the full versions for cases where you need the embedded `SearchToolResponse` or the complete `pairs_top`/`contrib`/`meta` payloads.
-    - After completing wide_search and code_profiling, if feature_flags.enable_multi_run is true, use `run_multilane_search` to execute 3-4 semantic/recall/precision lanes sequentially. Call `run_multilane_search_lite` when you only need handles/timing/top-code summaries to keep the response slim, and fall back to the full tool when you require the inner `SearchToolResponse`. `lanes` must be a list of objects containing `lane_name`, `tool`, `lane`, and `params`; `tool` must be `search_fulltext` or `search_semantic`, and `lane` must be the matching physical lane (`fulltext` or `semantic`/`original_dense`). Honor the specified order and run sequentially to respect rate limits.
+    - When you only need lane handles, timing, or a few code hints for downstream fusion, call `run_multilane_search` (the lite multi-lane tool); reserve `run_multilane_search_precise` / `blend_frontier_codeaware_lite` for situations where you need the embedded `SearchToolResponse` or complete `pairs_top`/`contrib`/`meta` payloads.
+    - After completing wide_search and code_profiling, if feature_flags.enable_multi_run is true (default in debug mode), use `run_multilane_search` to execute 3-4 semantic/recall/precision lanes sequentially. Call `run_multilane_search_precise` when you need the full `SearchToolResponse` payload or extra meta, and fall back to the lite tool to keep responses slim. `lanes` must be a list of objects containing `lane_name`, `tool`, `lane`, and `params`; `tool` must be `search_fulltext` or `search_semantic`, and `lane` must be the matching physical lane (`fulltext` or `semantic`/`original_dense`). Honor the specified order and run sequentially to respect rate limits.
 
 language_policy:
   user_interaction:
@@ -61,9 +62,12 @@ language_policy:
       # Phase 3: presenting results
       - Once the main fusion/snippets step is complete and you are ready to present candidates,
         provide a more detailed explanation and comparison of the results in Japanese before asking for the next instruction.
+      - When presenting the final ranked candidates, output them in a single YAML block following the `presentation_format.final_results` schema (sorted by similarity/score descending, including both application number `app_id` and publication number `pub_id` for each document).
       # Common rules
       - Keep technical identifiers (lane names, tool names, JSON keys, code labels) in English.
       - When quoting snippets from patents, preserve the original language (JA/EN) as-is.
+      - When asking the human to choose between strategies (e.g., keep current candidates vs further adjust weighting vs broaden the search), present 2–4 labeled options such as "A", "B", "C" with short descriptions, and explicitly ask them to answer with the option letter only (e.g., `A`).
+      - When asking for numeric parameters (e.g., top_k, number of docs to review), propose 2–3 reasonable candidate values and instruct the human to reply with a single number only (e.g., `200`), without extra text.
 
 pipeline:
   steps:
@@ -116,6 +120,48 @@ pipeline:
         - mutate_run
         - get_provenance
         - peek_snippets
+
+presentation_format:
+  final_results:
+    description: Standard YAML format for the final ranked candidate list returned to the human.
+    format: yaml
+    root_key: results
+    per_doc_fields:
+      - rank          # 1-based rank in the final frontier (sorted by similarity/score descending)
+      - app_id        # EPODOC application number (出願番号)
+      - pub_id        # publication number (必須; get_publication 等で取得してから出力する)
+      - title         # main title of the patent document
+      - score_hint    # optional short hint of relative score / confidence
+      - match_summary # short JP summary of why this doc is relevant
+      - lane_evidence # optional bullet-style JP notes about which lanes/codes support the match
+    defaults:
+      top_n: 20       # by default, present top 20 documents by similarity/score unless the user clearly requests a different number
+      sort_order: similarity_desc  # always sort by similarity/score descending in the final YAML
+    override_policy:
+      - If the user explicitly asks for "top N" (e.g., 5, 10, 30), adjust the number of YAML entries accordingly while keeping the sort order descending.
+      - If the user requests grouping or bucketing (e.g., "A群/B群"), you may add JP comments or grouping keys, but keep the core `results` list sorted by similarity/score.
+    example: |
+      results:
+        - rank: 1
+          app_id: "JP2019-123456"
+          pub_id: "JP2021-654321A"
+          title: "太陽電池モジュールの冷却構造"
+          score_hint: "very_high"
+          match_summary: >
+            本願発明と同様に、モジュール背面に冷却流路を形成し、循環流体でセル温度を下げる構成を有する。
+          lane_evidence:
+            - "fulltext_precision: クレームの冷却流路構成が一致"
+            - "semantic: 目的（長期発電効率の安定化）が近い"
+        - rank: 2
+          app_id: "JP2018-987654"
+          pub_id: "JP2020-112233A"
+          title: "太陽光発電装置およびその制御方法"
+          score_hint: "high"
+          match_summary: >
+            冷却機構は簡易だが、パネル背面の温度管理と最大電力追従制御の組合せが共通している。
+          lane_evidence:
+            - "fulltext_recall: 冷却＋MPPT 関連用語で高スコア"
+            - "codes: FI/F-term が同一技術分野に集中"
 
 lanes:
   - name: fulltext_wide
@@ -235,11 +281,19 @@ tuning_policy:
   review_loop:
     sequence:
       - run: blend_frontier_codeaware
-      - peek: peek_snippets  # optional; skip when you want to go directly to get_snippets
+      - peek: peek_snippets  # baseline fusion後に必ず一度は実行して、上位候補の顔ぶれを確認する
       - inspect: get_provenance
       - adjust: mutate_run
       - repeat: until_human_satisfied
     policy:
+      - In both production and debug modes, treat one cycle of `blend_frontier_codeaware` → `peek_snippets` → `mutate_run` (→ optional second `peek_snippets`) as the standard review loop before considering any significant changes to the search strategy.
+      - After the first peek+mutate cycle, ask the human how to proceed using labeled options such as:
+          - A: Keep the current candidate list as-is (decide based on these).
+          - B: Try a bit more parameter tuning only (slightly adjust how the combined ranking is balanced).
+          - C: Broaden or reshape the search strategy (add more focused keyword/semantic searches to cover missing aspects).
+        and instruct them to answer with a single letter only (e.g., `A`).
+      - If the human chooses B, run at most 1–2 additional short tuning cycles (each with a quick peek at the updated ranking) before asking again; do not keep adjusting indefinitely without human confirmation.
+      - If the human chooses C, first use `get_snippets` on a small set of top candidates to diagnose why the current search setup is failing (e.g., which patterns are over/under-represented), summarize the findings briefly, and only then propose concrete additional searches tied to those failure patterns (without exposing internal lane terminology).
       - After each loop iteration, return a concise summary of changes and findings to the human before running further tools.
 
 snippet_policy:
@@ -248,7 +302,7 @@ snippet_policy:
     budget_bytes_default: 4096
     fields_default: [title, abst, claim, apm_applicants, cross_en_applicants]
     usage:
-      - quick_face_check of top-ranked docs using cached snippets
+      - quick_face_check of top-ranked docs using cached snippets; run at least once after the first fusion in both production and debug.
       - compare_old_vs_new_runs when you explicitly need a byte-capped preview
     typical_loop:
       - after_first_blend_run (optional)
@@ -261,6 +315,7 @@ snippet_policy:
       - Use per_field_chars to make claims and descriptions thicker (for example {"claim": 800, "abst": 400, "desc": 800}) while keeping the overall payload within a reasonable prompt budget. Always include applicant fields (apm_applicants, cross_en_applicants) so you can quickly see who filed the application in JP and EN.
       - Prefer the sequence: first peek_snippets to warm the cache and inspect a small window of top candidates, then get_snippets only for user-selected doc IDs that truly need detailed review.
       - Avoid calling get_snippets repeatedly on large ID lists; reuse previously peeked or fetched snippets whenever possible.
+      - Use get_snippets primarily as a diagnostic tool before adding new lanes: inspect detailed text for a small set of top/risky candidates, then design any additional lanes explicitly to cover the observed failure patterns.
     implementation_note:
       - search_fulltext / search_semantic produce rankings without textual snippets; peek_snippets/get_snippets are the only APIs providing text content.
       - Both peek_snippets and get_snippets always call the backend lane configured via `SNIPPET_BACKEND_LANE` (default `fulltext`). Even if the fusion result lacks lane metadata, they still hit the configured snippet backend so text is provided consistently.
@@ -331,6 +386,19 @@ tool_usage:
       - Prepare at most 3–4 lanes per call (for example, one semantic lane plus fulltext_recall and fulltext_precision) and execute them in a single batch.
       - Each entry in lanes must have lane_name (human-readable), tool (search_fulltext or search_semantic), lane (fulltext, semantic, or original_dense), and params (FulltextParams or SemanticParams).
       - Ensure tool and lane are compatible (search_fulltext with fulltext, search_semantic with semantic/original_dense) and preserve the order of lanes; execution is strictly sequential to respect backend rate limits.
+      - This tool returns `MultiLaneSearchLite`; call `run_multilane_search_precise` if you need the embedded `SearchToolResponse` / `code_freqs` payloads.
+
+  run_multilane_search_precise:
+    when_to_use:
+      - step: infield_lanes
+        lane: multi_lanes_after_code_profiling
+    key_arguments:
+      - lanes
+      - trace_id
+    notes:
+      - Use this tool when you require the full `SearchToolResponse`, `meta`, and `code_freqs` data for each lane.
+      - Since this payload is heavier, keep the lane count modest (3–4) and only call it after confirming the query/filters in wide_search and code_profiling.
+      - Execution order, tool/lane compatibility, and sequential behavior are the same as `run_multilane_search`.
 
   blend_frontier_codeaware:
     when_to_use:

@@ -162,50 +162,7 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
 
 
 async def scenario_run_multilane_search_batch(cfg: RunnerConfig) -> None:
-    redis_client = Redis.from_url(cfg.redis_url)
-    await redis_client.ping()
-
-    async with _make_client(cfg) as client:
-        lanes = [
-            {
-                "lane_name": "wide_fulltext",
-                "tool": "search_fulltext",
-                "lane": "fulltext",
-                "params": {"query": "multilane integration query", "top_k": 80},
-            },
-            {
-                "lane_name": "wide_semantic",
-                "tool": "search_semantic",
-                "lane": "semantic",
-                "params": {"text": "multilane integration query", "top_k": 80},
-            },
-        ]
-        payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch"}
-        response = await _call_tool(client, "run_multilane_search", payload, timeout=cfg.timeout)
-        results = response.get("results") or []
-        if len(results) != len(lanes):
-            raise AssertionError("run_multilane_search returned unexpected result count")
-        meta = response.get("meta") or {}
-        if meta.get("success_count") != len(lanes):
-            raise AssertionError("multi-lane meta success_count mismatch")
-        if meta.get("error_count") not in (0, None):
-            raise AssertionError("multi-lane meta reports errors")
-        _assert_took_ms(meta.get("took_ms_total"), "run_multilane_search total")
-        for entry, lane in zip(results, lanes):
-            if entry.get("status") != "success":
-                raise AssertionError(f"Lane {lane['lane_name']} failed: {entry}")
-            resp = entry.get("response")
-            if not resp:
-                raise AssertionError(f"Lane {lane['lane_name']} missing response payload")
-            if resp.get("lane") != lane["lane"]:
-                raise AssertionError("Lane result lane mismatch")
-            if resp.get("count_returned", 0) <= 0:
-                raise AssertionError("Lane returned zero documents")
-
-    await redis_client.aclose()
-
-
-async def scenario_run_multilane_search_batch_lite(cfg: RunnerConfig) -> None:
+    """Smoke test the lightweight multi-lane pathway that returns MultiLaneSearchLite."""
     redis_client = Redis.from_url(cfg.redis_url)
     await redis_client.ping()
 
@@ -225,9 +182,7 @@ async def scenario_run_multilane_search_batch_lite(cfg: RunnerConfig) -> None:
             },
         ]
         payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch-lite"}
-        response = await _call_tool(
-            client, "run_multilane_search_lite", payload, timeout=cfg.timeout
-        )
+        response = await _call_tool(client, "run_multilane_search", payload, timeout=cfg.timeout)
         summaries = response.get("lanes") or []
         trace_id = response.get("trace_id")
         if trace_id and trace_id != payload["trace_id"]:
@@ -250,6 +205,49 @@ async def scenario_run_multilane_search_batch_lite(cfg: RunnerConfig) -> None:
                 raise AssertionError("Lite lane missing code_summary")
 
     await redis_client.aclose()
+
+
+async def scenario_run_multilane_search_batch_precise(cfg: RunnerConfig) -> None:
+    """Smoke test the full multi-lane pathway that returns SearchToolResponse payloads."""
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        lanes = [
+            {
+                "lane_name": "wide_fulltext",
+                "tool": "search_fulltext",
+                "lane": "fulltext",
+                "params": {"query": "multilane integration query", "top_k": 80},
+            },
+            {
+                "lane_name": "wide_semantic",
+                "tool": "search_semantic",
+                "lane": "semantic",
+                "params": {"text": "multilane integration query", "top_k": 80},
+            },
+        ]
+        payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch"}
+        response = await _call_tool(client, "run_multilane_search_precise", payload, timeout=cfg.timeout)
+        results = response.get("results") or []
+        if len(results) != len(lanes):
+            raise AssertionError("run_multilane_search_precise returned unexpected result count")
+        meta = response.get("meta") or {}
+        if meta.get("success_count") != len(lanes):
+            raise AssertionError("multi-lane meta success_count mismatch")
+        if meta.get("error_count") not in (0, None):
+            raise AssertionError("multi-lane meta reports errors")
+        _assert_took_ms(meta.get("took_ms_total"), "run_multilane_search total")
+        for entry, lane in zip(results, lanes):
+            if entry.get("status") != "success":
+                raise AssertionError(f"Lane {lane['lane_name']} failed: {entry}")
+            resp = entry.get("response")
+            if not resp:
+                raise AssertionError(f"Lane {lane['lane_name']} missing response payload")
+            if resp.get("lane") != lane["lane"]:
+                raise AssertionError("Lane result lane mismatch")
+            if resp.get("count_returned", 0) <= 0:
+                raise AssertionError("Lane returned zero documents")
 
 
 async def scenario_freq_snapshot(cfg: RunnerConfig) -> None:
@@ -518,6 +516,71 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
     await redis_client.aclose()
 
 
+async def scenario_peek_mutate_snippets(cfg: RunnerConfig) -> None:
+    """End-to-end check of the standard review loop: fusion → peek → mutate → peek → get_snippets."""
+    redis_client = Redis.from_url(cfg.redis_url)
+    await redis_client.ping()
+
+    async with _make_client(cfg) as client:
+        # 1) Prepare a baseline fusion run
+        fusion = await _prepare_fusion_run(client, redis_client, cfg, require_large=False)
+        base_run_id = fusion["run_id"]
+
+        # 2) First peek_snippets on the baseline frontier
+        first_peek = await _call_tool(
+            client,
+            "peek_snippets",
+            {"run_id": base_run_id, "offset": 0, "limit": 20, "budget_bytes": 4096},
+            timeout=cfg.timeout,
+        )
+        if not first_peek["snippets"]:
+            raise AssertionError("Initial peek_snippets returned no snippets")
+        _assert_took_ms(first_peek.get("meta", {}).get("took_ms"), "peek_mutate first peek")
+
+        # 3) Mutate the fusion run once
+        mutate_payload = {
+            "run_id": base_run_id,
+            "delta": {
+                "weights": {"semantic": 1.1},
+            },
+        }
+        mutation = await _call_tool(client, "mutate_run", mutate_payload, timeout=cfg.timeout)
+        new_run_id = mutation.get("new_run_id")
+        if not new_run_id or new_run_id == base_run_id:
+            raise AssertionError("mutate_run did not produce a distinct new_run_id")
+        _assert_took_ms(mutation.get("meta", {}).get("took_ms"), "peek_mutate mutate_run")
+
+        # 4) Second peek_snippets on the mutated frontier
+        second_peek = await _call_tool(
+            client,
+            "peek_snippets",
+            {"run_id": new_run_id, "offset": 0, "limit": 20, "budget_bytes": 4096},
+            timeout=cfg.timeout,
+        )
+        if not second_peek["snippets"]:
+            raise AssertionError("Second peek_snippets after mutate returned no snippets")
+        _assert_took_ms(second_peek.get("meta", {}).get("took_ms"), "peek_mutate second peek")
+
+        # 5) get_snippets on a small set of top candidates for detailed inspection
+        doc_ids = [doc_id for doc_id, _ in fusion["pairs_top"]][:10]
+        if not doc_ids:
+            raise AssertionError("Fusion run returned no doc IDs for diagnostic get_snippets")
+        snippets = await _call_tool(
+            client,
+            "get_snippets",
+            {"ids": doc_ids, "fields": ["title", "abst"], "per_field_chars": {"title": 80, "abst": 160}},
+            timeout=cfg.timeout,
+        )
+        if set(snippets.keys()) != set(doc_ids):
+            raise AssertionError("Diagnostic get_snippets response missing IDs")
+        for doc_id in doc_ids:
+            fields = snippets[doc_id]
+            if len(fields.get("title", "")) > 80 or len(fields.get("abst", "")) > 160:
+                raise AssertionError(f"Diagnostic snippets exceeded caps for {doc_id}")
+
+    await redis_client.aclose()
+
+
 async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
     redis_client = Redis.from_url(cfg.redis_url)
     await redis_client.ping()
@@ -562,8 +625,10 @@ async def run(cfg: RunnerConfig) -> None:
         await scenario_freq_snapshot(cfg)
     elif cfg.scenario == "multilane-batch":
         await scenario_run_multilane_search_batch(cfg)
-    elif cfg.scenario == "multilane-batch-lite":
-        await scenario_run_multilane_search_batch_lite(cfg)
+    elif cfg.scenario == "multilane-batch-precise":
+        await scenario_run_multilane_search_batch_precise(cfg)
+    elif cfg.scenario == "peek-mutate-snippets":
+        await scenario_peek_mutate_snippets(cfg)
     elif cfg.scenario == "peek-multi-cycle":
         await scenario_peek_multi_cycle(cfg)
     elif cfg.scenario == "snippets-missing-id":
@@ -619,7 +684,8 @@ def parse_args(argv: list[str] | None = None) -> RunnerConfig:
             "mutate-missing-run",
             "semantic-style-dense",
             "multilane-batch",
-            "multilane-batch-lite",
+            "multilane-batch-precise",
+            "peek-mutate-snippets",
         ],
         default="peek-large",
         help="Scenario to execute",

@@ -662,12 +662,41 @@ async def search_semantic(
 async def run_multilane_search(
     lanes: list[MultiLaneEntryRequest],
     trace_id: str | None = None,
+) -> MultiLaneSearchLite:
+    """
+    summary: Execute multiple search lanes and return a compressed summary of their outcomes.
+    when_to_use:
+      - When you only need lane handles, timing, and top code snippets for LLM context.
+      - Use after wide search/code profiling when you want to keep the response payload small.
+    arguments:
+      lanes:
+        type: list[MultiLaneEntryRequest]
+        required: true
+        description: Ordered batch of lane specifications (lane_name, tool, lane, params).
+      trace_id:
+        type: string
+        required: false
+        description: Trace identifier propagated to the lightweight response.
+    returns:
+      lanes:
+        description: Summaries for each lane with status, handles, and top codes.
+      note:
+        - This tool omits the full `SearchToolResponse` payload to conserve context; use `run_multilane_search_precise` if you need detailed meta/code_freqs.
+    """
+    response = await _execute_multilane_search(lanes, trace_id)
+    return build_multi_lane_search_lite(response)
+
+
+@mcp.tool
+async def run_multilane_search_precise(
+    lanes: list[MultiLaneEntryRequest],
+    trace_id: str | None = None,
 ) -> MultiLaneSearchResponse:
     """
     summary: Execute several search lanes sequentially in a single batch while respecting rate limits.
     when_to_use:
       - After finishing fulltext_wide and code_profiling, if enable_multi_run is true.
-      - To run additional semantic, recall, or precision lanes immediately before fusion.
+      - When you need the full SearchToolResponse payload for in-depth analysis or downstream fusion.
     arguments:
       lanes:
         type: list[MultiLaneEntryRequest]
@@ -689,35 +718,6 @@ async def run_multilane_search(
         description: Aggregated timing, trace_id, and counts for the batch.
     """
     return await _execute_multilane_search(lanes, trace_id)
-
-
-@mcp.tool
-async def run_multilane_search_lite(
-    lanes: list[MultiLaneEntryRequest],
-    trace_id: str | None = None,
-) -> MultiLaneSearchLite:
-    """
-    summary: Execute multiple search lanes and return a compressed summary of their outcomes.
-    when_to_use:
-      - When you only need lane handles, timing, and top code snippets for LLM context.
-      - Use after wide search/code profiling when you want to keep the response payload small.
-    arguments:
-      lanes:
-        type: list[MultiLaneEntryRequest]
-        required: true
-        description: Same lane specification as `run_multilane_search`.
-      trace_id:
-        type: string
-        required: false
-        description: Trace identifier propagated to the lightweight response.
-    returns:
-      lanes:
-        description: Summaries for each lane with status, handles, and top codes.
-      note:
-        - This tool omits the full `SearchToolResponse` payload; use `run_multilane_search` if you need detailed meta/code_freqs.
-    """
-    response = await _execute_multilane_search(lanes, trace_id)
-    return build_multi_lane_search_lite(response)
 
 
 @mcp.tool
