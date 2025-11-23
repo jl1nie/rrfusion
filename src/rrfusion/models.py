@@ -24,6 +24,8 @@ SnippetField = Literal[
     "app_doc_id",
     "pub_id",
     "exam_id",
+    "app_date",
+    "pub_date",
     "apm_applicants",
     "cross_en_applicants",
 ]
@@ -67,6 +69,77 @@ class FilterEntry(BaseModel):
         return str(value).lower()
 
 
+def _normalize_date_value(value: Any) -> Any:
+    def _format(v: Any) -> Any:
+        if isinstance(v, int):
+            s = str(v)
+            if len(s) == 8 and s.isdigit():
+                return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        if isinstance(v, str) and len(v) == 8 and v.isdigit():
+            return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+        return v
+
+    if isinstance(value, (list, tuple)):
+        return [_format(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _format(v) for k, v in value.items()}
+    return _format(value)
+
+
+def _conds_from_filter_entry(entry: FilterEntry) -> list[Cond]:
+    conds: list[Cond] = []
+
+    def add_cond(lop: str, op: str, value: Any) -> None:
+        conds.append(Cond(lop=lop, field=entry.field, op=op, value=value))
+
+    if entry.include_values:
+        add_cond("and", "in", entry.include_values)
+    if entry.exclude_values:
+        add_cond("not", "in", entry.exclude_values)
+    if entry.include_codes:
+        add_cond("and", "in", entry.include_codes)
+    if entry.exclude_codes:
+        add_cond("not", "in", entry.exclude_codes)
+    if entry.include_range:
+        start = entry.include_range.get("from") or entry.include_range.get("start")
+        end = entry.include_range.get("to") or entry.include_range.get("end")
+        if start and end:
+            add_cond("and", "range", [start, end])
+    if entry.exclude_range:
+        start = entry.exclude_range.get("from") or entry.exclude_range.get("start")
+        end = entry.exclude_range.get("to") or entry.exclude_range.get("end")
+        if start and end:
+            add_cond("not", "range", [start, end])
+    return conds
+
+
+def normalize_filters(filters: list[Any] | None) -> list[Cond]:
+    if not filters:
+        return []
+    normalized: list[Cond] = []
+    for entry in filters:
+        if isinstance(entry, Cond):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            if any(key in entry for key in ("include_values", "include_codes", "include_range")):
+                filter_entry = FilterEntry.model_validate(entry)
+                normalized.extend(_conds_from_filter_entry(filter_entry))
+            else:
+                payload = dict(entry)
+                if "value" in payload:
+                    payload["value"] = _normalize_date_value(payload["value"])
+                if payload.get("op") == "range" and isinstance(payload.get("value"), dict):
+                    value_dict = payload["value"]
+                    start = value_dict.get("from") or value_dict.get("start")
+                    end = value_dict.get("to") or value_dict.get("end")
+                    if start is not None and end is not None:
+                        payload["value"] = [start, end]
+                normalized.append(Cond.model_validate(payload))
+        else:
+            raise RuntimeError(f"unexpected filter type: {type(entry)}")
+    return normalized
+
+
 class IncludeOpts(BaseModel):
     codes: bool = True
     code_freqs: bool = True
@@ -99,6 +172,10 @@ class FulltextParams(BaseModel):
         default_factory=lambda: SEARCH_FIELDS_DEFAULT.copy()
     )
 
+    @field_validator("filters", mode="before")
+    def _normalize_filters(cls, value: Any) -> list[Cond]:
+        return normalize_filters(value)
+
 
 class SemanticParams(BaseModel):
     text: str
@@ -111,6 +188,10 @@ class SemanticParams(BaseModel):
     )
     semantic_style: SemanticStyle = "default"
     feature_scope: FeatureScope | None = None
+
+    @field_validator("filters", mode="before")
+    def _normalize_filters(cls, value: Any) -> list[Cond]:
+        return normalize_filters(value)
 
 
 SearchParams = FulltextParams | SemanticParams
@@ -157,13 +238,29 @@ class PeekSnippetsRequest(BaseModel):
     offset: int = 0
     limit: int = 12
     fields: list[SnippetField] = Field(
-        default_factory=lambda: ["title", "abst", "claim", "apm_applicants", "cross_en_applicants"]
+        default_factory=lambda: [
+            "title",
+            "abst",
+            "claim",
+            "app_doc_id",
+            "pub_id",
+            "exam_id",
+            "app_date",
+            "pub_date",
+            "apm_applicants",
+            "cross_en_applicants",
+        ]
     )
     per_field_chars: dict[SnippetField, int] = Field(
         default_factory=lambda: {
             "title": 80,
             "abst": 320,
             "claim": 320,
+            "app_doc_id": 128,
+            "pub_id": 128,
+            "exam_id": 128,
+            "app_date": 64,
+            "pub_date": 64,
             "apm_applicants": 128,
             "cross_en_applicants": 128,
         }
@@ -196,7 +293,19 @@ class PeekSnippetsResponse(BaseModel):
 class GetSnippetsRequest(BaseModel):
     ids: list[str]
     fields: list[SnippetField] = Field(
-        default_factory=lambda: ["title", "abst", "claim", "desc", "apm_applicants", "cross_en_applicants"]
+        default_factory=lambda: [
+            "title",
+            "abst",
+            "claim",
+            "desc",
+            "app_doc_id",
+            "pub_id",
+            "exam_id",
+            "app_date",
+            "pub_date",
+            "apm_applicants",
+            "cross_en_applicants",
+        ]
     )
     per_field_chars: dict[SnippetField, int] = Field(
         default_factory=lambda: {
@@ -204,6 +313,11 @@ class GetSnippetsRequest(BaseModel):
             "abst": 480,
             "claim": 800,
             "desc": 800,
+            "app_doc_id": 128,
+            "pub_id": 128,
+            "exam_id": 128,
+            "app_date": 64,
+            "pub_date": 64,
             "apm_applicants": 128,
             "cross_en_applicants": 128,
         }
@@ -423,6 +537,7 @@ __all__ = [
     "FeatureScope",
     "Meta",
     "Cond",
+    "normalize_filters",
     "IncludeOpts",
     "SearchItem",
     "DBSearchResponse",

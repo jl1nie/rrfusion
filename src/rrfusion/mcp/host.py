@@ -16,8 +16,6 @@ from rrfusion.mcp.service import MCPService
 from rrfusion.models import (
     BlendResponse,
     BlendRunInput,
-    Cond,
-    FilterEntry,
     FulltextParams,
     Lane,
     MutateDelta,
@@ -36,6 +34,7 @@ from rrfusion.models import (
     SnippetField,
     BlendLite,
     MultiLaneSearchLite,
+    normalize_filters,
 )
 from rrfusion.mcp.llm_views import build_blend_lite, build_multi_lane_search_lite
 
@@ -184,80 +183,6 @@ def _normalize_optional_str(value: Any) -> Any:
     if value == "" or value == {} or value == []:
         return None
     return value
-
-
-def _normalize_date_value(value: Any) -> Any:
-    def _format(v: Any) -> Any:
-        if isinstance(v, int):
-            s = str(v)
-            if len(s) == 8 and s.isdigit():
-                return f"{s[:4]}-{s[4:6]}-{s[6:]}"
-        if isinstance(v, str) and len(v) == 8 and v.isdigit():
-            return f"{v[:4]}-{v[4:6]}-{v[6:]}"
-        return v
-
-    if isinstance(value, (list, tuple)):
-        return [_format(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _format(v) for k, v in value.items()}
-    return _format(value)
-
-
-def _normalize_filters(filters: list[Any] | None) -> list[Cond]:
-    """Coerce incoming filters to a list of Cond models."""
-    if not filters:
-        return []
-    normalized: list[Cond] = []
-    for entry in filters:
-        if isinstance(entry, Cond):
-            normalized.append(entry)
-        elif isinstance(entry, dict):
-            if any(key in entry for key in ("include_values", "include_codes", "include_range")):
-                filter_entry = FilterEntry.model_validate(entry)
-                normalized.extend(_conds_from_filter_entry(filter_entry))
-            else:
-                payload = dict(entry)
-                if "value" in payload:
-                    payload["value"] = _normalize_date_value(payload["value"])
-                if payload.get("op") == "range" and isinstance(
-                    payload.get("value"), dict
-                ):
-                    value_dict = payload["value"]
-                    start = value_dict.get("from") or value_dict.get("start")
-                    end = value_dict.get("to") or value_dict.get("end")
-                    if start is not None and end is not None:
-                        payload["value"] = [start, end]
-                normalized.append(Cond.model_validate(payload))
-        else:
-            raise RuntimeError(f"unexpected filter type: {type(entry)}")
-    return normalized
-
-
-def _conds_from_filter_entry(entry: FilterEntry) -> list[Cond]:
-    conds: list[Cond] = []
-
-    def add_cond(lop: str, op: str, value: Any):
-        conds.append(Cond(lop=lop, field=entry.field, op=op, value=value))
-
-    if entry.include_values:
-        add_cond("and", "in", entry.include_values)
-    if entry.exclude_values:
-        add_cond("not", "in", entry.exclude_values)
-    if entry.include_codes:
-        add_cond("and", "in", entry.include_codes)
-    if entry.exclude_codes:
-        add_cond("not", "in", entry.exclude_codes)
-    if entry.include_range:
-        start = entry.include_range.get("from") or entry.include_range.get("start")
-        end = entry.include_range.get("to") or entry.include_range.get("end")
-        if start and end:
-            add_cond("and", "range", [start, end])
-    if entry.exclude_range:
-        start = entry.exclude_range.get("from") or entry.exclude_range.get("start")
-        end = entry.exclude_range.get("to") or entry.exclude_range.get("end")
-        if start and end:
-            add_cond("not", "range", [start, end])
-    return conds
 
 
 def _guess_lane_from_run_id(run_id: str) -> str:
@@ -427,7 +352,7 @@ def _normalize_multilane_params(
     else:
         raise ValueError(f"unsupported params type: {type(raw)}")
 
-    payload["filters"] = _normalize_filters(payload.get("filters"))
+    payload["filters"] = normalize_filters(payload.get("filters"))
 
     fields_value = _normalize_optional_list(payload.get("fields"))
     if fields_value is None:
@@ -571,7 +496,7 @@ async def search_fulltext(
     response = await _require_service().search_lane(
         "fulltext",
         query=query,
-        filters=_normalize_filters(filters),
+        filters=normalize_filters(filters),
         fields=_normalize_optional_list(fields),
         field_boosts=_normalize_optional_dict(field_boosts),
         top_k=top_k,
@@ -646,7 +571,7 @@ async def search_semantic(
     response = await _require_service().search_lane(
         lane,
         text=text,
-        filters=_normalize_filters(filters),
+        filters=normalize_filters(filters),
         fields=_normalize_optional_list(fields),
         feature_scope=_normalize_optional_str(feature_scope),
         top_k=top_k,

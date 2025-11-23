@@ -19,19 +19,69 @@ def test_snippet_field_literal_contains_expected_values() -> None:
         "app_doc_id",
         "pub_id",
         "exam_id",
+        "app_date",
+        "pub_date",
+        "apm_applicants",
+        "cross_en_applicants",
     }
 
 
 def test_peek_snippets_request_defaults() -> None:
     request = PeekSnippetsRequest(run_id="run-123")
-    assert request.fields == ["title", "abst", "claim"]
-    assert request.per_field_chars == {"title": 160, "abst": 480, "claim": 320}
+    assert request.fields == [
+        "title",
+        "abst",
+        "claim",
+        "app_doc_id",
+        "pub_id",
+        "exam_id",
+        "app_date",
+        "pub_date",
+        "apm_applicants",
+        "cross_en_applicants",
+    ]
+    assert request.per_field_chars == {
+        "title": 80,
+        "abst": 320,
+        "claim": 320,
+        "app_doc_id": 128,
+        "pub_id": 128,
+        "exam_id": 128,
+        "app_date": 64,
+        "pub_date": 64,
+        "apm_applicants": 128,
+        "cross_en_applicants": 128,
+    }
 
 
 def test_get_snippets_request_defaults() -> None:
     request = GetSnippetsRequest(ids=["doc-1"])
-    assert request.fields == ["title", "abst", "claim"]
-    assert request.per_field_chars == {"title": 160, "abst": 480, "claim": 320}
+    assert request.fields == [
+        "title",
+        "abst",
+        "claim",
+        "desc",
+        "app_doc_id",
+        "pub_id",
+        "exam_id",
+        "app_date",
+        "pub_date",
+        "apm_applicants",
+        "cross_en_applicants",
+    ]
+    assert request.per_field_chars == {
+        "title": 160,
+        "abst": 480,
+        "claim": 800,
+        "desc": 800,
+        "app_doc_id": 128,
+        "pub_id": 128,
+        "exam_id": 128,
+        "app_date": 64,
+        "pub_date": 64,
+        "apm_applicants": 128,
+        "cross_en_applicants": 128,
+    }
 
 
 def test_peek_config_defaults() -> None:

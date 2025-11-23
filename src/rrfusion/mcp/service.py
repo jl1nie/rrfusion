@@ -64,15 +64,31 @@ from .backends import LaneBackend, LaneBackendRegistry
 
 logger = logging.getLogger(__name__)
 
-FIELD_ORDER = ["title", "abst", "claim", "desc", "app_doc_id", "pub_id", "exam_id"]
+FIELD_ORDER = [
+    "title",
+    "abst",
+    "claim",
+    "desc",
+    "app_doc_id",
+    "pub_id",
+    "exam_id",
+    "app_date",
+    "pub_date",
+    "apm_applicants",
+    "cross_en_applicants",
+]
 FIELD_DEFAULT_CHARS = {
     "title": 160,
     "abst": 480,
     "claim": 320,
     "desc": 400,
-    "app_doc_id": 96,
-    "pub_id": 96,
-    "exam_id": 96,
+    "app_doc_id": 128,
+    "pub_id": 128,
+    "exam_id": 128,
+    "app_date": 64,
+    "pub_date": 64,
+    "apm_applicants": 128,
+    "cross_en_applicants": 128,
 }
 FIELD_MIN_CHARS = {
     "title": 80,
@@ -82,6 +98,10 @@ FIELD_MIN_CHARS = {
     "app_doc_id": 32,
     "pub_id": 32,
     "exam_id": 32,
+    "app_date": 20,
+    "pub_date": 20,
+    "apm_applicants": 64,
+    "cross_en_applicants": 64,
 }
 
 DEFAULT_WEIGHTS = {
