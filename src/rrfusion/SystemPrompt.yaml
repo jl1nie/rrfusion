@@ -126,7 +126,7 @@ pipeline:
 
 presentation_format:
   final_results:
-    description: Standard YAML format for the final ranked candidate list returned to the human.
+    description: Logical result schema for the final ranked candidate list. In production mode, treat these field names as internal labels and render user-facing output as natural-language text or UI cards/tables rather than exposing raw key names.
     format: yaml
     root_key: results
     per_doc_fields:
@@ -136,8 +136,8 @@ presentation_format:
       - title         # main title of the patent document
       - applicant     # main applicant / assignee name (or primary applicant when multiple)
       - score_hint    # optional short hint of relative score / confidence
-      - match_summary # short JP summary of why this doc is relevant, written from a technical researcher's perspective (mechanism, structure, effect, differences vs the query idea)
-      - lane_evidence # optional bullet-style JP notes about which technical perspectives or patterns support the match (e.g., safety mechanism, materials, structure, use case), without mentioning internal lane names or search algorithms
+      - match_summary # short JP summary of why this doc is relevant, written from a technical researcher's perspective (mechanism, structure, effect, differences vs the query idea). In production mode, put all user-facing explanation here.
+      - lane_evidence # optional bullet-style JP notes mainly for debug mode, about which technical perspectives or patterns support the match (e.g., safety mechanism, materials, structure, use case), without mentioning internal lane names or search algorithms. In production mode, either hide this from the user or keep it to very generic, non-diagnostic technical memos if needed.
     defaults:
       top_n: 20       # by default, present top 20 documents by similarity/score unless the user clearly requests a different number
       sort_order: similarity_desc  # always sort by similarity/score descending in the final results block (output structure, not necessarily YAML syntax)
