@@ -481,7 +481,9 @@ tool_usage:
       - run_id
     notes:
       - Always pass the argument name as `run_id`. For lane runs, use the `run_id_lane` string returned by search_fulltext/search_semantic as the value of `run_id` (e.g., `{"run_id": "<run_id_lane>"}`), not as a separate key.
+      - Treat run_id values as opaque handles; never synthesize or transform them (do not swap `fulltext-xxxx`/`semantic-xxxx` prefixes or reuse the suffix from a different run).
       - Do not send an argument named `run_id_lane` to this tool; the only accepted identifier is `run_id`.
+      - If get_provenance returns a validation error or 404 for a run_id, stop and either (a) re-check the latest successful tool response to pick a valid run_id, or (b) re-run the corresponding search/fusion step; do NOT continue the pipeline by guessing target_profile or other settings from partial information.
 
 semantic_feature_presets:
   wide: word_weights
