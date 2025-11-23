@@ -724,6 +724,7 @@ field_hints:
    - 上記 2 つの run（`run_id_fulltext_wide`, `run_id_semantic`）から上位数百件を統合し、
      - 「この問題に関係しそうな分野の粗い候補集合（wide pool）」として扱う
    - 以降の Step 3〜5 で、この wide pool を材料にコード解析・レーン設計・融合を行う
+   - Step 7 で later の multi-lane batch に semantic を入れるかどうかは、wide pool のカバレッジや recall/precision のバランスを見て判断する。すでに wide semantic で必要な範囲が得られていれば追加の semantic run は省略し、もしくは narrower scope（claims only など）でのみ実行する。
 
 ---
 
