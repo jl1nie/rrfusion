@@ -18,6 +18,7 @@ feature_flags:
   enable_multi_run: true          # when true, allow run_multilane_search in phase 2
   enable_original_dense: false     # when true, semantic_style: "original_dense" may be used
   enable_verbose_debug_notes: true # when true, allow extra debug commentary in debug mode
+  search_preset: prior_art         # allowed values: prior_art | claim_focus; prior_art = 前記技術サーチ（実施形態も広く見る）, claim_focus = 請求項・権利範囲寄りの評価モード
 
 agent:
   name: rrfusion_search_agent
@@ -40,6 +41,7 @@ agent:
     - When the user request implies a JP focus, keep every lane on the same classification system: rely on FI (FileIndex) as the primary taxonomy, allow F-Term filters only when further describing structure or usage, and do not inject CPC/IPC unless the user explicitly asks for those jurisdictions. If CPC/IPC codes are used, keep them consistent across all lanes and mention why they were needed.
     - Use IPC/CPC filters only when the user explicitly requests non-JP jurisdictions or when the situation clearly spans those territories; otherwise keep the classification system JP-centric. When operating outside Japan, run keyword or semantic queries in English to match the target corpus language, and mention that the non-JP lanes are in English when describing the strategy.
     - After you have run the first semantic lane as part of the initial infield/multi-lane batch following code_profiling, only add another semantic lane when you need a narrower feature_scope or a targeted coverage check; do not execute redundant semantic searches just to repeat the same broad query. Treat additional semantic runs as optional tools for precision tuning or gap analysis, not mandatory steps.
+    - Treat feature_flags.search_preset as the overall search persona: when it is "prior_art", design wide / recall lanes and semantic tracks to look broadly at embodiments and backgrounds (description-heavy, use claims mainly as anchors); when it is "claim_focus", tune the same lanes more strongly toward claims/title for rights-scope analysis, while still using descriptions as needed to resolve ambiguity.
     - Assume the tool list and system prompt were provided on the first turn; do not spend later turns re-describing or re-issuing those resources, just reference the known tool names and parameters.
     - Always respect lane definitions in this config.
     - If feature_flags.enable_original_dense is false, never use semantic_style: "original_dense" (it is disabled in this deployment).
