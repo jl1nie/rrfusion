@@ -381,7 +381,7 @@ RRFusion MCP では、**MCP ツールを増やさなくても** 新しい論理�
 
 ---
 
-### 3.1.1 検索式（`query`）の構文ルール
+### 3.1.1 検索式（`query`）の構文ルールと A/B/C 分解の基本方針
 
 バックエンドの fulltext 検索に渡す `query` は、以下の部品で構成される検索式です。
 
@@ -438,6 +438,22 @@ RRFusion MCP では、**MCP ツールを増やさなくても** 新しい論理�
 
 LLM が search_fulltext の `query` を組み立てる際は、上記の構文ルールに従って「自然文＋構成要素＋必要なときの近傍検索」を組み合わせる。
 
+あわせて、feature_extraction ではユーザの説明から出てくる情報を少なくとも次の 3 カテゴリに分けておくと、その後のレーン設計が安定します。
+
+- **コア技術 (Core technical mechanism)**  
+  - 顔認証アルゴリズム、冷却構造、センサ構成、制御ロジックなど、「発明の骨格」をなす技術要素。
+- **制約・副次的条件 (Constraints / secondary conditions)**  
+  - レイテンシ、コスト、安全性、プライバシーといった、コア技術に付随する条件や評価軸。
+- **用途・シーン (Use cases / deployment contexts)**  
+  - ゲート、入退室管理、車載、医療機器など、「どこで使うか」を示す文脈。
+
+v1.3 では、wide や in-field レーンのクエリ設計において:
+
+- コア技術は A/B 側（必須〜重要構成）として扱い、
+- 用途・シーンは C 側（用途・導入シーン）の要素として扱う
+
+ことを原則とします。特に `fulltext_wide` では、ゲート／入退室／車載など **用途側の語を AND/MUST に入れず、SHOULD（OR）グループに留める** ことで、「用途は違うが技術コアが同じ」先行技術を early-stage で取りこぼさないようにするのが重要です。
+
 ---
 
 ### 3.2 `fulltext_wide` レーン
@@ -450,19 +466,19 @@ LLM が search_fulltext の `query` を組み立てる際は、上記の構文�
 
 **クエリの特徴**
 
-- ユーザの自然文説明を、LLM が適度に整形したものをほぼそのまま使う。
-- シノニム展開・関連語展開は行うが、  
-  「構成要素の厳密な AND 条件」まではあまり厳しく入れない。
+- ユーザの自然文説明から主要な技術要素を抽出し、必ず **キーワード／Boolean 検索式としての `query`** に変換してから `search_fulltext` を呼び出す。
+- 検索式は、技術用語・（必要に応じて）分類コード・論理演算子（AND/OR/NOT）、フレーズ（"`...`"）、近傍検索（`*N5"..."` など）を組み合わせて構成し、自然文の段落をそのまま渡さない。
+- wide レーンでは AND ブロックは 2〜3 個程度に抑え、NOT 条件はユーザが明示的に「除外してほしい」と指定した場合に限定する。過剰な AND/NOT による絞り込みは避け、あくまで「広く当たりをつける」役割を意識する。
 - クエリ長の目安：
-  - 〜 1000 文字程度まで許容（バックエンドの制約に従う）
-  - 多段の AND/OR よりも、自然文やキーワード列を優先
+  - 実装上はおおむね 〜256 文字程度を目安とし、それを超える場合は重要な語に絞り込む（バックエンド側の制約に従いつつ、必要に応じて調整してよい）。
 
 **フィールド設計**
 
 - タイトル、要約、請求項、明細書の主要部分を広く対象とする。
 - バックエンド側の典型的な設定例：
   - title, abstract, claims, description に対して均等〜やや claims 重み寄り
-- コード制約は原則つけない（技術分野の先入観を避ける）。
+- レーンレベルの filters ではコード体系（FI/FT/CPC/IPC）によるハードな絞り込みは原則つけない（`code_system_policy.allow: none` に相当し、技術分野の先入観による取りこぼしを避ける）。  
+  一方で、検索式中に FI/FT などの分類コードをキーワードとして含めることはあり得るが、その場合でも wide レーンでは「分野のおおまかな当たりをつける」用途に留め、過度に狭いコードで締め付けない。
 
 **コード分布と target_profile**
 
@@ -951,8 +967,8 @@ Representative review is an **optional, heavier human-in-the-loop step** that is
 ### 6.4 Representative feedback, facet weighting, and fallback search regeneration
 
 - Convert `synonym_clusters` from Step 1 into the `facet_terms` payload that goes into every fusion request, grouping the same technical idea under a single facet (A/B/C) and including multiple synonymous expressions within that facet so `compute_facet_score` can reward semantic coverage. 代表レビューで得た A/B の判断もこの facet 情報とセットで扱い、`facet_weights` の値をレビュー後の判断に応じて書き換えます。たとえば `facet_weights["A"]` を引き上げて `pi′(d)` が A に素直に反応するようにしたり、B を含めて採用する場合は B を含む synonym_cluster を厚めにする、といった運用が想定されます。
-- 代表レビューの結果を基にした A/B の採用範囲が上位候補の受け入れ条件です。人間が「A のみ」受け入れると答えたときは facet_weights で A を重くし、B と C の重みを落としたうえで `pi_weights` の B 信号を抑えてください。A+B を受け入れると返答したときは B を含む facet_terms を厚くし、A と B の両方が一定以上のスコアを獲得するように `pi_weights` を調整します。
-- 代表レビューで C しか残らず A/B が得られなかった場合は、現在の fusion 構成を一度リセットしてフォールバック検索を走らせます。具体的には、Step 1〜4（feature_extraction → fulltext_wide → code_profiling → infield_lanes）を見直し、新しい synonym_clusters や field_hints を反映したキーワード／semantic 式を再構築し、それらで再度 run を取得してから blend_frontier_codeaware を呼び直します。`mutate_run` による微調整はこの再スタートの後、「A/B の範囲が確認できたとき」に実行してください。
+- 代表レビューの結果を基にした A/B の採用範囲が上位候補の受け入れ条件です。人間が「A のみ」受け入れると答えたときは facet_weights で A を重くし、B と C の重みを落としたうえで `pi_weights` の B 信号を抑えてください。A+B を受け入れると返答したときは B を含む facet_terms を厚くし、A と B の両方が一定以上のスコアを獲得するように `pi_weights` を調整します。代表レビューは、初期段階では上位 20 件程度の「軽めの 20-document review」を何度か繰り返して傾向を把握し、フロンティアが安定してきたタイミングで **30 件の代表セット** を固定する、という二段階運用を想定しています。
+- 代表レビューで C しか残らず A/B が得られなかった場合は、現在の fusion 構成を一度リセットしてフォールバック検索を走らせます。具体的には、Step 1〜4（feature_extraction → fulltext_wide → code_profiling → infield_lanes）を見直し、新しい synonym_clusters や field_hints を反映したキーワード／semantic 式を再構築し、それらで再度 run を取得してから blend_frontier_codeaware を呼び直します。`mutate_run` による微調整はこの再スタートの後、「A/B の範囲が確認できたとき」に実行してください。WO/EP/US パイプラインへ展開するかを検討する際も、直前に 20 件程度の代表レビューをやり直し、現在の JP セットの妥当性を確認してから判断するのが望ましい運用です。
 - このフォールバック検索サイクルを終えるまで、非JP パイプライン（WO/EP/US）への展開は提案せず、必要があれば代表レビュー結果を人間に再提示してから追加の corpus を検討してください。
 
 ---
@@ -1041,6 +1057,105 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 - 人間のレビューとチューニングループを組み込み
 
 「ラベルなし環境でも、それなりに信頼できる検索フロンティア」を構築することを狙っています。
+
+---
+
+### 5.2 「うまくいっていない」ことを検知する評価指標（アラーム）
+
+v1.3 の SystemPrompt と MCP ツール群を前提としたとき、次のような観測値は「検索がうまくいっていない可能性が高い」**代表的な赤信号の例**として扱えます。  
+ここに列挙されている条件はあくまで例示であり、これらに該当しない場合でも、実務家の感覚や個別タスクの事情に応じて「おかしい」と判断されるパターンがあれば、その都度 SystemPrompt やレーン設計の見直し対象になり得ます。
+
+- **wide レーンのヒット件数・クエリ構造**
+  - `fulltext_wide` の `count_returned` が `top_k≈800` に対して **100 件未満** の場合、wide 側で AND/NOT が強すぎる可能性が高い。
+  - wide クエリに用途・シーン（ゲート、入退室管理、車載など）が AND/MUST で入っている場合は、用途で絞り込みすぎているサインとして扱う。
+  - 対応方針：用途語を一度 SHOULD/OR に落とした wide クエリ候補を作り直し、ヒット件数と code_freqs の変化を比較する。
+
+- **コード分布（target_profile）が用途側に偏りすぎている**
+  - `get_provenance` で `fulltext_wide` の `code_distributions` を見たときに、用途テーマ（ゲート系、特定アプリケーション限定のテーマなど）の FI/FT ばかりが上位を占め、コア技術側のコードがほとんど現れない場合。
+  - 対応方針：feature_extraction で用途語を C（用途・シーン）に明示的に分離し、A/B（コア技術）のみで wide/in-field クエリの骨格を再構築する。
+
+- **レーン寄与の極端な片寄り**
+  - `blend_frontier_codeaware` 後の `lane_contributions`（`get_provenance`）で、特定の 1 レーンが 0.8〜0.9 以上を占め、他レーンの寄与がほぼゼロになっている場合。
+  - 特に `fulltext_precision` や用途付きの in-field レーンだけが支配的になっているときは、precision バイアスに寄り過ぎて広い候補が死んでいる可能性がある。
+  - 対応方針：`mutate_run` で当該レーンの weight を下げ、recall 寄りレーン（wide/recall/semantic）の weight を少し引き上げて frontier の形（Fβ）と代表レビューを再確認する。
+
+- **frontier の形がフラットで Fβ が立ち上がらない**
+  - `BlendResponse.frontier` の `F_beta_star` が、k を増やしてもほとんど改善しない（例えば k=10〜50 で 0.1〜0.2 のフラットな線に張り付いている）場合。
+  - 対応方針：  
+    - wide / in-field のクエリ設計を見直し（特に AND/NOT の強さとフィールド選択）、  
+    - semantic レーンの feature_scope を変える（claims-only → wide など）  
+    といった「レーン側の情報供給」を疑う。mutate_run だけで frontier を改善しようとしない。
+
+- **代表レビューの A/B がほとんど得られない**
+  - 代表 20/30 件のレビューで A/B がほとんどなく C（off-topic）が多数を占める場合、現在の fusion 設定ではコア技術の prior art に十分到達できていない。
+  - 代表 A/B の多くが特定用途（例：ゲート付き）に偏っている一方で、実務上重要な「用途違いの広義 prior art」が含まれていないと判断された場合も赤信号。
+  - 対応方針：feature_extraction〜wide〜code_profiling まで一度戻り、「コア技術」と「用途」の分離・用途語を含まない wide/in-field レーンの追加を検討する。
+
+- **スニペットの顔ぶれが明らかに off-field**
+  - `peek_snippets` を wide や fulltext_recall に対して実行したとき、上位 20〜30 件の多くが、専門家の目から見て明らかに分野外（コードもテキストも合っていない）になっている場合。
+  - 対応方針：  
+    - FI/FT フィルタの再設計（近いコードの OR グループにしつつ、明らかな off-field コードを negative hints として扱う）  
+    - feature_terms / synonym_clusters から一般語を減らし、コア技術語を厚くする  
+    など、「クエリ設計」側を優先的に見直す。
+
+これらのアラームは、単独で「失敗」と決めつけるものではなく、「mutate_run での微調整ではなく、レーン設計や feature_extraction に戻るべきか」を判断するトリガとして扱います。  
+また、ここで挙げた条件に完全には当てはまらなくても、検索プロが「結果セットの顔ぶれやコード分布がおかしい」と感じた場合は、それ自体をアラームとして扱い、同様に wide / in-field / feature_extraction の見直しを検討してよいものとします。
+
+---
+
+### 5.3 今後の改善ポイント
+
+RRFusion MCP v1.3 は、wide → in-field → fusion → snippets → tuning という骨格は安定しているものの、feature_extraction と wide/in-field 設計に大きく依存するため、今後の改善余地をいくつかの観点から整理しておきます。
+
+#### 5.3.1 評価・運用・プロンプト側の改善
+
+- **用途語とコア技術語のガイドテーブル**
+  - 顔認証ゲートのような個別例に依存しない形で、「用途語候補」「コア技術語候補」の例をドメイン別に整理し、SystemPrompt の参照テーブルとして持つ。
+  - LLM が feature_extraction で A/B/C を割り振る際に、「用途語を A に入れにくくする」方向のバイアスを持たせる。
+
+- **wide 検索の自動ヘルスチェック**
+  - `count_returned` と code_freqs を見て、
+    - ヒットが少なすぎる
+    - コード分布が用途側テーマに偏りすぎている
+    場合に、SystemPrompt 側で「用途語を外した wide 再検索候補」を 1〜2 パターン自動生成し、ユーザに選択させるフローを標準化する。
+
+- **用途あり／なしの in-field ペアレーン設計**
+  - in-field フェーズでは、少なくとも次の 2 種類の論理レーンをテンプレートとして用意する：
+    - コア技術のみ（A/B）を対象とするレーン
+    - コア技術＋代表的用途（A/B/C）を対象とするレーン
+  - fusion の initial_weights では、用途付きレーンの重みを少し軽めに設定し、用途語による過度なバイアスを抑える。
+
+- **代表レビュー結果のフィードバック**
+  - 代表 30 件の A/B/C ラベルと lane_contributions を継続的に記録し、
+    - A の多くがどのレーンに支えられているか
+    - C が多いレーンの共通パターン（用途語過多、コード過剰など）
+    を観察する。
+  - これをもとに、SystemPrompt のデフォルト weight や query_style（例えば fulltext_precision の field_boosts）の次バージョンを調整する。
+
+- **ユーザとの用途確認 UX**
+  - 新しいタスクの冒頭で、「用途は例示か、必須条件か」を A/B のような選択肢でユーザに明示的に聞き、A（例示）の場合は wide/in-field で用途語を自動的に SHOULD に落とす。
+
+#### 5.3.2 システム実装側の改善
+
+- **クエリ構造のログとアンチパターン検出**
+  - `search_fulltext` / `search_semantic` に渡した実クエリ（Boolean 式／自然文）を構造化してログに残し、
+    - AND のネストが深すぎる
+    - 用途語が MUST に入っている
+    といったアンチパターンを自動検出するヘルパを用意する。
+  - debug モードでは、この検知結果を短い debug ノートとして LLM に返し、プロンプト側でクエリ修正を促す。
+
+- **wide の再検索サイクル用ユーティリティ**
+  - 既存の `hash_query` や `RedisStorage` の `query_hash` を活用し、「用途語を外した変種 wide クエリ」を試すときに、  
+    - どのクエリバリアントでどのコード分布・frontier が得られたか  
+    を比較しやすくするメタデータ記録／可視化 API を検討する。
+
+- **semantic レーンの feature_scope チューニング支援**
+  - `search_semantic` の `feature_scope` を、claims-only / wide / background_jp などで切り替えたときの frontier 変化を簡単に比較できるテストシナリオ（e2e や integration テスト）を追加し、「semantic に何を期待するか」を仕様レベルで検証できるようにする。
+
+- **代表情報の長期利用とサマリ**
+  - `register_representatives` で登録された代表セットを、単なるその場限りの tuning シグナルではなく、「次バージョンの SystemPrompt/レーン設計を見直すためのデータ」として蓄積・分析するツール（簡易レポートスクリプトなど）を追加する。
+
+これらの改善案は、v1.3 の core アーキテクチャを変えずに、「どの段階で何を疑うべきか」「どこからレーン設計に戻るべきか」を明確にすることを目的としている。実装コストと効果を見ながら、wide のヘルスチェックと用途語の扱いの強化から順に進めていくのが現実的なロードマップである。
 
 ---
 
@@ -1681,8 +1796,11 @@ blend_frontier_codeaware(
 
 **主な引数**
 
-  - `runs`：`physicalLane-run_id` 形式の文字列（例：`fulltext-fulltext_abcd1234`）か、`{"lane": "...", "run_id_lane": "..."}` の辞書。文字列の場合はハイフン前を physical lane、残りを `run_id_lane` として解釈する。
-  - `runs` の各要素は必ず `{"lane": "...", "run_id_lane": "..."}` の辞書で、`run_id_lane` には `search_fulltext`/`search_semantic` の戻り値をそのまま渡す。`lane` フィールドがないと Pydantic エラーになるので注意。
+  - `runs`：以下のいずれかの形式の要素からなるリスト。
+    - `physicalLane-run_id` 形式の文字列（例：`"fulltext-fulltext_abcd1234"`）。ハイフン前を physical lane（`"fulltext"` / `"semantic"` / `"original_dense"`）、残りを `run_id_lane` として解釈する。
+    - `{"lane": "...", "run_id_lane": "..."}` の辞書。`run_id_lane` には `search_fulltext` / `search_semantic` の戻り値をそのまま渡す。  
+      `lane` が省略された場合でも、host 側の `_guess_lane_from_run_id` によって `run_id_lane` のプレフィックスから推定される。
+  - host 実装ではこれらの形式を `_normalize_blend_runs` で `BlendRunInput` に正規化しており、エージェント側は文字列形式・辞書形式のどちらを使ってもよい（混在も可）。
 - `weights`：レーン／コード別の重み（例：`{"fulltext":1.0,"semantic":0.8,"code":0.5}`）。
 - `rrf_k`, `beta_fuse`：RRF tail / frontier の recall/precision バランスを制御。
 - `target_profile`：コード Prior（`{"fi":{"H04L":0.7}}`など）。
@@ -1980,7 +2098,8 @@ class RepresentativeEntry(BaseModel):
   - `blend_frontier_codeaware` または `mutate_run` が返した fusion run の ID。
   - lane run（`search_fulltext` や `search_semantic`）には使えない。
 - `representatives`:
-  - 代表レビューで選んだ **30 件** の文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト（サーバ側では 1〜30 件を許容するが、運用上は常に 30 件を推奨）。
+  - 代表レビューで選んだ文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト。サーバ側では 1〜30 件を許容する。
+  - 運用上は、初期の調整段階では上位 20 件程度の「representative 20-document review」を繰り返しつつ、フロンティアと候補の顔ぶれが安定してきたところで **30 件の代表セット** を確定し、その 30 件を `register_representatives` で登録することを推奨する。
 
 **挙動（実装ノート）**
 
@@ -1991,8 +2110,8 @@ class RepresentativeEntry(BaseModel):
 
 - **典型的な場面**
 
-- 初回 fusion ＋ representative-review で 30 件の候補を A/B/C に分類し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
-- JP パイプラインで十分な A/B が得られたか確認しながら、代表公報が大きくランクアウトしていないか監視する用途。
+- 初回 fusion 後に 20 件程度の representative-review を繰り返し、A/B/C の分布や欠落している観点を把握したうえで、安定したフロンティアに対して 30 件の代表セットを確定し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
+- JP パイプラインで十分な A/B が得られたか確認しながら、代表公報が大きくランクアウトしていないか監視する用途（WO/EP/US パイプラインを検討する前後で、20 件レビューと 30 件レビューの両方を組み合わせて現状把握を行うことが多い）。
 
 ### 8.9 `run_multilane_search`
 
