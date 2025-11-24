@@ -377,6 +377,7 @@ tool_usage:
       - Use different query styles per lane as defined under lanes.
       - Keep `fields` minimal (e.g., default list or omit) and treat this tool as only returning a run_id and lane-level metadata; do not expect this tool to return snippet text or full doc lists.
       - Use `code_freq_top_k` (default 30) to keep `code_freqs` compact; only increase beyond 50 when you explicitly need to inspect more codes for analysis.
+      - In debug and internal_pro modes, briefly echo the main search conditions (lane purpose, query expression, and high-level filters such as FI/FT ranges or countries) in Japanese right before calling this tool, so the human can see how the lexical query is being constructed.
       - Treat `query` as a search expression composed of keywords, logical operators, parentheses, and special keywords; it MUST NOT be a raw natural-language sentence or paragraph.
       - VALID examples for `query`:
           - 'solar panel AND inverter AND "maximum power point"'
@@ -411,6 +412,7 @@ tool_usage:
       - Use a concise conceptual description, not a long keyword list.
       - Choose feature_scope according to lane purpose (e.g., wide, title_abst_claims, claims_only, background_jp); it maps to Patentfield's feature parameter. In the prior_art preset, focus on describing the core technical idea thickly (中心概念を厚く説明する) instead of enumerating every possible synonym or marginal variant.
       - Do not ask this tool to produce textual snippets; rely on peek_snippets/get_snippets for text.
+      - In debug and internal_pro modes, briefly echo the semantic search conditions (lane purpose, conceptual text, feature_scope, and any major filters) in Japanese right before calling this tool, so the human can see how the semantic intent differs from the lexical lanes.
 
   run_multilane_search:
     when_to_use:
