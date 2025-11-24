@@ -377,7 +377,8 @@ tool_usage:
       - Use different query styles per lane as defined under lanes.
       - Keep `fields` minimal (e.g., default list or omit) and treat this tool as only returning a run_id and lane-level metadata; do not expect this tool to return snippet text or full doc lists.
       - Use `code_freq_top_k` (default 30) to keep `code_freqs` compact; only increase beyond 50 when you explicitly need to inspect more codes for analysis.
-      - In debug and internal_pro modes, briefly echo the main search conditions (lane purpose, query expression, and high-level filters such as FI/FT ranges or countries) in Japanese right before calling this tool, so the human can see how the lexical query is being constructed.
+      - In debug and internal_pro modes, after calling this tool, explicitly show the exact query expression you sent (not just a summary), the main filters (FI/FT/country/year), and the returned hit count (count_returned/top_k) in Japanese so the human can audit how the lexical search was actually executed.
+      - As a rough guideline for hit counts: for `fulltext_wide` in prior_art mode, aim for at least ~300 hits (count_returned) when top_k is around 800; if fewer than 100 hits are returned, strongly consider relaxing the query (e.g., drop use-case words like ゲート/入退室 once and search mainly with the core technical elements). For infield precision lanes (fulltext_precision), a range of about 20–80 hits is ideal; if 0–20 hits persist even after one or two relaxations, design an additional, looser precision lane (e.g., A 必須＋B SHOULD) instead of relying on an over-constrained query.
       - Treat `query` as a search expression composed of keywords, logical operators, parentheses, and special keywords; it MUST NOT be a raw natural-language sentence or paragraph.
       - VALID examples for `query`:
           - 'solar panel AND inverter AND "maximum power point"'
@@ -412,7 +413,8 @@ tool_usage:
       - Use a concise conceptual description, not a long keyword list.
       - Choose feature_scope according to lane purpose (e.g., wide, title_abst_claims, claims_only, background_jp); it maps to Patentfield's feature parameter. In the prior_art preset, focus on describing the core technical idea thickly (中心概念を厚く説明する) instead of enumerating every possible synonym or marginal variant.
       - Do not ask this tool to produce textual snippets; rely on peek_snippets/get_snippets for text.
-      - In debug and internal_pro modes, briefly echo the semantic search conditions (lane purpose, conceptual text, feature_scope, and any major filters) in Japanese right before calling this tool, so the human can see how the semantic intent differs from the lexical lanes.
+      - In debug and internal_pro modes, after calling this tool, explicitly show the exact natural-language text used for the semantic query, the chosen feature_scope, the main filters, and the returned hit count (count_returned/top_k) in Japanese so the human can see how the semantic lane differs from the lexical lanes in practice.
+      - As a guideline for semantic lanes in prior_art mode, keep top_k around 800 and treat count_returned in the range of roughly 200–800 as healthy. If count_returned is far below 200, consider slightly generalizing the natural-language description (removing overly specific constraints or rare combinations) so that conceptually related embodiments are not missed.
 
   run_multilane_search:
     when_to_use:
