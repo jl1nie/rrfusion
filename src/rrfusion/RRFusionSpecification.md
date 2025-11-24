@@ -1699,6 +1699,7 @@ blend_frontier_codeaware(
 - `recipe`：使用されたパラメータ（`delta` を含む）。
 - `peek_samples`：`peek_snippets` を inline で取得した例。
 - `meta`：`took_ms` 等のメタ情報。
+- *追加*: `priority_pairs`（代表の doc_id を優先した再ソート結果）と `representatives`（登録済みの doc_id＋A/B/C）も含めるので、UI/LLM はこれらを使って代表が消えないよう表示する。
 
 > 実装ノート：このツールで生成したレシピと `target_profile` は `mutate_run` / `get_provenance` の入力になる。今回の `field_boosts` や `feature_scope` は `runs` 側で設定した lane run metadata から継承します。
 

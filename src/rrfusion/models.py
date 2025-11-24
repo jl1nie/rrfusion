@@ -389,7 +389,7 @@ class BlendRunInput(BaseModel):
 class BlendRequest(BaseModel):
     runs: list[BlendRunInput]
     weights: dict[str, float] = Field(
-        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0, "original_dense": 1.0}
+        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.2, "original_dense": 1.0}
     )
     rrf_k: int = 60
     beta_fuse: float = 1.0
@@ -437,6 +437,14 @@ class BlendResponse(BaseModel):
     recipe: dict[str, Any]
     peek_samples: list[dict[str, Any]]
     meta: dict[str, Any] = Field(default_factory=dict)
+    priority_pairs: list[tuple[str, float]] = Field(
+        default_factory=list,
+        description="Final ranking that pushes representative docs to the front for presentation.",
+    )
+    representatives: list[RepresentativeEntry] = Field(
+        default_factory=list,
+        description="Registered representative documents (A/B/C) associated with this fusion run.",
+    )
 
 
 class MutateResponse(BaseModel):

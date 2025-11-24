@@ -16,6 +16,7 @@ from ..config import Settings
 from ..fusion import (
     aggregate_code_freqs,
     apply_code_boosts,
+    apply_representative_priority,
     compute_frontier,
     compute_lane_ranks,
     compute_pi_scores,
@@ -108,7 +109,7 @@ FIELD_MIN_CHARS = {
 
 DEFAULT_WEIGHTS = {
     "fulltext": 1.0,
-    "semantic": 1.0,
+    "semantic": 1.2,
     "code": 0.5,
 }
 DEFAULT_TOP_M_PER_LANE = {
@@ -520,28 +521,6 @@ class MCPService:
             request.target_profile,
             request.weights,
         )
-        if request.representatives:
-            max_score = max(scores.values()) if scores else 0.0
-            if max_score > 0.0:
-                label_boosts = {
-                    "A": self.settings.representative_boost_a,
-                    "B": self.settings.representative_boost_b,
-                    "C": 0.0,
-                }
-                for rep in request.representatives:
-                    boost_factor = label_boosts.get(rep.label, 0.0)
-                    if boost_factor <= 0.0:
-                        continue
-                    doc_id = rep.doc_id
-                    if doc_id not in scores:
-                        continue
-                    boost = max_score * boost_factor
-                    if boost <= 0.0:
-                        continue
-                    scores[doc_id] += boost
-                    contributions[doc_id]["representative"] = (
-                        contributions[doc_id].get("representative", 0.0) + boost
-                    )
         ordered = sort_scores(scores)
         ordered_ids = [doc_id for doc_id, _ in ordered]
         lane_ranks = compute_lane_ranks(lane_docs)
@@ -557,6 +536,8 @@ class MCPService:
         frontier = compute_frontier(
             ordered_ids, request.k_grid, pi_scores, request.beta_fuse
         )
+
+        priority_pairs = apply_representative_priority(ordered, request.representatives)
 
         max_k = max(request.k_grid) if request.k_grid else len(ordered_ids)
         max_k = min(max_k, len(ordered_ids))
@@ -608,6 +589,7 @@ class MCPService:
         if parent_meta:
             history.append(parent_meta["run_id"])
 
+        representative_payload = recipe.get("representatives", [])
         await self.storage.store_rrf_run(
             run_id=run_id,
             scores=ordered,
@@ -619,7 +601,7 @@ class MCPService:
                 "history": history,
                 "freqs_topk": freqs_topk,
                 "contrib": contrib_payload,
-                "representatives": recipe.get("representatives", []),
+                "representatives": representative_payload,
             },
         )
 
@@ -631,6 +613,11 @@ class MCPService:
             contrib=contrib_payload,
             recipe=recipe,
             peek_samples=peek_samples,
+            priority_pairs=priority_pairs[:max_k] if priority_pairs else [],
+            representatives=[
+                RepresentativeEntry.model_validate(rep)
+                for rep in representative_payload
+            ],
         )
         response.meta["took_ms"] = _elapsed_ms(start)
         return response
@@ -1016,6 +1003,37 @@ class MCPService:
             representatives=representatives,
         )
 
+    def _normalize_representatives(
+        self, representatives: list[RepresentativeEntry]
+    ) -> list[RepresentativeEntry]:
+        if not representatives:
+            raise HTTPException(
+                status_code=400,
+                detail="representatives is required and must include at least one document",
+            )
+        if len(representatives) > 30:
+            raise HTTPException(
+                status_code=400,
+                detail="representatives list is limited to at most 30 entries",
+            )
+        seen: set[str] = set()
+        normalized: list[RepresentativeEntry] = []
+        for idx, entry in enumerate(representatives, start=1):
+            doc_id = (entry.doc_id or "").strip()
+            if not doc_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"representative #{idx} has an empty doc_id",
+                )
+            if doc_id in seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"duplicate representative doc_id found: {doc_id}",
+                )
+            seen.add(doc_id)
+            normalized.append(entry.model_copy(update={"doc_id": doc_id}))
+        return normalized
+
     # ------------------------------------------------------------------ #
     async def register_representatives(
         self,
@@ -1036,7 +1054,8 @@ class MCPService:
                 status_code=400,
                 detail="representatives already registered for this fusion run; create a new fusion run if you need to redefine representatives",
             )
-        reps_payload = [rep.model_dump(exclude_none=True) for rep in representatives]
+        normalized = self._normalize_representatives(representatives)
+        reps_payload = [rep.model_dump(exclude_none=True) for rep in normalized]
         meta["representatives"] = reps_payload
         recipe = meta.get("recipe")
         if isinstance(recipe, dict):

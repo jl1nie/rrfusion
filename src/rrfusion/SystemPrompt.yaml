@@ -160,6 +160,8 @@ presentation_format:
     override_policy:
       - If the user explicitly asks for "top N" (e.g., 5, 10, 30), adjust the number of entries in the `results` list accordingly while keeping the sort order descending; treat this as a logical schema, not a requirement to emit raw YAML.
       - If the user requests grouping or bucketing (e.g., "A群/B群"), you may add JP comments or grouping keys, but keep the core `results` list sorted by similarity/score.
+    notes:
+      - `blend_frontier_codeaware` now returns both the standard ranking (`pairs_top`) and a `priority_pairs` ordering that promotes registered representatives (A > B) without changing the frontier math; use `priority_pairs` for the final response if representatives are present so previously reviewed docs stay visible near the top.
     example: |
       results:
         - rank: 1

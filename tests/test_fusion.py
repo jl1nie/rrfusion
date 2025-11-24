@@ -8,7 +8,9 @@ from rrfusion.fusion import (
     compute_pi_scores,
     compute_rrf_scores,
     sort_scores,
+    apply_representative_priority,
 )
+from rrfusion.models import RepresentativeEntry
 
 
 def test_rrf_scores_with_code_boosts():
@@ -162,3 +164,15 @@ def test_compute_frontier_uses_pi_scores_for_precision():
     frontier = compute_frontier(ordered_docs, [1, 2], pi_scores, beta_fuse=1.0)
     assert frontier[0].P_star == 0.9
     assert frontier[1].P_star < frontier[0].P_star
+
+
+def test_apply_representative_priority_resorts():
+    ordered = [("x", 0.5), ("y", 0.4), ("a", 0.3)]
+    reps = [
+        RepresentativeEntry(doc_id="a", label="A"),
+        RepresentativeEntry(doc_id="y", label="B"),
+    ]
+    prioritized = apply_representative_priority(ordered, reps)
+    assert prioritized[0][0] == "a"
+    assert prioritized[1][0] == "y"
+    assert prioritized[2][0] == "x"
