@@ -2220,3 +2220,115 @@ run_multilane_search_precise(
 などを追加していくことで、RRFusion MCP を社内標準の検索インフラとして育てていくことができます。
 
 以上。
+
+---
+
+## 11. 専門家批判に対する考察と今後の方向性
+
+`src/rrfusion/rrfusion_critique.md` では、プロフェッショナルな特許検索者の立場から RRFusion MCP v1.3 に対する重要な批判が提示されています。ここでは、もう一人の検索プロかつシステム実装者の視点から、(1) 批判への考察、(2) 今後の対応方針、(3) システム面での改造ポイントを整理します。
+
+### 11.1 批判に対する考察（もう一人のサーチャーとして）
+
+1. **用途語への過剰適合（Context Drift）**
+   - wide に用途語（ゲート、入退室管理など）が AND で混入すると、target_profile を含めてパイプライン全体が誤った文脈に固定される、という指摘は妥当です。
+   - 本文書 3.1.1 および 3.2 で「コア技術／制約／用途を分ける」「wide では用途語を MUST にしない」方針を明示しましたが、これはまさにこの批判への回答です。
+   - ただし、用途語を完全に排除するのではなく「用途あり／なしの in-field ペアレーンを持つ」ことが、実務の多様なニーズ（用途まで含めて prior art を見たいシーン）と調和する道筋と考えています。
+
+2. **コード prior 依存の過剰強化**
+   - FI/FT/CPC/IPC が誤分類／未付与／隣接分野に偏る現実は、実務上よくある問題です。
+   - 本実装では π′(d) においてコードスコア以外に facet（A/B/C 構成）や lane 一貫性信号も組み込んでいますが、依然として target_profile の設計に強く依存している点は否めません。
+   - 特に「コード外の正解文献をどの程度許容するか」は、現行 v1.3 では明示的な制御パラメータが少なく、今後の調整余地が大きい部分です。
+
+3. **Fβ* proxy がコード一致に寄りすぎる**
+   - 現状の compute_pi_scores / compute_frontier は、コード・facet・lane の合成信号から π′(d) を作り Fβ* を計算していますが、「コード一致していても構成要件が違う文献」が高得点になり得る構造は残っています。
+   - これは「コードは分野の大枠を与えるが、構成要件の一致は別の軸で見たい」という実務感覚とズレており、claims/description レベルの構造マッチングを入れる余地があると考えます。
+
+4. **LLM クエリ生成の一般語過多**
+   - “system, device, method” 等が AND 側に入り、肝心のコア用語が弱くなる問題は、実検索でも頻出するパターンです。
+   - 現行の SystemPrompt は「general words を避ける」ことを明示していませんが、feature_extraction や query_style のガイドラインに stopword 的リストを取り入れるべき、という指摘には賛同します。
+
+5. **semantic(default) が dense semantic ではない**
+   - v1.3 の semantic は Patentfield similarity（BM25 派生）であり、「本来の dense embedding semantic」とは性質が異なるため、言い換え耐性が限定的であるという批判は正しいです。
+   - ただし、dense レーン（original_dense）は意図的に v1.3 では無効化しており、「将来の v1.4 以降で導入する前提」の placeholder になっています。現バージョンの限界として明示しておくのが適切です。
+
+6. **RRF の線形融合と構造マッチング**
+   - RRF が rank ベースの単純な逆数和であり、「A AND B AND C が揃った文献」と「A だけ＋B だけの文献の寄せ集め」を区別しない、という指摘は理論的にも正しいです。
+   - 本実装では facet_terms / facet_weights を通じて構成要素 A/B/C のカバレッジを π′(d) に入れていますが、RRF 自体はその上に乗っているだけであり、「構成カバレッジでスコアを modulate する余地」がさらにあります。
+
+7. **代表レビューの負荷**
+   - 30 文献の精読は現実のタイムラインでは重く、代表レビューがボトルネックになり得るという指摘も妥当です。
+   - 本文書 6.3/8.8.1 で「20 文献レビューを繰り返しつつ、安定した段階で 30 文献セットを固定する」という二段階運用を提案しましたが、それでもなお軽量サンプリング手法の導入余地は残ります。
+
+総じて、批判は「現行 v1.3 の設計に対する本質的な弱点」を突いており、単なる好みの問題ではなく、今後の改良ロードマップに組み込むべき論点と評価します。
+
+### 11.2 今後の対応方針（ロードマップ的視点）
+
+上記の批判を踏まえたうえで、v1.3〜v1.4 に向けた対応方針を段階的に整理します。
+
+1. **短期（v1.3.x）：プロンプト・評価ルールの強化**
+   - feature_extraction / wide_search における「用途語を MUST にしない」ルールを SystemPrompt と本仕様に明記（3.1.1, 3.2, 5.2 を参照）。  
+   - wide のヘルスチェック（hit count, code_distribution）の赤信号条件を定め、mutate_run だけで解決しようとせず、wide/in-field/feature_extraction へ戻るトリガとして扱う。
+   - LLM クエリ生成について、一般語リスト（GENERAL_STOPWORDS）を用いたフィルタの導入を検討し、SystemPrompt に「core technical terms を優先し、一般語は AND にしない」ガイドを追加する。
+
+2. **中期（v1.4）：構造マッチングとコード prior のバランス調整**
+   - π′(d) と Fβ* の計算に、claims/description ベースの簡易構造類似度（faceted_match や NEAR/phrase パターン）を追加し、コードスコアだけに依存しない Fβ* を目指す。
+   - code boost の係数（weights["code"] や pi_weights["code"]）を見直し、「FI/FT/CPC が欠落している正解文献」をある程度救済できるよう、コード prior を少し弱める方向のチューニングを行う。
+   - in-field レーンで「コア技術のみ」と「コア＋用途」のペアを標準化し、fusion で用途付きレーンの weight を軽めに設定するプリセット（prior_art 用）を用意する。
+
+3. **中長期（v1.4 以降）：dense semantic と代表サンプリングの改善**
+   - `original_dense` レーンを有効化し、真の dense embedding ベースの semantic 検索を semantic(default) とは別レーンとして導入する。  
+     - これにより、「構成要件を言い換えた prior art」を拾う経路を用意する。
+   - representative review について、30 文献精読に先立つ軽量サンプリング（10 文献程度）や自動クラスタリングによる代表候補抽出を検討し、実務負荷と tuning 効果のバランスを取る。
+
+このロードマップは、既存の RRFusion アーキテクチャを維持しつつ、「用途への過剰適合」と「コード prior 過多」を徐々に緩和し、構造マッチングと dense semantic の方向へ重心を移していくことを意図しています。
+
+### 11.3 システム実装面での具体的な改造ポイント
+
+最後に、システム実装者の観点から、今後手を入れやすい改造ポイントを列挙します。
+
+1. **wide query sanitation モジュール**
+   - `feature_extraction` 出力を受け取り、  
+     - core_terms（A/B）  
+     - context_terms（用途・シーン）  
+     に分解した上で、
+     ```python
+     wide_terms = extract_features(core=True, context=False)
+     wide_query = MUST(wide_terms) + SHOULD(context_terms)
+     ```
+     のような構成を自動で組み立てるヘルパを追加する。
+   - これにより、SystemPrompt が多少ブレても wide 側で用途語を AND に入れすぎない安全弁を用意できる。
+
+2. **target_profile 汚染検知と再構築**
+   - `get_provenance` の code_distributions に対して、
+     ```python
+     if context_code_ratio(target_profile) > threshold:
+         target_profile = rebuild_profile_without_context()
+     ```
+     のようなコンテキストコード比率のチェックを導入する。
+   - context taxonomy/テーマ（用途寄り）を明示的に定義し、一定以上の比率を超えた場合は「用途語を含まない wide/in-field から target_profile を再構築する」パスを用意する。
+
+3. **π′(d) への構造類似度の追加**
+   - `fusion.compute_pi_scores` に、claims/description から抽出した A/B/C パターンの一致度（例えば NEAR/phrase の一致数）を `struct_sim` として追加し、
+     ```python
+     pi = w_code * code_score + w_facet * facet_score + w_lane * lane_consistency + w_struct * struct_sim
+     ```
+     のような形で、コード以外の構造的 proxy をより強く取り込む。
+
+4. **LLM クエリ生成の stopword フィルタ**
+   - SystemPrompt.yaml に GENERAL_STOPWORDS 相当のリスト（system, device, apparatus, method 等）を定義し、feature_extraction と query_style の説明で「これらを AND 側から外す」ルールを明記する。
+   - 将来余裕があれば、LLM 出力に対して post-processing で一般語を除去する軽量フィルタを AGENT 側に実装する。
+
+5. **dense semantic レーン（original_dense）の実装準備**
+   - `SemanticStyle="original_dense"` 経路に対応する backend・ストレージ・fusion ロジックを実装し、  
+     - claims ベースの dense embedding  
+     - description/背景技術ベースの dense embedding  
+     など、複数の dense レーンを試せるようにする。
+   - fusion 時には dense レーンの weight を控えめにしつつ、「言い換え prior art」の救済経路として利用する。
+
+6. **代表レビューの軽量サンプリング支援**
+   - `register_representatives` の前段として、`sample_top_k` やクラスタリングに基づく代表候補抽出ヘルパを追加し、  
+     - まず 10 文献程度の代表候補をレビュー  
+     - 必要に応じて 30 文献セットに拡張  
+     というフローを作りやすくする。
+
+これらの改造はすべて一度に行う必要はなく、wide query sanitation と target_profile 汚染検知の 2 つから着手するのが、F=0 パターンを減らすうえで最も効果が高いと考えられます。
