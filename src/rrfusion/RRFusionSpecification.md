@@ -936,16 +936,17 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 
 ### 6.3 Representative-document review
 
-Prior to any tuning or mode change, the agent should present a *representative set* of about 20 documents selected from the latest blend result.
+Representative review is an **optional, heavier human-in-the-loop step** that is only proposed when lighter tuning (mutate_run + peek_snippets) has failed to improve the frontier or top candidates.
 
-- Selection: combine top-ranked fused documents with several semantic-high examples so that both lexical and conceptual matches are exposed.  
+- Trigger: after at least two mutate_run cycles on the same fusion run, and only when the frontier and top-ranked candidates have changed little and the human explicitly indicates they want deeper tuning.
+- Selection: combine the fused ranking (`pairs_top`) with several semantic-high examples so that both lexical and conceptual matches are exposed, and select **exactly 30 candidates** in total.
 - Fetch: use `get_snippets` with `fields=["claim","abst","desc"]` and `per_field_chars={"claim":1000,"abst":600,"desc":1200}` so the human can read a consistent chunk of text without overwhelming Redis.
 - Labeling: categorize each doc as  
   * A – high fused rank and clear match to the core concept,  
   * B – lower rank but still topically appropriate,  
   * C – otherwise (off-topic or too distant).  
 - Presentation: summarize how many attendees are in each bucket and highlight 1–2 examples from A/B. Ask the human whether to treat A alone or A+B as accepted correspondences before proceeding to tuning.  
-- When the system considers expanding to non-JP pipelines (e.g., after adding >3 manual in-field searches with no coverage gain), re-run this representative review and present the results alongside the question about launching the WO/EP/US pipeline so the human can see what the current JP set looks like before deciding.
+- When the system considers expanding to non-JP pipelines (e.g., after adding >3 manual in-field searches with no coverage gain), re-run this representative 30-document review and present the results alongside the question about launching the WO/EP/US pipeline so the human can see what the current JP set looks like before deciding.
 
 ### 6.4 Representative feedback, facet weighting, and fallback search regeneration
 
@@ -1979,22 +1980,18 @@ class RepresentativeEntry(BaseModel):
   - `blend_frontier_codeaware` または `mutate_run` が返した fusion run の ID。
   - lane run（`search_fulltext` や `search_semantic`）には使えない。
 - `representatives`:
-  - 代表レビューで選んだ 20 件程度の文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト。
+  - 代表レビューで選んだ **30 件** の文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト（サーバ側では 1〜30 件を許容するが、運用上は常に 30 件を推奨）。
 
 **挙動（実装ノート）**
 
 - `register_representatives` は指定された fusion run のメタデータを更新し、`meta["representatives"]` と `meta["recipe"]["representatives"]` の両方に代表公報リストを書き込む。同じ run_id に対しては原則 1 回だけ登録でき、2 回目以降の登録試行は 400 エラーになる（代表をやり直したい場合は新しい fusion run を作る）。
 - 代表情報を書き込んだ後、内部で `get_provenance(run_id)` を呼び出し、現在のランキングに基づいて各代表公報の `rank` と `score` を付与した `ProvenanceResponse` を返す。
-- その後 `mutate_run` を呼ぶと、保存された `recipe["representatives"]` が新しい fusion のレシピに引き継がれ、RRF スコア計算後に
-  - A ラベルは `max_score * representative_boost_a`、
-  - B ラベルは `max_score * representative_boost_b`、
-  - C ラベルはブーストなし、
- という形でスコアに加算される。`representative_boost_a`/`representative_boost_b` は `Settings`（環境変数 `REPRESENTATIVE_BOOST_A` / `REPRESENTATIVE_BOOST_B`）で管理されるため、デプロイごとに「代表をどの程度アンカーとして扱うか」を調整できる。
+- その後 `mutate_run` を呼んでも、代表は doc_id ブーストとしては使わず、facet_terms / facet_weights / pi_weights の調整に使うことを想定している（π′ の中身で「A/B/C のどの構成を厚く見るか」を変える）。代表セットを変えない限り、これらの重みはその fusion 系列で基本的に固定される。
 - `get_provenance` を fusion run に対して呼ぶと、`representatives` フィールドに現在のランク付き代表公報リストが含まれるため、「もともと代表に選んだ文献が、最新の調整後でも上位に残っているか？」を常に確認できる。rank が `null` のエントリは、現在のランキング集合（融合結果）には含まれていない代表公報であることを意味する。
 
-**典型的な場面**
+- **典型的な場面**
 
-- 初回 fusion ＋ representative-review で 20 件の候補を A/B/C に分類し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
+- 初回 fusion ＋ representative-review で 30 件の候補を A/B/C に分類し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
 - JP パイプラインで十分な A/B が得られたか確認しながら、代表公報が大きくランクアウトしていないか監視する用途。
 
 ### 8.9 `run_multilane_search`

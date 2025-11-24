@@ -951,7 +951,7 @@ async def get_provenance(run_id: str) -> ProvenanceResponse:
 
 @mcp.tool
 async def register_representatives(
-    run_id: str, representatives: list[RepresentativeEntry]
+    run_id: str, representatives: list[Any]
 ) -> ProvenanceResponse:
     """
     summary: Register A/B/C-labeled representative documents for a fusion run and report their current ranks.
@@ -964,7 +964,7 @@ async def register_representatives(
         required: true
         description: Fusion run identifier whose representatives you are registering.
       representatives:
-        type: list[RepresentativeEntry]
+        type: list[object]
         required: true
         description: List of representative documents with A/B/C labels and optional reasons.
     returns:
@@ -972,8 +972,22 @@ async def register_representatives(
         description: Updated provenance for the run, including representative entries with their ranks and scores.
     """
     start = perf_counter()
+
+    normalized: list[RepresentativeEntry] = []
+    for entry in representatives:
+        if isinstance(entry, RepresentativeEntry):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            payload = dict(entry)
+            raw_label = payload.get("label")
+            if isinstance(raw_label, str):
+                payload["label"] = raw_label.strip().upper()
+            normalized.append(RepresentativeEntry.model_validate(payload))
+        else:
+            raise RuntimeError(f"invalid representative entry type: {type(entry)}")
+
     response = await _require_service().register_representatives(
-        run_id=run_id, representatives=representatives
+        run_id=run_id, representatives=normalized
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response
