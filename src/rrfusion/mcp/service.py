@@ -60,6 +60,13 @@ from ..models import (
     SearchToolResponse,
     SnippetField,
 )
+from ..mcp.defaults import (
+    FUSION_DEFAULT_BETA_FUSE,
+    FUSION_DEFAULT_K_GRID,
+    FUSION_DEFAULT_RRF_K,
+    FUSION_DEFAULT_TOP_M_PER_LANE,
+    FUSION_DEFAULT_WEIGHTS,
+)
 from ..snippets import build_snippet_item, cap_by_budget
 from ..storage import RedisStorage
 from ..utils import hash_query
@@ -110,16 +117,6 @@ FIELD_MIN_CHARS = {
     "cross_en_applicants": 64,
 }
 
-DEFAULT_WEIGHTS = {
-    "fulltext": 1.0,
-    "semantic": 1.2,
-    "code": 0.5,
-}
-DEFAULT_TOP_M_PER_LANE = {
-    "fulltext": 10000,
-    "semantic": 10000,
-}
-DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 DEFAULT_CODE_FREQ_TOP_K = 30
 IDENTIFIER_FIELDS = ("app_doc_id", "app_id", "pub_id")
 MULTI_LANE_TOOL_LANES: dict[MultiLaneTool, set[Lane]] = {
@@ -458,8 +455,8 @@ class MCPService:
         *,
         runs: list[BlendRunInput],
         weights: dict[str, float] | None = None,
-        rrf_k: int = 60,
-        beta_fuse: float = 1.0,
+        rrf_k: int | None = None,
+        beta_fuse: float | None = None,
         target_profile: dict[str, dict[str, float]] | None = None,
         top_m_per_lane: dict[str, int] | None = None,
         k_grid: list[int] | None = None,
@@ -472,14 +469,16 @@ class MCPService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="runs required"
             )
+        effective_rrf_k = rrf_k if rrf_k is not None else FUSION_DEFAULT_RRF_K
+        effective_beta_fuse = beta_fuse if beta_fuse is not None else FUSION_DEFAULT_BETA_FUSE
         request = BlendRequest(
             runs=runs,
-            weights=(weights or DEFAULT_WEIGHTS.copy()),
-            rrf_k=rrf_k,
-            beta_fuse=beta_fuse,
+            weights=(weights or FUSION_DEFAULT_WEIGHTS.copy()),
+            rrf_k=effective_rrf_k,
+            beta_fuse=effective_beta_fuse,
             target_profile=target_profile or {},
-            top_m_per_lane=(top_m_per_lane or DEFAULT_TOP_M_PER_LANE.copy()),
-            k_grid=(k_grid or DEFAULT_K_GRID.copy()),
+            top_m_per_lane=(top_m_per_lane or FUSION_DEFAULT_TOP_M_PER_LANE.copy()),
+            k_grid=(k_grid or FUSION_DEFAULT_K_GRID.copy()),
             peek=peek,
             representatives=representatives or [],
         )
@@ -917,15 +916,15 @@ class MCPService:
         blend_request = BlendRequest(
             runs=normalized_runs,
             weights=updated_recipe.get("weights", {}),
-            rrf_k=updated_recipe.get("rrf_k", self.settings.rrf_k),
+            rrf_k=updated_recipe.get("rrf_k", FUSION_DEFAULT_RRF_K),
             beta_fuse=updated_recipe.get(
-                "beta_fuse", updated_recipe.get("beta", 1.0)
+                "beta_fuse", updated_recipe.get("beta", FUSION_DEFAULT_BETA_FUSE)
             ),
             target_profile=updated_recipe.get("target_profile", {}),
             top_m_per_lane=updated_recipe.get(
-                "top_m_per_lane", {"fulltext": 10000, "semantic": 10000}
+                "top_m_per_lane", FUSION_DEFAULT_TOP_M_PER_LANE.copy()
             ),
-            k_grid=updated_recipe.get("k_grid", [10, 20, 30, 40, 50]),
+            k_grid=updated_recipe.get("k_grid", FUSION_DEFAULT_K_GRID.copy()),
             peek=None,
             representatives=[
                 RepresentativeEntry.model_validate(rep)

@@ -1799,8 +1799,8 @@ search_semantic(
 blend_frontier_codeaware(
     runs: list[BlendRunInput],
     weights: dict[str, float] | None = None,
-    rrf_k: int = 60,
-    beta_fuse: float = 1.0,
+    rrf_k: int | None = None,
+    beta_fuse: float | None = None,
     target_profile: dict[str, dict[str, float]] | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,
@@ -1816,7 +1816,7 @@ blend_frontier_codeaware(
       `lane` が省略された場合でも、host 側の `_guess_lane_from_run_id` によって `run_id_lane` のプレフィックスから推定される。
   - host 実装ではこれらの形式を `_normalize_blend_runs` で `BlendRunInput` に正規化しており、エージェント側は文字列形式・辞書形式のどちらを使ってもよい（混在も可）。
 - `weights`：レーン／コード別の重み（例：`{"fulltext":1.0,"semantic":0.8,"code":0.5}`）。
-- `rrf_k`, `beta_fuse`：RRF tail / frontier の recall/precision バランスを制御。
+  - `rrf_k`, `beta_fuse`：RRF tail / frontier の recall/precision バランスを制御（省略時のデフォルトはそれぞれ 80, 1.5）。
 - `target_profile`：コード Prior（`{"fi":{"H04L":0.7}}`など）。
 - `top_m_per_lane`：融合前に各レーンから読み込む上位件数。
 - `k_grid`：frontier を計算する `k` のグリッド。
@@ -1873,8 +1873,8 @@ blend_frontier_codeaware(
 blend_frontier_codeaware_lite(
     runs: list[BlendRunInput],
     weights: dict[str, float] | None = None,
-    rrf_k: int = 60,
-    beta_fuse: float = 1.0,
+    rrf_k: int | None = None,
+    beta_fuse: float | None = None,
     target_profile: dict[str, dict[str, float]] | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,

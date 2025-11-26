@@ -411,8 +411,8 @@ async def _execute_multilane_search(
 async def _execute_blend_frontier(
     runs: list[Any] | None,
     weights: dict[str, float] | None,
-    rrf_k: int,
-    beta_fuse: float,
+    rrf_k: int | None,
+    beta_fuse: float | None,
     target_profile: Any | None,
     top_m_per_lane: dict[str, int] | None,
     k_grid: list[int] | None,
@@ -650,8 +650,8 @@ async def run_multilane_search_precise(
 async def blend_frontier_codeaware(
     runs: list[Any] | None = None,
     weights: dict[str, float] | None = None,
-    rrf_k: int = 60,
-    beta_fuse: float = 1.0,
+    rrf_k: int | None = None,
+    beta_fuse: float | None = None,
     target_profile: Any | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,
@@ -674,11 +674,11 @@ async def blend_frontier_codeaware(
       rrf_k:
         type: int
         required: false
-        description: RRF tail parameter controlling contribution from deeper ranks (default 60).
+        description: RRF tail parameter controlling contribution from deeper ranks (default 80).
       beta_fuse:
         type: float
         required: false
-        description: F-beta-like bias for frontier computation (>1 for recall, <1 for precision).
+        description: F-beta-like bias for frontier computation (>1 for recall, <1 for precision; default 1.5).
       target_profile:
         type: object
         required: false
@@ -723,8 +723,8 @@ async def blend_frontier_codeaware(
 async def blend_frontier_codeaware_lite(
     runs: list[Any] | None = None,
     weights: dict[str, float] | None = None,
-    rrf_k: int = 60,
-    beta_fuse: float = 1.0,
+    rrf_k: int | None = None,
+    beta_fuse: float | None = None,
     target_profile: Any | None = None,
     top_m_per_lane: dict[str, int] | None = None,
     k_grid: list[int] | None = None,

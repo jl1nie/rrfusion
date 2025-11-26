@@ -32,11 +32,4 @@ def truncate_field(value: str, max_chars: int) -> str:
     return value[:slice_len] + ellipsis
 
 
-def item_budget_bytes(items: Iterable[dict]) -> int:
-    total = 0
-    for item in items:
-        total += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
-    return total
-
-
-__all__ = ["hash_query", "random_doc_id", "truncate_field", "item_budget_bytes"]
+__all__ = ["hash_query", "random_doc_id", "truncate_field"]
