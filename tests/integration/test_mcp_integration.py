@@ -312,7 +312,7 @@ async def test_get_provenance_returns_structured_metadata_for_lane_and_fusion():
         assert isinstance(fusion_prov.lane_contributions, dict)
         # config_snapshot mirrors the recipe for fusion runs
         assert isinstance(fusion_prov.config_snapshot, dict)
-        assert fusion_prov.config_snapshot.get("rrf_k") == 80
+        assert fusion_prov.config_snapshot.get("rrf_k") == 60
 
 
 @pytest.mark.integration
