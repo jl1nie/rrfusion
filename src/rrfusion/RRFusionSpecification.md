@@ -1541,7 +1541,7 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 - `run_id`：
   - あるツール呼び出しの結果集合を識別する ID
 - `doc_id`：
-  - 個々の文献（特許公報）を識別する ID。現在は EPODOC 形式の出願番号（`app_id`）を用いる。
+  - 個々の文献（特許公報）を識別する ID。バックエンド実装では EPODOC 形式の出願公開ペア ID（`app_doc_id`）で一意に管理し、他の番号種別（`app_id`/`pub_id`/`exam_id` 等）は **決して主キーとしては用いない**。
 - `Filters`：
   - 年、国、言語、コード体系などのフィルタ情報
   - 日付（例：`pubyear` や監視対象の期間）を指定するときは、バックエンドが文字列 `yyyy-mm-dd` 形式を想定しているため、そのまま文字列で渡す。日付範囲は `op="range"` で、`value` に `[ "2023-01-01", "2023-12-31" ]` のように `yyyy-mm-dd` 文字列リストを使うと誤填にならない。
@@ -1708,7 +1708,7 @@ search_fulltext(
 > **注意**：`search_semantic` も `budget_bytes` を受け取らず、`top_k` だけを使って ranking を保持します。  
 > スニペットを byte で制御したい場合は `peek_snippets` / `get_snippets` に `budget_bytes` / `per_field_chars` を指定してください。
 
-> 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、doc_id リストを `{"n": "<pair>", "t": "app_id"}` 形式に変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
+> 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、内部で `doc_id`（= `app_doc_id`）リストを、Backend が要求する番号種別（通常は `app_id`）に正規化した `{"n": "<pair>", "t": "app_id"}` 形式などへ変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
 
 **シグネチャ（`mcp.host` と一致）**
 

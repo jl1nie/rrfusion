@@ -170,11 +170,12 @@ async def test_get_publication_returns_full_fields():
 
         publication = await service.get_publication(
             ids=[doc_id],
-            id_type="app_id",
-            fields=["title", "abst", "desc", "app_doc_id", "pub_id", "exam_id"],
+            id_type="app_doc_id",
+            fields=["title", "abst", "desc", "app_doc_id", "app_id", "pub_id", "exam_id"],
         )
         snippet = publication.get(doc_id, {})
         assert snippet.get("app_doc_id") == doc_id
+        assert snippet.get("app_id"), "app_id should appear in publication"
         assert snippet.get("pub_id"), "pub_id should appear in publication"
         assert snippet.get("exam_id"), "exam_id should appear in publication"
         assert snippet.get("desc"), "Full description should be present"
@@ -333,7 +334,7 @@ async def test_snippet_identifier_fields_available():
             run_id=search_resp.run_id_lane,
             limit=3,
             fields=["app_doc_id", "pub_id", "exam_id"],
-            per_field_chars={"app_doc_id": 32, "pub_id": 32, "exam_id": 32},
+            per_field_chars={"app_doc_id": 32, "app_id": 32, "pub_id": 32, "exam_id": 32},
         )
         doc_ids = [snippet.id for snippet in peek.snippets]
         assert doc_ids, "search should return doc IDs for snippet validations"
@@ -341,12 +342,13 @@ async def test_snippet_identifier_fields_available():
 
         snippets = await service.get_snippets(
             ids=doc_ids,
-            fields=["app_doc_id", "pub_id", "exam_id"],
-            per_field_chars={"app_doc_id": 32, "pub_id": 32, "exam_id": 32},
+            fields=["app_doc_id", "app_id", "pub_id", "exam_id"],
+            per_field_chars={"app_doc_id": 32, "app_id": 32, "pub_id": 32, "exam_id": 32},
         )
 
         for doc_id in doc_ids:
             snippet = snippets.get(doc_id, {})
             assert snippet.get("app_doc_id") == doc_id
+            assert snippet.get("app_id"), "app_id should be populated"
             assert snippet.get("pub_id"), "pub_id should be populated"
             assert snippet.get("exam_id"), "exam_id should be populated"

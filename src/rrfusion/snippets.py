@@ -7,6 +7,8 @@ from typing import Iterable
 
 from .utils import truncate_field
 
+IDENTIFIER_FIELDS = ("app_doc_id", "app_id", "pub_id")
+
 
 def build_snippet_item(
     doc_id: str,
@@ -14,8 +16,14 @@ def build_snippet_item(
     fields: list[str],
     per_field_chars: dict[str, int],
 ) -> dict[str, str]:
+    # Always include identifier fields in addition to any requested fields.
+    effective_fields: list[str] = list(fields)
+    for id_field in IDENTIFIER_FIELDS:
+        if id_field not in effective_fields:
+            effective_fields.append(id_field)
+
     item = {"id": doc_id}
-    for field in fields:
+    for field in effective_fields:
         value = doc_meta.get(field, "")
         limit = per_field_chars.get(field, len(value))
         item[field] = truncate_field(value, limit)

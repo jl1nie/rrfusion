@@ -29,6 +29,7 @@ COLUMN_FIELD_MAP: dict[str, str] = {
     "claims": "claim",
     "description": "desc",
     "app_doc_id": "app_doc_id",
+    "app_id": "app_id",
     "pub_id": "pub_id",
     "exam_id": "exam_id",
 }

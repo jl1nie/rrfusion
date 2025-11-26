@@ -91,7 +91,8 @@ class PatentfieldBackend(HttpLaneBackend):
             column = FIELD_COLUMN_MAP.get(field, field)
             if column not in columns:
                 columns.append(column)
-        for id_field in ("app_id", "pub_id", "exam_id"):
+        # Always include identifier columns for consistent downstream handling.
+        for id_field in ("app_doc_id", "app_id", "pub_id", "exam_id"):
             if id_field not in columns:
                 columns.append(id_field)
         for code_field in CODE_FIELDS:
@@ -346,7 +347,8 @@ class PatentfieldBackend(HttpLaneBackend):
         columns = self._map_fields_to_columns(request.fields)
         if not columns:
             columns = self._map_fields_to_columns(["title", "abst", "claim"])
-        for doc_key in ("app_id", "pub_id", "exam_id"):
+        # Ensure identifier columns are always present for snippet retrieval.
+        for doc_key in ("app_doc_id", "app_id", "pub_id", "exam_id"):
             if doc_key not in columns:
                 columns.append(doc_key)
         limit = min(len(request.ids), self.settings.patentfield_max_results)

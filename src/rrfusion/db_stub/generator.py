@@ -96,6 +96,7 @@ def _doc_meta(doc_id: str) -> dict:
     claim = _paragraph(rng, sentences=1, words=14)
     description = _paragraph(rng, sentences=4, words=12)
     app_doc_id = doc_id
+    app_id = doc_id[:-1]
     pub_id = f"DOC{doc_id[-6:]}"
     exam_id = f"EXAM{doc_id[-5:].upper()}"
     app_date = f"2020-{rng.randint(1,12):02d}-{rng.randint(1,28):02d}"
@@ -109,6 +110,7 @@ def _doc_meta(doc_id: str) -> dict:
         "claim": claim,
         "desc": description,
         "app_doc_id": app_doc_id,
+        "app_id": app_id,
         "pub_id": pub_id,
         "exam_id": exam_id,
         "app_date": app_date,

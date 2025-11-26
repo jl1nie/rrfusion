@@ -319,7 +319,7 @@ async def peek_snippets(
 
 `peek_snippets` is the budget-gated way to inspect the fused ordering. Keep requests under `PEEK_MAX_DOCS` and watch the `peek_cursor` if you need to paginate through the ranking.
 
-By default it returns up to 12 items with `["title","abst","claim"]`, clamping each field to 160/480/320 characters so the total size stays under 12 KB (`PEEK_BUDGET_BYTES`). You can also request `desc`, `app_doc_id`, `pub_id`, or `exam_id` to see the patent identifiers (note `doc_id` now represents the primary EPODOC-style application number, i.e., `app_id`). When you need the uncapped payload, call `get_publication` to retrieve the full text via the backend without enforcing the snippet budget.
+By default it returns up to 12 items with `["title","abst","claim"]`, clamping each field to 160/480/320 characters so the total size stays under 12 KB (`PEEK_BUDGET_BYTES`). You can also request `desc`, `app_doc_id`, `app_id`, `pub_id`, or `exam_id` to see the patent identifiers (note `doc_id` now represents the primary EPODOC-style application/publication pair identifier, i.e., `app_doc_id`, and `app_id` is the underlying application number). When you need the uncapped payload, call `get_publication` to retrieve the full text via the backend without enforcing the snippet budget.
 
 ### `get_publication`
 

@@ -96,7 +96,7 @@ pipeline:
       tools:
         - search_fulltext   # fulltext_wide
       notes:
-        - Backend ranking collects doc_id (the EPODOC application number, i.e., `app_id`)/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details are fetched later in the snippets step.
+        - Backend ranking collects doc_id (the EPODOC-style application/publication pair identifier, i.e., `app_doc_id`)/score/codes, but the tools only expose run_id_lane, meta, and truncated code_freqs; snippet text and per-doc details (including app_id/pub_id) are fetched later in the snippets step.
         - Call search_fulltext for fulltext_wide once per task before code_profiling; do not restart wide_search on later turns unless the user clearly changes the task or explicitly requests a refreshed wide keyword search.
 
     - id: code_profiling
@@ -516,7 +516,7 @@ tool_usage:
       - representatives
     notes:
       - Call this tool only after you have selected 30 representative documents from a fusion run and labeled them A/B/C with reasons based on claim/abstract/description review.
-      - Always pass the fusion run_id returned by blend_frontier_codeaware/mutate_run, not a lane run_id, and include doc_id/label(A/B/C)/reason for each representative.
+      - Always pass the fusion run_id returned by blend_frontier_codeaware/mutate_run, not a lane run_id, and include the fused doc_id (internally = app_doc_id)/label(A/B/C)/reason for each representative.
       - Register representatives at most once per fusion run; if you need to redefine representatives, first create a new fusion run (e.g., via mutate_run) and then call register_representatives on that new run_id.
       - After registering representatives, use mutate_run to explore new fusion variants; treat `priority_pairs` (not raw `pairs_top`) as the primary ordering for final presentation so previously reviewed A/B representatives remain visible near the top.
 
