@@ -251,7 +251,7 @@ lanes:
       include: [claim, abst, desc]
     code_system_policy:
       allow_one_of: [fi_ft]
-      note: Use FI filters for JP focus; add FT only if you need structure/use-case nuance, and never mix CPC/IPC with FI in this lane. When using codes, prefer OR-style groups of 2–3 nearby FI/FT codes derived from the target_profile instead of a single narrow code. Avoid echoing the keywords used inside those FI/FT codes directly into the Boolean query (to prevent over-narrowing by double-counting the same technical phrasing); let the codes express that aspect and use the keyword blocks mainly for complementary concepts. In the prior_art preset, treat FI/FT-based recall as the default and only add no-code recall variants when the JP code coverage is clearly unreliable; keep the same system across subsequent lanes.
+      note: Use FI filters for JP focus; add FT only if you need structure/use-case nuance, and never mix CPC/IPC with FI in this lane. When using codes, prefer OR-style groups of 2–3 nearby FI/FT codes derived from the target_profile instead of a single narrow code. Avoid blindly echoing all keywords used inside those FI/FT codes directly into the Boolean query (to prevent over-narrowing by double-counting long identical phrasing); let the codes express that aspect and use the keyword blocks mainly for complementary or structural concepts. It is acceptable to reuse a small number of core terms from the code definitions when they represent essential elements of the invention, but do not stack long lists of near-duplicate terms on top of narrow FI/FT filters. In the prior_art preset, treat FI/FT-based recall as the default and only add no-code recall variants when the JP code coverage is clearly unreliable; keep the same system across subsequent lanes.
       source: target_profile
     downstream:
       uses_for:
@@ -293,9 +293,9 @@ lanes:
       description: >
         Design a lane centered on the Problem perspective when and only when suitable F-Term classification codes exist for the key problems/objectives. Use:
         (Background) keyword expressions capturing the technical field and context,
-        AND (Problem) F-Term codes representing the main problems/objectives,
+        AND a small OR-group of 1–2 Problem F-Term codes (MUST) representing the main problems/objectives,
         AND (Techfeature) keyword expressions for the core technical features.
-        Keep the Boolean structure explicit (Background_keywords AND Problem_FT AND Techfeature_keywords), and avoid over-constraining with too many narrow F-Terms; prefer small OR-groups of 2–3 closely related F-Terms derived from the Problem perspective. If you cannot identify reasonably specific F-Terms for the Problem, do not instantiate this lane.
+        Additional Problem F-Terms, when present, should generally be treated as SHOULD (boost) conditions rather than extra MUST filters. Keep the Boolean structure explicit (Background_keywords AND Problem_FT(core) AND Techfeature_keywords), and avoid over-constraining with too many narrow F-Terms; prefer small OR-groups of 2–3 closely related Problem F-Terms derived from the Problem perspective, with most of them acting as soft boosts when in doubt. If you cannot identify reasonably specific F-Terms for the Problem, do not instantiate this lane.
       typical_length_tokens: 50-250
     fields:
       include: [claim, abst, desc]
@@ -312,7 +312,7 @@ fusion:
     tool: blend_frontier_codeaware
     initial_weights:
       fulltext: 1.0      # applies to all fulltext-based lanes (recall/problem/precision); adjust via mutate_run when needed
-      semantic: 0.8
+      semantic: 0.7
       code: 0.5
     rrf_k: 80
     beta_fuse: 1.5
@@ -354,6 +354,7 @@ tuning_policy:
       - Before entering that "WO/EP/US pipeline" discussion, repeat the representative 20-document review (A/B/C labeling) to ensure the current JP fusion candidates are still reasonable, and present the revised recommendation alongside the question about expanding to non-JP corpora.
       - After each loop iteration, return a concise summary of changes and findings to the human before running further tools.
       - If, after 1–2 cheap-path cycles (peek_snippets + get_provenance + mutate_run), the final frontier still yields fewer than about 10 plausible B/P/T-aligned candidates (even when temporarily considering the top ~20–30 positions), you may design and execute at most one additional recall-oriented lane that relaxes constraints (for example, a no-code recall variant or a version that moves some C-like conditions from MUST to SHOULD) before repeating fusion; treat this as an exceptional measure for clear recall shortfalls, not a routine step.
+      - When cheap-path diagnostics indicate that a specific infield lane (for example, fulltext_problem) is contributing mainly off-field documents or harming recall, prefer reducing its effective influence first (via mutate_run weight adjustments or by omitting that lane from subsequent fusion runs) before adding entirely new lanes.
 
   snippet_policy:
     peek_snippets:
