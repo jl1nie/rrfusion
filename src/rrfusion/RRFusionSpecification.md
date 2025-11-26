@@ -2,10 +2,13 @@
 
 **対象読者ペルソナ**
 
-- 特許検索の実務経験あり（無効資料調査、新規性・進歩性、FTO 等を日常的に実施）
-- IT・プログラミングは専門ではないが、  
-  - ロジックやフロー図は理解できる  
-  - 数式は、説明があれば読み解けるレベル（理系大学院卒程度）
+- 主ペルソナ（検索実務者）：  
+  - 特許検索の実務経験あり（無効資料調査、新規性・進歩性、FTO 等を日常的に実施）
+  - IT・プログラミングは専門ではないが、  
+    - ロジックやフロー図は理解できる  
+    - 数式は、説明があれば読み解けるレベル（理系大学院卒程度）
+- 副ペルソナ（SystemPrompt／エージェント・バックエンド実装者）：  
+  - 上記に加えて、Python コード・Redis・REST API・MCP ツール定義を読んで改修できるエンジニア
 
 **この文書を読むとできるようになること**
 
@@ -15,6 +18,14 @@
 - 検索性能に問題があるときに、どこを調整するかの見当をつけられる
 - 将来の改良（新レーン追加、β調整、クエリ設計の変更）を、実務の観点から検討・指示できる
 - MCPツールAPI仕様を見て、LLMエージェントやバックエンド実装者と具体的な会話ができる
+
+**読み方の目安**
+
+- 検索実務者向けのコア範囲：  
+  - 0章〜5章（全体像・数理・コード体系・レーン設計・パイプライン・典型的な問題パターン）
+- SystemPrompt／エージェント・実装者向けの詳細：  
+  - 6章（アルゴリズム & ヒューリスティクス）・7章（将来の拡張パターン）・8章（MCP ツール API リファレンス）  
+  - 実務者は必要に応じて参照すればよく、必須ではない
 
 ---
 
@@ -272,20 +283,18 @@ v1.3 では **「1つのレーンの中で、異なるコード体系を混ぜ�
 
 ## 3. レーン設計の詳細
 
-この章では、RRFusion MCP v1.3 で前提としているレーン構成と、それぞれの役割・想定クエリ・フィールド設計を整理します。
+この章では、RRFusion MCP v1.3 で前提としているレーン構成と、それぞれの役割・想定クエリ・フィールド設計を整理します。SystemPrompt.yaml の定義に合わせ、論理レーンは次の通りです（`original_dense` は v1.3 では無効）。
 
 - `fulltext_wide` レーン
-- `semantic` レーン
+- `semantic` レーン（`semantic_style="default"` 固定）
 - `fulltext_recall` レーン
 - `fulltext_precision` レーン
-- （オプション）コード専用レーン
+- `fulltext_problem` レーン（Problem F-Term が明確に特定できる場合のみ起動）
 
 レーンごとの違いは **「クエリ設計」＋「フィールド・コード制約」＋「RRF 重み付け」** にあり、基盤となる検索ツールは次のように対応します。
 
 - `fulltext_*` 系：`search_fulltext`
-- `semantic`：`search_semantic(semantic_style="default" | "original_dense")`
-  - v1.3 現在、`semantic_style="original_dense"` 経路は **実行時には disabled** であり、実運用では常に `"default"` を使用する
-- コード専用レーン：RRFusion MCP 内部で組み立てたコードスコア ZSET を利用
+- `semantic`：`search_semantic(semantic_style="default")`（`original_dense` は無効）
 
 > **補足：** 本書で `fulltext_wide` / `fulltext_recall` / `fulltext_precision` のように呼んでいるのは「LLM や人間が意味する論理レーン」であり、FastMCP に渡す実際のリクエストは物理レーン（主に `fulltext` / `semantic` / `original_dense`）に番号を同じにして投げていきます。論理レーンごとの役割やフィルタ制約は `BlendRunInput` や `run metadata` で補足し、`search_fulltext` の結果ハンドルを `fulltext_wide` の代表とみなして fusion に渡す仕組みになっています。
 
@@ -293,11 +302,11 @@ v1.3 では **「1つのレーンの中で、異なるコード体系を混ぜ�
 
 | レーン名              | 主ツール                                   | 目的                             | 典型的なクエリの長さ      | コード制約               | 主な MCP パラメータ                                       |
 |----------------------|--------------------------------------------|----------------------------------|---------------------------|--------------------------|------------------------------------------------------------|
-| `fulltext_wide`      | `search_fulltext`                          | 落とし穴防止のための「広い網」  | 長め（数百〜千文字程度）  | 原則なし（ゆるめ）       | `field_boosts` は title 強め・desc 弱め（デフォルト）     |
-| `semantic`           | `search_semantic(semantic_style="default")`| 概念的に近い文献の補完          | 中程度（〜1024 文字目安）| レーンごとに統一         | `feature_scope="wide"` を基準に、場合により絞り込む       |
-| `fulltext_recall`    | `search_fulltext`                          | ターゲット分野を厚く拾う        | 中程度（特徴語中心）      | FI/FT or CPC/IPC のどれか| `field_boosts` で desc/claim をやや厚めにする             |
-| `fulltext_precision` | `search_fulltext`                          | 「本命候補」の絞り込み           | 短め（特徴語＋構成要素）  | `fulltext_recall` と同一 | `field_boosts` で title/claim を強く、desc は弱く         |
-| code-only（任意）    | 内部 ZSET                                  | コード的ど真ん中の軽い押し上げ  | なし                      | 体系固定                 | `BlendRequest.target_profile` / コードレーン用 `weights`  |
+| `fulltext_wide`      | `search_fulltext`                          | 落とし穴防止のための「広い網」  | 長め（数百〜千文字程度）  | 原則なし（ゆるめ）       | `field_boosts={"title":80,"abstract":10,"claim":5,"description":1}` |
+| `semantic`           | `search_semantic(semantic_style="default")`| 概念的に近い文献の補完          | 中程度（〜1024 文字目安）| レーンごとに統一         | `feature_scope="wide"` を基準に、必要時に claims などへ絞る |
+| `fulltext_recall`    | `search_fulltext`                          | ターゲット分野を厚く拾う        | 中程度（特徴語中心）      | FI/FT もしくは CPC/IPC のいずれか一体系 | `field_boosts={"title":40,"abstract":10,"claim":5,"description":4}` |
+| `fulltext_precision` | `search_fulltext`                          | 「本命候補」の絞り込み           | 短め（特徴語＋構成要素）  | `fulltext_recall` と同一 | `field_boosts={"title":80,"abstract":20,"claim":40,"description":40}` |
+| `fulltext_problem`（条件付き） | `search_fulltext`                  | Problem F-Term が有効なときの補助| 中程度                    | F-Term のみ（Problem 系）| `field_boosts={"title":40,"abstract":10,"claim":5,"description":4}` |
 
 以降、各レーンの詳細と、「どのように MCP パラメータを変えることで新レーンを増やせるか」を説明します。
 
@@ -317,14 +326,14 @@ fulltext 系レーンは、同じ `search_fulltext` を使いながら
 |----------------------|------------------------------|------------------------------------------------------------------------|
 | `fulltext_wide`      | 分野の当たりをつける        | `{"title": 80, "abstract": 10, "claim": 5, "description": 1}`         |
 | `fulltext_recall`    | 分野内の coverage を厚くする | `{"title": 40, "abstract": 10, "claim": 5, "description": 4}`         |
-| `fulltext_precision` | 本命候補の絞り込み           | `{"title": 120, "abstract": 20, "claim": 40, "description": 1}`       |
+| `fulltext_precision` | 本命候補の絞り込み           | `{"title": 80, "abstract": 20, "claim": 40, "description": 40}`       |
 
 - `fulltext_wide`  
   - タイトルを強めに、明細書は弱めにして「方向性が近い文献」を広く拾う。
 - `fulltext_recall`  
   - 明細書もある程度見ることで、「同じコード帯の近い技術」を漏らしにくくする。
 - `fulltext_precision`  
-  - タイトル／クレームをかなり強くし、「発明の骨格が似ている文献」を優先する。
+  - タイトル／クレームを強くしつつ description も弱めに抑えず参照し、「発明の骨格が似ている文献」を優先する。
 
 LLM や実務者が新レーンを設計する場合は、  
 この表を基準に `field_boosts` を少しずつ変えながら `blend_frontier_codeaware` → `peek_snippets` で結果を比較し、  
@@ -335,7 +344,7 @@ LLM や実務者が新レーンを設計する場合は、
 ### 3.3 semantic レーンと `feature_scope` のバリエーション
 
 semantic レーンは、バックエンドの `score_type="similarity_score"` を用いた類似度検索ですが、  
-`feature_scope` によって「どのセクションから特徴量を抽出するか」を切り替えられます。
+`feature_scope` によって「どのセクションから特徴量を抽出するか」を切り替えられます。v1.3 のデフォルトは `feature_scope="wide"` で、必要なときだけ claims などへ絞る。`semantic_style` は `"default"` 固定（`original_dense` は無効）。
 
 | semantic 論理レーン         | `feature_scope`         | Patentfield `feature` への対応       | 主な用途                                   |
 |-----------------------------|-------------------------|--------------------------------------|--------------------------------------------|
@@ -627,26 +636,9 @@ v1.3 では、wide や in-field レーンのクエリ設計において:
 
 ---
 
-### 3.6 コード専用レーン（オプション）
+### 3.6 コード専用レーン（将来用の実装メモ）
 
-**目的**
-
-- コード的に「ど真ん中」の文献を、  
-  他レーンのスコアに関係なく **少しだけ押し上げるための補助レーン**。
-
-**実装イメージ**
-
-- `target_profile` に基づき、文献ごとにコードスコア $g(d)$ を計算し、  
-  それを ZSET として保持する：
-  - 例：キー `z:rank_code:{snapshot}` に `{doc_id: g(d)}` を格納
-- `blend_frontier_codeaware` の際に、
-  - 他のレーンと同様に one lane として扱い、
-  - RRF レーン重み $w_{\text{code}}$ を小さめ（例：0.3〜0.5）に設定する。
-
-**注意点**
-
-- コードだけで順位を支配させないために、必ず小さい重みに留める。
-- 実装・運用のコストと効果を見て、導入するかどうかを決めればよいオプション扱い。
+v1.3 の prior_art プリセットではコード専用レーンを提供していません。コードのみの ZSET を別レーンとして持つ案は将来検討用のメモとして残し、現行フローでは `target_profile` によるコードブーストで対応します。
 
 ---
 
@@ -663,7 +655,7 @@ RRFusion MCP v1.3 の標準的な運用パターン（JP/先行技術サーチ�
 5. `semantic` レーンで、「部分遮蔽」「背景説明」などクレームからは拾いにくい概念的な近接候補を補完する。
 6. JP/先行技術サーチでは、`fulltext_wide` は原則として **コードプロファイル用＋安全ネット** として扱い、  
    - 初回 fusion には含めず、recall 不足が明らかになったときに code-aware gating を強く効かせた上で追加する。
-7. コード専用レーンはオプション機能であり、v1.3 の prior_art プリセットではデフォルトでは使わない（将来の `claim_focus` など別プリセットで導入する余地として残す）。
+7. コード専用レーンは v1.3 では提供しない。将来プリセット（例：`claim_focus`）で検討する場合の実装メモとしてのみ残す。
 
 これらのレーンをまとめて `blend_frontier_codeaware` に渡し、  
 RRF + コード情報による融合スコアを得る、というのが v1.3 の基本設計です。
@@ -775,7 +767,7 @@ field_hints:
 
 Step 3 で得た `target_profile` を用いて、  
 `fulltext_recall` と `fulltext_precision` を中心とする in-field レーン群を構築し、  
-最初の in-field パスでは semantic レーンも含めた multi-lane バッチを 1 度実行します。
+最初の in-field パスでは semantic レーンも含めた multi-lane バッチを 1 度実行します。`feature_flags.enable_multi_run=true` 環境では、`run_multilane_search` で semantic + `fulltext_recall` + `fulltext_precision`（Problem F-Term が有効なら `fulltext_problem` も追加）を **まとめて 1 回だけ** 実行し、以降の追加レーンは個別に走らせてから fusion します。
 
 #### 4.1 `fulltext_recall` レーン
 
@@ -812,6 +804,19 @@ Step 3 で得た `target_profile` を用いて、
   - `search_fulltext` を呼んで `run_id_fulltext_precision` を得る
   - この `run_id_fulltext_precision` を **`fulltext_precision` レーンと紐付けて保存** する
 
+#### 4.3 `fulltext_problem` レーン（必要なときのみ）
+
+- 目的：
+  - Problem 観点を示す F-Term が信頼できる場合に、課題由来の文献を補助的に拾う
+- 起動条件：
+  - Problem テキストから抽出した F-Term 候補が `fulltext_wide` の `get_provenance` で上位（目安 top20）に現れているときのみ起動し、そうでなければスキップする
+- クエリ：
+  - `(Background キーワード) AND (少数の Problem F-Term MUST) AND (Techfeature キーワード)` を基本とし、追加の Problem F-Term は SHOULD でブースト
+- コード制約：
+  - Problem 系 F-Term のみ（FI/CPC/IPC は混在させない）
+- フィールド：
+  - claims＋abstract＋description を recall レーンと同じブーストで扱う
+
 ---
 
 ### Step 5. Fusion（RRF + コード志向）
@@ -821,7 +826,8 @@ Step 3 で得た `target_profile` を用いて、
 - `run_id_fulltext_recall`
 - `run_id_fulltext_precision`
 - （通常は）Step 4 の最初の in-field バッチで実行した semantic レーンの run_id（例：`run_id_semantic_infield`）
-- （任意）wide レーン（`fulltext_wide`）やコード専用レーンの run_id
+- （任意）Problem レーン（`fulltext_problem`）の run_id
+- （必要に応じて後段で追加する場合のみ）`fulltext_wide` の run_id（初回 fusion には含めず、明確な recall 不足がわかったときだけ code-aware gating を強めにかけて追加する）
 
 これらを `blend_frontier_codeaware` に渡し、RRF + コード情報に基づく融合を行います。
 
@@ -881,6 +887,8 @@ target_profile: {...}  # Step 3 で構築したもの
 ここでは、`run_id_blend` を人間が確認しやすい形に落とし込むためのステップです。
 
 LLM エージェント側でもこのステップを踏むことが前提ですが、実務上は `peek_snippets` で上位を軽く確認しながら Redis の doc キャッシュを温め、`get_snippets` で選んだ候補の詳細（特に desc）を厚めに取るという使い分けをする想定です。`peek_snippets` は title 80, abstract 320, claim 320 文字程度の限られた箇所を見て候補感を掴み、`get_snippets` では claims 800 文字＋description 800 文字程度を `per_field_chars` で指定して精読する、といった流れがプロンプト予算と API レイテンシのバランスを保つコツです。Redis の doc キャッシュ（`h:doc:{doc_id}`）には snippet_ttl_hours（現在 1 時間）で TTL が設定されており、短時間内は peek/get の結果が再利用されます。
+
+ユーザから公開番号や出願番号が直接指定された場合は、それを代表公報として扱い、JP 番号（特願・特開など）は EPODOC 形式に正規化したうえで `id_type` を選択し `get_publication` で全文を取得する。なぜ現行フロンティアで拾えていないかを説明し、必要に応じてクエリやコード設定の調整案にフィードバックする。
 
 #### 6.1 `peek_snippets` による軽量ビュー（任意）
 
@@ -1211,7 +1219,8 @@ RRFusion MCP v1.3 は、wide → in-field → fusion → snippets → tuning と
 
 ## 6. アルゴリズム & ヒューリスティクス（最終実装）
 
-この節では、RRFusion MCP v1.3 で実際に採用している実装レベルのロジックを示します。  
+この節は主に SystemPrompt／エージェント開発者・バックエンド実装者向けです。  
+RRFusion MCP v1.3 で実際に採用している実装レベルのロジックを示します。  
 ここまでの説明で出てきた概念（RRF、target_profile、コード頻度など）が、  
 **どのような数式・Redis操作として具現化されているか** を明示します。
 
@@ -1339,9 +1348,9 @@ w'_\ell = w_\ell \cdot \left(1 + \beta \cdot \text{sim}(F_\ell, T)\right)
 - 実際には、各レーンの ZSET スコアにスケーリングをかける形で反映します
 - 例えば `ZUNIONSTORE` でもう一段階 WEIGHTS を使ってスコアを拡大・縮小できます
 
-#### C) コード専用レーン（Code-only lane）
+#### C) コード専用レーン（将来案）
 
-場合によっては、コード情報だけでランキングする補助レーンを作ることもできます。
+v1.3 では採用していませんが、コード情報だけでランキングする補助レーンを作る案を設計メモとして残します。
 
 - 文献ごとの $g(d)$ をスコアとする ZSET（例：`rank_code(d)`）を作り、
 - これを小さな重み $w_{\text{code}}$（例：0.5）で融合に加える
@@ -1530,9 +1539,17 @@ F_{\beta,\ast}(k) = (1+\beta^2) \cdot \frac{P_\ast(k) \cdot R_\ast(k)}{\beta^2 \
 
 ## 8. MCP ツール API リファレンス（概要）
 
+この節は主に SystemPrompt／エージェント開発者・バックエンド実装者向けです。  
 ここでは、RRFusion MCP が提供する MCP ツール（関数）の API を  
 **実装・メンテナンス向けに整理**します。  
 正確な型・フィールドは `rrfusion.models` 等の実装を参照してください。
+
+v1.3 で有効な MCP ツール（`src/rrfusion/mcp/host.py` 準拠）は次の通りです。
+- `search_fulltext` / `search_semantic`（semantic は `semantic_style="default"` 固定）
+- `run_multilane_search` / `run_multilane_search_precise`（初回 in-field バッチ用）
+- `blend_frontier_codeaware` / `blend_frontier_codeaware_lite`
+- `peek_snippets` / `get_snippets` / `get_publication`
+- `mutate_run` / `get_provenance` / `register_representatives`
 
 ### 8.1 共通概念
 
