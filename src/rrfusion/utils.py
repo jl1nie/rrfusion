@@ -6,7 +6,6 @@ import hashlib
 import json
 import random
 import string
-from typing import Iterable
 
 
 def hash_query(query: str, filters: dict | None = None) -> str:
