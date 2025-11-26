@@ -121,6 +121,7 @@ DEFAULT_TOP_M_PER_LANE = {
 }
 DEFAULT_K_GRID = [10, 20, 30, 40, 50, 80, 100]
 DEFAULT_CODE_FREQ_TOP_K = 30
+IDENTIFIER_FIELDS = ("app_doc_id", "app_id", "pub_id")
 MULTI_LANE_TOOL_LANES: dict[MultiLaneTool, set[Lane]] = {
     "search_fulltext": {"fulltext"},
     "search_semantic": {"semantic", "original_dense"},
@@ -435,9 +436,15 @@ class MCPService:
         fields: list[str],
         per_field_chars: dict[str, int],
     ) -> dict[str, dict[str, str]]:
+        # Always request identifier fields from the backend, even if the caller
+        # did not include them explicitly, so that app_doc_id/app_id/pub_id are populated.
+        effective_fields: list[str] = list(fields)
+        for id_field in IDENTIFIER_FIELDS:
+            if id_field not in effective_fields:
+                effective_fields.append(id_field)
         request = GetSnippetsRequest(
             ids=ids,
-            fields=fields,
+            fields=effective_fields,
             per_field_chars=per_field_chars or {},
         )
         try:
@@ -701,11 +708,17 @@ class MCPService:
         backend = self.backend_registry.get_backend(snippet_lane)
         fields = request.fields or ["title", "abst", "claim"]
         per_field_chars = request.per_field_chars
+        # Treat identifier fields as mandatory for backend refresh so that
+        # app_doc_id/app_id/pub_id are always populated in snippets.
+        required_fields = list(fields)
+        for id_field in IDENTIFIER_FIELDS:
+            if id_field not in required_fields:
+                required_fields.append(id_field)
         missing_ids = [
             doc_id
             for doc_id in doc_ids
             if not doc_metadata.get(doc_id)
-            or any(not doc_metadata[doc_id].get(field) for field in fields)
+            or any(not doc_metadata[doc_id].get(field) for field in required_fields)
         ]
         if missing_ids and backend:
             fetched = await self._fetch_snippets_from_backend(
@@ -804,9 +817,14 @@ class MCPService:
         doc_metadata = await self.storage.get_docs(request.ids)
         backend = self.backend_registry.get_backend("fulltext")
         missing_ids = []
+        # Ensure backend is queried when identifier fields or requested fields are missing.
+        required_fields = list(request.fields)
+        for id_field in IDENTIFIER_FIELDS:
+            if id_field not in required_fields:
+                required_fields.append(id_field)
         for doc_id in request.ids:
             snippet = doc_metadata.get(doc_id, {})
-            if not snippet or any(not snippet.get(field) for field in request.fields):
+            if not snippet or any(not snippet.get(field) for field in required_fields):
                 missing_ids.append(doc_id)
         if missing_ids and backend:
             fetched = await self._fetch_snippets_from_backend(
