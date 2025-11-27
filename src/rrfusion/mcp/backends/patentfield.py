@@ -341,16 +341,23 @@ class PatentfieldBackend(HttpLaneBackend):
     def _guess_numbers_type(self, identifier: str) -> str:
         """Guess Patentfield numbers.t type (app_id/pub_id/exam_id) from a raw identifier."""
         identifier = identifier.upper().strip()
-        # Japanese patterns: 特願 = application, 特開/特表 = publication, 特許 = granted publication
+        # Japanese patterns:
+        # - 特願 = 出願番号 → app_id
+        # - 特開 / 特表 = 公開・公表公報 → pub_id
+        # - 特許 = 登録公報 → exam_id
         if identifier.startswith("特願"):
             return "app_id"
-        if identifier.startswith("特開") or identifier.startswith("特表") or identifier.startswith("特許"):
+        if identifier.startswith("特開") or identifier.startswith("特表"):
             return "pub_id"
-        # EPODOC-style: trailing kind code A = publication, B... = granted publication
+        if identifier.startswith("特許"):
+            return "exam_id"
+        # EPODOC-style kind codes:
+        # - ...A = publication → pub_id
+        # - ...B / B1 / B2 = granted publication → exam_id
         if identifier.endswith("A"):
             return "pub_id"
         if identifier.endswith("B") or identifier.endswith("B1") or identifier.endswith("B2"):
-            return "pub_id"
+            return "exam_id"
         return "app_id"
 
     def _build_snippets_payload(
