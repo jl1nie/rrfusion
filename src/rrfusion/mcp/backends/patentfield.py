@@ -338,6 +338,16 @@ class PatentfieldBackend(HttpLaneBackend):
             result[doc_id] = row
         return result
 
+    def _guess_numbers_type(self, identifier: str) -> str:
+        """Guess Patentfield numbers.t type (app_id/pub_id/exam_id) from a raw identifier."""
+        identifier = identifier.upper().strip()
+        if identifier.startswith("EXAM"):
+            return "exam_id"
+        # JP/EPODOC publication numbers often end with a letter (A/B etc.)
+        if identifier and identifier[-1].isalpha():
+            return "pub_id"
+        return "app_id"
+
     def _build_snippets_payload(
         self, request: GetSnippetsRequest, lane: str | None
     ) -> dict[str, object]:
@@ -449,46 +459,152 @@ class PatentfieldBackend(HttpLaneBackend):
         logger.info("Patentfield snippets status: %s", response.status_code)
         return self._parse_snippet_response(response.json(), request.fields)
 
+    async def _resolve_app_doc_ids(
+        self, request: GetPublicationRequest
+    ) -> dict[str, str]:
+        """Resolve arbitrary identifiers into app_doc_id using Patentfield numbers API.
+
+        - When id_type is app_doc_id, pass through as-is.
+        - Otherwise, for each input ID, issue a small numbers search and require
+          that app_doc_id can be resolved; if any fail, raise an error so the caller/LLM sees it.
+        """
+        if not request.ids:
+            return {}
+
+        # When the caller already declares app_doc_id, trust it and skip numbers resolution.
+        if request.id_type == "app_doc_id":
+            return {identifier: identifier for identifier in request.ids if identifier.strip()}
+
+        id_map: dict[str, str] = {}
+        for raw in request.ids:
+            identifier = raw.strip()
+            if not identifier:
+                continue
+
+            # Decide numbers.t: prefer explicit id_type when it is one of the supported kinds.
+            if request.id_type in ("app_id", "pub_id", "exam_id"):
+                t = request.id_type
+            else:
+                t = self._guess_numbers_type(identifier)
+
+            payload: dict[str, object] = {
+                "limit": 1,
+                "offset": 0,
+                "columns": ["app_doc_id"],
+                "numbers": [{"n": identifier, "t": t}],
+            }
+            logger.info("Patentfield numbers resolution payload: %s", payload)
+            try:
+                response = await self.http.post(self.snippets_path, json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Patentfield numbers resolution HTTP %s for %s: %s",
+                    exc.response.status_code,
+                    identifier,
+                    exc,
+                )
+                raise
+            except httpx.RequestError as exc:
+                logger.error("Patentfield numbers resolution request error for %s: %s", identifier, exc)
+                raise
+
+            data = response.json()
+            hits = self._extract_records(data)
+            normalized = self._normalize_payload_records(data, hits)
+            app_doc_id: str | None = None
+            for hit in normalized:
+                value = hit.get("app_doc_id") or hit.get("doc_id")
+                if value:
+                    app_doc_id = str(value)
+                    break
+
+            if not app_doc_id:
+                # 明示的にエラーにして LLM に伝える。
+                raise RuntimeError(f"failed to resolve app_doc_id for identifier: {identifier}")
+
+            id_map[identifier] = app_doc_id
+
+        return id_map
+
     async def fetch_publication(
         self, request: GetPublicationRequest, lane: str | None = None
     ) -> dict[str, dict[str, str]]:
         if not request.ids:
             return {}
-        name = request.ids[0]
-        params: list[tuple[str, str]] = [("id_type", request.id_type)]
-        if request.fields:
-            columns = self._map_fields_to_columns(request.fields)
-            for column in columns:
-                params.append(("columns[]", column))
-        logger.info("Patentfield publication GET: %s params=%s", name, params)
-        try:
-            response = await self.http.get(
-                f"{self.publications_path}/{name}", params=params
+        # Step 1: resolve all input identifiers to app_doc_id (unless already app_doc_id).
+        id_map = await self._resolve_app_doc_ids(request)
+        if not id_map:
+            raise RuntimeError("no identifiers could be resolved to app_doc_id")
+
+        results: dict[str, dict[str, str]] = {}
+        for original_id, app_doc_id in id_map.items():
+            params: list[tuple[str, str]] = [("id_type", "app_doc_id")]
+            if request.fields:
+                columns = self._map_fields_to_columns(request.fields)
+                for column in columns:
+                    params.append(("columns[]", column))
+            logger.info(
+                "Patentfield publication GET (resolved): %s (original=%s) params=%s",
+                app_doc_id,
+                original_id,
+                params,
             )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            resp = exc.response
-            status = resp.status_code
-            error_message = ""
             try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    error_message = data.get("message") or data.get("detail") or ""
-            except ValueError:
-                text = resp.text
-                if text:
-                    error_message = text[:512]
-            if error_message:
-                logger.warning(
-                    "Patentfield publication HTTP %s: %s", status, error_message
+                response = await self.http.get(
+                    f"{self.publications_path}/{app_doc_id}", params=params
                 )
-            else:
-                logger.warning("Patentfield publication HTTP %s", status)
-            if status == 404:
-                return {}
-            raise
-        except httpx.RequestError as exc:
-            logger.error("Patentfield publication request error: %s", exc)
-            raise
-        logger.info("Patentfield publication status: %s", response.status_code)
-        return self._parse_publication_response(response.json(), request)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                resp = exc.response
+                status = resp.status_code
+                error_message = ""
+                try:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        error_message = data.get("message") or data.get("detail") or ""
+                except ValueError:
+                    text = resp.text
+                    if text:
+                        error_message = text[:512]
+                if error_message:
+                    logger.warning(
+                        "Patentfield publication HTTP %s for %s (original=%s): %s",
+                        status,
+                        app_doc_id,
+                        original_id,
+                        error_message,
+                    )
+                else:
+                    logger.warning(
+                        "Patentfield publication HTTP %s for %s (original=%s)",
+                        status,
+                        app_doc_id,
+                        original_id,
+                    )
+                if status == 404:
+                    raise RuntimeError(f"publication not found for identifier: {original_id}")
+                raise
+            except httpx.RequestError as exc:
+                logger.error(
+                    "Patentfield publication request error for %s (original=%s): %s",
+                    app_doc_id,
+                    original_id,
+                    exc,
+                )
+                raise
+
+            logger.info(
+                "Patentfield publication status: %s for %s (original=%s)",
+                response.status_code,
+                app_doc_id,
+                original_id,
+            )
+            per_doc = self._parse_publication_response(response.json(), request)
+            row = per_doc.get(app_doc_id)
+            if not row:
+                raise RuntimeError(f"publication payload missing for app_doc_id: {app_doc_id}")
+            # 戻り値のキーは元の指定番号（original_id）にしておく。
+            results[original_id] = row
+
+        return results
