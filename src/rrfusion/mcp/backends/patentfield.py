@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -455,10 +456,11 @@ class PatentfieldBackend(HttpLaneBackend):
         if not request.ids:
             return {}
         name = request.ids[0]
-        params: list[tuple[str, str]] = [("id_type", request.id_type)]
+        params: dict[str, str] = {"id_type": request.id_type}
         if request.fields:
             columns = self._map_fields_to_columns(request.fields)
-            params.extend(("columns", column) for column in columns)
+            if columns:
+                params["columns"] = json.dumps(columns)
         logger.info("Patentfield publication GET: %s params=%s", name, params)
         try:
             response = await self.http.get(
