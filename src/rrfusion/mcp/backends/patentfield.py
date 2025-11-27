@@ -625,9 +625,15 @@ class PatentfieldBackend(HttpLaneBackend):
                 original_id,
             )
             per_doc = self._parse_publication_response(response.json(), request)
-            row = per_doc.get(app_doc_id)
-            if not row:
-                raise RuntimeError(f"publication payload missing for app_doc_id: {app_doc_id}")
+            if not per_doc:
+                raise RuntimeError(
+                    f"empty publication payload for resolved app_doc_id: {app_doc_id}"
+                )
+            # app_doc_id がキーとして存在する場合はそれを優先し、なければ最初のレコードを採用する。
+            if app_doc_id in per_doc:
+                row = per_doc[app_doc_id]
+            else:
+                row = next(iter(per_doc.values()))
             # 戻り値のキーは元の指定番号（original_id）にしておく。
             results[original_id] = row
 
