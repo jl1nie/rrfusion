@@ -143,8 +143,8 @@ pipeline:
 
 presentation_format:
   final_results:
-    description: Logical result schema for the final ranked candidate list. In production mode, treat these field names as internal labels and render user-facing output as natural-language text or UI cards/tables rather than exposing raw key names. In internal_pro mode, you may surface search-track-level evidence (how queries/filters contributed) in the user-facing text, but still avoid internal lane names or backend implementation details.
-    format: yaml
+    description: Logical result schema for the final ranked candidate list. Always render the user-facing answer as plain natural-language text (for example, JP prose with numbered items or bullets) rather than YAML/JSON. Treat the field names below as internal labels that guide the content of the prose; do not expose raw key names or emit machine-readable YAML in normal operation.
+    format: text
     root_key: results
     per_doc_fields:
       - rank          # 1-based rank in the final frontier (sorted by similarity/score descending)
@@ -154,7 +154,7 @@ presentation_format:
       - applicant     # main applicant / assignee name (or primary applicant when multiple)
       - score_hint    # optional short hint of relative score / confidence
       - match_summary # short JP summary of why this doc is relevant, written from a technical researcher's perspective (mechanism, structure, effect, differences vs the query idea). In production mode, put all user-facing explanation here. In internal_pro mode, also include high-level evidence of how the search strategy/expressions led to this candidate (e.g., which kinds of tracks or query intents support the match), but without mentioning internal lane names or backend implementation details.
-      - lane_evidence # optional bullet-style JP notes mainly for debug mode, about which technical perspectives or patterns support the match (e.g., safety mechanism, materials, structure, use case), without mentioning internal lane names or search algorithms. In production mode, either hide this from the user or keep it to very generic, non-diagnostic technical memos if needed. In internal_pro mode, you may use this to annotate which search tracks or query patterns (still described in human terms, not internal lane names) were especially influential or possibly over/under-weighted.
+      - lane_evidence # optional bullet-style JP notes mainly for debug mode, about which technical perspectives or patterns support the match (e.g., safety mechanism, materials, structure, use case) and through which kind of search track it was surfaced (e.g., キーワード中心のブール検索トラック / 文章類似トラック / 分類コードプロファイルトラック), without mentioning internal lane names or search algorithms. In production mode, either hide this from the user or keep it to very generic, non-diagnostic technical memos if needed. In internal_pro mode, you may use this to annotate which human-understandable search tracks or query patterns (still described in human terms, not internal lane names) were especially influential or possibly over/under-weighted.
     defaults:
       top_n: 10       # by default, present top 10 documents by similarity/score unless the user clearly requests a different number
       sort_order: similarity_desc  # always sort by similarity/score descending in the final results block (output structure, not necessarily YAML syntax)
@@ -164,29 +164,23 @@ presentation_format:
     notes:
       - `blend_frontier_codeaware` now returns both the standard ranking (`pairs_top`) and a `priority_pairs` ordering that promotes registered representatives (A > B) without changing the frontier math; use `priority_pairs` for the final response if representatives are present so previously reviewed docs stay visible near the top.
     example: |
-      results:
-        - rank: 1
-          app_id: "JP2019-123456"
-          pub_id: "JP2021-654321A"
-          title: "太陽電池モジュールの冷却構造"
-          applicant: "ABC Corporation"
-          score_hint: "very_high"
-          match_summary: >
-            本願発明と同様に、モジュール背面に冷却流路を形成し、循環流体でセル温度を下げる構成を有する。
-          lane_evidence:
-            - "キーワード中心の検索で、請求項における冷却流路構成が強く一致している。"
-            - "文章ベースの類似度検索でも、冷却による長期効率安定化という目的が近い。"
-        - rank: 2
-          app_id: "JP2018-987654"
-          pub_id: "JP2020-112233A"
-          title: "太陽光発電装置およびその制御方法"
-          applicant: "XYZ Electric Co., Ltd."
-          score_hint: "high"
-          match_summary: >
-            冷却機構は簡易だが、パネル背面の温度管理と最大電力追従制御の組合せが共通している。
-          lane_evidence:
-            - "請求項中心の検索で、冷却と MPPT に関する用語がまとまって高く評価されている。"
-            - "分類コードの分布からも、本願と同じ技術分野の公報が集中している。"
+      1. JP2019-123456 / 公開番号 JP2021-654321A（出願人: ABC Corporation）
+         題名: 太陽電池モジュールの冷却構造
+         評価: very_high
+         要約（match_summary）:
+           モジュール背面に冷却流路を形成し、循環流体でセル温度を下げる構成を有する点で、本願発明と構造・作用が近い。
+         補足メモ（lane_evidence）:
+           - キーワード中心のブール検索トラックで、請求項における冷却流路構成が強く一致している。
+           - 文章類似トラックでも、冷却による長期効率安定化という目的が近い。
+
+      2. JP2018-987654 / 公開番号 JP2020-112233A（出願人: XYZ Electric Co., Ltd.）
+         題名: 太陽光発電装置およびその制御方法
+         評価: high
+         要約（match_summary）:
+           冷却機構自体は簡易だが、パネル背面の温度管理と最大電力追従制御の組合せが共通しており、本願と同様の技術的課題に取り組んでいる。
+         補足メモ（lane_evidence）:
+           - 請求項中心のブール検索トラックで、冷却と MPPT に関する用語がまとまって高く評価されている。
+           - 分類コードプロファイルトラックの分布からも、本願と同じ技術分野の公報が集中している。
 
 lanes:
   - name: fulltext_wide
