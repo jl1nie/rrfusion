@@ -341,10 +341,15 @@ class PatentfieldBackend(HttpLaneBackend):
     def _guess_numbers_type(self, identifier: str) -> str:
         """Guess Patentfield numbers.t type (app_id/pub_id/exam_id) from a raw identifier."""
         identifier = identifier.upper().strip()
-        if identifier.startswith("EXAM"):
-            return "exam_id"
-        # JP/EPODOC publication numbers often end with a letter (A/B etc.)
-        if identifier and identifier[-1].isalpha():
+        # Japanese patterns: 特願 = application, 特開/特表 = publication, 特許 = granted publication
+        if identifier.startswith("特願"):
+            return "app_id"
+        if identifier.startswith("特開") or identifier.startswith("特表") or identifier.startswith("特許"):
+            return "pub_id"
+        # EPODOC-style: trailing kind code A = publication, B... = granted publication
+        if identifier.endswith("A"):
+            return "pub_id"
+        if identifier.endswith("B") or identifier.endswith("B1") or identifier.endswith("B2"):
             return "pub_id"
         return "app_id"
 
@@ -383,12 +388,12 @@ class PatentfieldBackend(HttpLaneBackend):
         return payload
 
     def _guess_id_type(self, identifier: str) -> str:
-        identifier = identifier.upper()
-        if identifier.startswith("EXAM"):
-            return "exam_id"
-        if identifier.startswith("APP"):
+        identifier = identifier.upper().strip()
+        # For doc_id (app_doc_id) and related identifiers, reuse similar heuristics:
+        # - trailing A/B-kind codes treated as publication-side identifiers
+        if identifier.endswith("A"):
             return "app_doc_id"
-        if identifier and identifier[-1].isalpha():
+        if identifier.endswith("B") or identifier.endswith("B1") or identifier.endswith("B2"):
             return "app_doc_id"
         return "app_id"
 
