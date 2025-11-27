@@ -519,11 +519,17 @@ class PatentfieldBackend(HttpLaneBackend):
             if not identifier:
                 continue
 
-            # Decide numbers.t: prefer explicit id_type when it is one of the supported kinds.
-            if request.id_type in ("app_id", "pub_id", "exam_id"):
+            # Decide numbers.t:
+            # - First, let _guess_numbers_type inspect JP prefixes / kind codes (A/A1/B/B2...).
+            # - If it can classify as pub_id/exam_id, prefer that over the caller hint.
+            # - Otherwise, fall back to the explicit id_type (or app_id).
+            guessed_t = self._guess_numbers_type(identifier)
+            if guessed_t != "app_id":
+                t = guessed_t
+            elif request.id_type in ("app_id", "pub_id", "exam_id"):
                 t = request.id_type
             else:
-                t = self._guess_numbers_type(identifier)
+                t = "app_id"
 
             payload: dict[str, object] = {
                 "limit": 1,
