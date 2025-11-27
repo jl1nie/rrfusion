@@ -32,6 +32,11 @@ FIELD_COLUMN_MAP: dict[str, str] = {
     "exam_id": "exam_id",
     "apm_applicants": "apm_applicants",
     "cross_en_applicants": "cross_en_applicants",
+    # Classification code fields (flattened as text in snippets/publications)
+    "ipc_codes": "ipcs",
+    "cpc_codes": "cpcs",
+    "fi_codes": "fis",
+    "ft_codes": "fterms",
 }
 
 FIELD_FILTER_MAP: dict[str, str] = {
@@ -150,6 +155,8 @@ class PatentfieldBackend(HttpLaneBackend):
         for candidate in candidates:
             value = record.get(candidate)
             if value:
+                if isinstance(value, list):
+                    return " ".join(str(v) for v in value if v)
                 return str(value)
         return ""
 

@@ -29,6 +29,10 @@ SnippetField = Literal[
     "pub_date",
     "apm_applicants",
     "cross_en_applicants",
+    "ipc_codes",
+    "cpc_codes",
+    "fi_codes",
+    "ft_codes",
 ]
 
 SEARCH_FIELDS_DEFAULT: list[SnippetField] = ["abst", "title", "claim"]
@@ -309,6 +313,10 @@ class GetSnippetsRequest(BaseModel):
             "pub_date",
             "apm_applicants",
             "cross_en_applicants",
+            "ipc_codes",
+            "cpc_codes",
+            "fi_codes",
+            "ft_codes",
         ]
     )
     per_field_chars: dict[SnippetField, int] = Field(
@@ -325,6 +333,10 @@ class GetSnippetsRequest(BaseModel):
             "pub_date": 64,
             "apm_applicants": 128,
             "cross_en_applicants": 128,
+            "ipc_codes": 256,
+            "cpc_codes": 256,
+            "fi_codes": 256,
+            "ft_codes": 256,
         }
     )
     trace_id: str | None = None
@@ -334,7 +346,24 @@ class GetPublicationRequest(BaseModel):
     ids: list[str]
     id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id"
     fields: list[SnippetField] = Field(
-        default_factory=lambda: ["title", "abst", "claim", "desc", "app_doc_id", "pub_id", "exam_id"]
+        default_factory=lambda: [
+            "title",
+            "abst",
+            "claim",
+            "desc",
+            "app_doc_id",
+            "app_id",
+            "pub_id",
+            "exam_id",
+            "app_date",
+            "pub_date",
+            "apm_applicants",
+            "cross_en_applicants",
+            "ipc_codes",
+            "cpc_codes",
+            "fi_codes",
+            "ft_codes",
+        ]
     )
     trace_id: str | None = None
 

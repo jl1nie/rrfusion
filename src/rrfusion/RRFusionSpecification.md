@@ -1915,7 +1915,8 @@ peek_snippets(
 
 - `run_id`: `blend_frontier_codeaware` / `mutate_run` の fusion run ID。
 - `offset`, `limit`: ランキング内のスライド。
-- `fields`: 返すテキストセクション（デフォルト `['title','abst','claim']`）。
+- `fields`: 返すテキストセクション（デフォルト `['title','abst','claim']`）。  
+  - 必要に応じて `desc`, `app_doc_id`, `app_id`, `pub_id`, `exam_id`, `app_date`, `pub_date`, `apm_applicants`, `cross_en_applicants` などを追加する。
 - `per_field_chars`: 各 field ごとの文字数上限。
 - `budget_bytes`: JSON 全体のバイト予算。
 
@@ -1964,7 +1965,8 @@ get_snippets(
 **主な引数**
 
 - `ids`: 対象の doc_id 一覧。
-- `fields`: 返す field（デフォルト `['title','abst','claim']`）。
+- `fields`: 返す field（デフォルトは `['title','abst','claim','desc','app_doc_id','app_id','pub_id','exam_id','app_date','pub_date','apm_applicants','cross_en_applicants','ipc_codes','cpc_codes','fi_codes','ft_codes']`）。  
+  - LLM 側で負荷を抑えたい場合は、目的に応じて必要な field のみに絞り込む。
 - `per_field_chars`: 各 field の文字数上限（例：`{'claim':4000,'abst':2000}`）。
 
 **戻り値**

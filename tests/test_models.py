@@ -24,6 +24,10 @@ def test_snippet_field_literal_contains_expected_values() -> None:
         "pub_date",
         "apm_applicants",
         "cross_en_applicants",
+        "ipc_codes",
+        "cpc_codes",
+        "fi_codes",
+        "ft_codes",
     }
 
 
@@ -72,6 +76,10 @@ def test_get_snippets_request_defaults() -> None:
         "pub_date",
         "apm_applicants",
         "cross_en_applicants",
+        "ipc_codes",
+        "cpc_codes",
+        "fi_codes",
+        "ft_codes",
     ]
     assert request.per_field_chars == {
         "title": 160,
@@ -86,6 +94,10 @@ def test_get_snippets_request_defaults() -> None:
         "pub_date": 64,
         "apm_applicants": 128,
         "cross_en_applicants": 128,
+        "ipc_codes": 256,
+        "cpc_codes": 256,
+        "fi_codes": 256,
+        "ft_codes": 256,
     }
 
 
