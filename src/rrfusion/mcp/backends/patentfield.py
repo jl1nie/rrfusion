@@ -455,9 +455,10 @@ class PatentfieldBackend(HttpLaneBackend):
         if not request.ids:
             return {}
         name = request.ids[0]
-        params = {"id_type": request.id_type}
+        params: list[tuple[str, str]] = [("id_type", request.id_type)]
         if request.fields:
-            params["columns"] = self._map_fields_to_columns(request.fields)
+            columns = self._map_fields_to_columns(request.fields)
+            params.extend(("columns", column) for column in columns)
         logger.info("Patentfield publication GET: %s params=%s", name, params)
         try:
             response = await self.http.get(
