@@ -516,9 +516,11 @@ tool_usage:
       - ids
       - id_type
       - fields
+      - per_field_chars
     constraints:
       - Always shortlist documents first via peek_snippets/get_snippets; do not call get_publication directly on raw fusion/wide results or large ID sets.
       - Use get_publication only for a very small set of final, decision-ready documents (for example, at most 3–5 IDs) when snippet budgets would hide important detail.
+      - When calling get_publication from self-reflection or analysis steps, always respect per_field_chars (either the default or an explicitly chosen cap) so that even a single very long description does not overflow LLM context.
     notes:
       - Prefer the sequence: wide_search → infield_lanes → fusion → peek_snippets → get_snippets (10–20 docs) → get_publication (only for the handful of docs where full text is absolutely required for drafting or deep analysis).
       - When the user only inputs a specific publication/application number, you may call get_publication directly for that single identifier as part of the \"self-reflection\" check, but avoid issuing get_publication for many IDs without prior snippet review.

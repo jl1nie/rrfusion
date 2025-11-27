@@ -331,18 +331,19 @@ async def get_publication(
     ids: list[str],
     id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
     fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
-    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","app_id","exam_id"], fields: list[str] | None = None)
+    signature: get_publication(ids: list[str], id_type: Literal["pub_id","app_doc_id","app_id","exam_id"], fields: list[str] | None = None, per_field_chars: dict[str, int] | None = None)
     prompts/list:
     - "Get the publication text for the selected IDs {ids}"
     - "Show the publication/app/exam identifiers for {ids}"
     prompts/get:
-    - "Return the uncapped payload for {ids}"
+    - "Return the publication-level payload for {ids} with appropriate per-field caps"
     """
 ```
 
-Use this when you need the full publication text for downstream display or export; it lets the backend decide if/when to cache the heavier payload rather than storing it in Redis yourself.
+Use this when you need richer publication text for downstream display or export. By default the MCP service applies per-field character caps that are larger than `get_snippets` but still avoid overflowing LLM context; override `per_field_chars` only when you have a clear reason to widen or tighten those defaults.
 
 ### `get_snippets`
 

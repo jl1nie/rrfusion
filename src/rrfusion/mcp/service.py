@@ -859,6 +859,7 @@ class MCPService:
         ids: list[str],
         id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
         fields: list[str] | None = None,
+        per_field_chars: dict[str, int] | None = None,
     ) -> dict[str, dict[str, str]]:
         request_kwargs: dict[str, Any] = {
             "ids": ids,
@@ -866,6 +867,8 @@ class MCPService:
         }
         if fields is not None:
             request_kwargs["fields"] = fields
+        if per_field_chars is not None:
+            request_kwargs["per_field_chars"] = per_field_chars
         request = GetPublicationRequest(**request_kwargs)
         backend = self.backend_registry.get_backend("fulltext")
         if not backend:

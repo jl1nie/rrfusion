@@ -365,6 +365,26 @@ class GetPublicationRequest(BaseModel):
             "ft_codes",
         ]
     )
+    per_field_chars: dict[SnippetField, int] = Field(
+        default_factory=lambda: {
+            "title": 256,
+            "abst": 1500,
+            "claim": 1600,
+            "desc": 6000,
+            "app_doc_id": 128,
+            "app_id": 128,
+            "pub_id": 128,
+            "exam_id": 128,
+            "app_date": 64,
+            "pub_date": 64,
+            "apm_applicants": 256,
+            "cross_en_applicants": 256,
+            "ipc_codes": 512,
+            "cpc_codes": 512,
+            "fi_codes": 512,
+            "ft_codes": 512,
+        }
+    )
     trace_id: str | None = None
 
 

@@ -203,9 +203,15 @@ def publications_from_request(
         for field in request.fields:
             raw = meta.get(field, "")
             if isinstance(raw, list):
-                payload[field] = " ".join(str(v) for v in raw)
+                text = " ".join(str(v) for v in raw)
             else:
-                payload[field] = str(raw)
+                text = str(raw)
+            limit = (
+                request.per_field_chars.get(field, len(text))
+                if request.per_field_chars
+                else len(text)
+            )
+            payload[field] = truncate_field(text, limit)
         response[doc_id] = payload
     return response
 

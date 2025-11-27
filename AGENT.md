@@ -300,19 +300,39 @@ Return snippets for a run, honoring doc count + byte budgets.
 ---
 
 ### 5.4 `get_publication`
-Fetch the full publication payload (no byte budget applied). Use `id_type` to declare whether the provided identifiers are `pub_id`, `app_doc_id`, `app_id`, or `exam_id`.
+Fetch publication-level fields with optional per-field character caps. Use `id_type` to declare whether the provided identifiers are `pub_id`, `app_doc_id`, `app_id`, or `exam_id`.
 
 **Input**
 ```json
-{ "ids": ["JP20230123456"], "id_type": "app_id", "fields": ["title","abst","desc","app_doc_id","pub_id","exam_id"] }
+{
+  "ids": ["JP20230123456"],
+  "id_type": "app_id",
+  "fields": ["title","abst","claim","desc","app_doc_id","pub_id","exam_id"],
+  "per_field_chars": {
+    "title": 256,
+    "abst": 1500,
+    "claim": 1600,
+    "desc": 6000
+  }
+}
 ```
 
 **Output**
 ```json
-{ "JP20230123456": { "title":"...", "abst":"...", "desc":"...", "app_doc_id":"JP20230123456A", "pub_id":"DOC1", "exam_id":"EXAM001" } }
+{
+  "JP20230123456": {
+    "title": "...",
+    "abst": "...",
+    "claim": "...",
+    "desc": "...",
+    "app_doc_id": "JP20230123456A",
+    "pub_id": "DOC1",
+    "exam_id": "EXAM001"
+  }
+}
 ```
 
-Hold this tool for detail views when budgets would otherwise trim the text; backend adapters may fetch/cached full payloads as needed but the MCP host does not persist them in Redis.
+Hold this tool for detail views when `peek_snippets` / `get_snippets` would otherwise trim too aggressively. The MCP host applies publication-specific default caps that are larger than `get_snippets` but still safer for LLM context; callers may override `per_field_chars` for specialized workflows.
 
 ---
 

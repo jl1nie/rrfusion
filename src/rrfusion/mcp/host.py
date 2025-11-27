@@ -862,9 +862,10 @@ async def get_publication(
     ids: list[str],
     id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
     fields: list[str] | None = None,
+    per_field_chars: dict[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     """
-    summary: Retrieve uncapped publication-level fields for one or more documents.
+    summary: Retrieve publication-level fields for one or more documents, with optional per-field character caps.
     when_to_use:
       - Use when snippet budgets would hide important detail (e.g., full description).
       - Use when you need canonical identifiers (pub_id/app_doc_id/exam_id) in the payload.
@@ -881,15 +882,24 @@ async def get_publication(
         type: list[string]
         required: false
         description: Publication fields to return; omit to use a sensible default set including desc and IDs.
+      per_field_chars:
+        type: dict[string,int]
+        required: false
+        description: Optional per-field character caps; if omitted, a publication-specific default larger than get_snippets is applied to avoid overflowing LLM context.
     constraints:
-      - This call bypasses snippet byte budgets; use selectively for deep dives, not wide scans.
+      - This call is intended for deep dives on a very small set of documents; even with per-field caps, keep ids size modest to avoid large payloads.
     returns:
       publications:
         description: Mapping from requested identifier to a dict of publication-level fields.
       notes:
-        - Use get_publication for a small set of key docs when you need their full context.
+        - Use get_publication for a small set of key docs when you need richer context than get_snippets; adjust per_field_chars only when you have clear reasons to widen or tighten the defaults.
     """
-    return await _require_service().get_publication(ids=ids, id_type=id_type, fields=fields)
+    return await _require_service().get_publication(
+        ids=ids,
+        id_type=id_type,
+        fields=fields,
+        per_field_chars=per_field_chars,
+    )
 
 
 @mcp.tool

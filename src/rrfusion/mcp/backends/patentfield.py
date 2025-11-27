@@ -16,6 +16,7 @@ from ...models import (
     Meta,
     SearchItem,
 )
+from ...utils import truncate_field
 from .base import HttpLaneBackend, SearchParams
 
 logger = logging.getLogger(__name__)
@@ -341,7 +342,13 @@ class PatentfieldBackend(HttpLaneBackend):
                 continue
             row: dict[str, str] = {}
             for field in request.fields:
-                row[field] = self._field_text(hit, field)
+                text = self._field_text(hit, field)
+                limit = (
+                    request.per_field_chars.get(field, len(text))
+                    if request.per_field_chars
+                    else len(text)
+                )
+                row[field] = truncate_field(text, limit)
             result[doc_id] = row
         return result
 

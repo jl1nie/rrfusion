@@ -887,7 +887,7 @@ target_profile: {...}  # Step 3 で構築したもの
 
 LLM エージェント側でもこのステップを踏むことが前提ですが、実務上は `peek_snippets` で上位を軽く確認しながら Redis の doc キャッシュを温め、`get_snippets` で選んだ候補の詳細（特に desc）を厚めに取るという使い分けをする想定です。`peek_snippets` は title 80, abstract 320, claim 320 文字程度の限られた箇所を見て候補感を掴み、`get_snippets` では claims 800 文字＋description 800 文字程度を `per_field_chars` で指定して精読する、といった流れがプロンプト予算と API レイテンシのバランスを保つコツです。Redis の doc キャッシュ（`h:doc:{doc_id}`）には snippet_ttl_hours（現在 1 時間）で TTL が設定されており、短時間内は peek/get の結果が再利用されます。
 
-ユーザから公開番号や出願番号が直接指定された場合は、それを代表公報として扱い、JP 番号（特願・特開など）は EPODOC 形式に正規化したうえで `id_type` を選択し `get_publication` で全文を取得する。なぜ現行フロンティアで拾えていないかを説明し、必要に応じてクエリやコード設定の調整案にフィードバックする。
+ユーザから公開番号や出願番号が直接指定された場合は、それを代表公報として扱い、JP 番号（特願・特開など）は EPODOC 形式に正規化したうえで `id_type` を選択し `get_publication` で publication テキストを取得する（標準では `per_field_chars` に基づき description 等の長文は適度にカットされる）。なぜ現行フロンティアで拾えていないかを説明し、必要に応じてクエリやコード設定の調整案にフィードバックする。
 
 #### 6.1 `peek_snippets` による軽量ビュー（任意）
 

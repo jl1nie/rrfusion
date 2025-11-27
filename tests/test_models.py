@@ -3,6 +3,7 @@
 from typing import get_args
 
 from rrfusion.models import (
+    GetPublicationRequest,
     GetSnippetsRequest,
     PeekConfig,
     PeekSnippetsRequest,
@@ -105,3 +106,43 @@ def test_peek_config_defaults() -> None:
     config = PeekConfig()
     assert config.fields == ["title", "abst", "claim"]
     assert config.per_field_chars == {"title": 120, "abst": 360, "claim": 320}
+
+
+def test_get_publication_request_defaults() -> None:
+    request = GetPublicationRequest(ids=["doc-1"])
+    assert request.fields == [
+        "title",
+        "abst",
+        "claim",
+        "desc",
+        "app_doc_id",
+        "app_id",
+        "pub_id",
+        "exam_id",
+        "app_date",
+        "pub_date",
+        "apm_applicants",
+        "cross_en_applicants",
+        "ipc_codes",
+        "cpc_codes",
+        "fi_codes",
+        "ft_codes",
+    ]
+    assert request.per_field_chars == {
+        "title": 256,
+        "abst": 1500,
+        "claim": 1600,
+        "desc": 6000,
+        "app_doc_id": 128,
+        "app_id": 128,
+        "pub_id": 128,
+        "exam_id": 128,
+        "app_date": 64,
+        "pub_date": 64,
+        "apm_applicants": 256,
+        "cross_en_applicants": 256,
+        "ipc_codes": 512,
+        "cpc_codes": 512,
+        "fi_codes": 512,
+        "ft_codes": 512,
+    }
