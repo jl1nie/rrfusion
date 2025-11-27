@@ -351,13 +351,25 @@ class PatentfieldBackend(HttpLaneBackend):
             return "pub_id"
         if identifier.startswith("特許"):
             return "exam_id"
-        # EPODOC-style kind codes:
-        # - ...A = publication → pub_id
-        # - ...B / B1 / B2 = granted publication → exam_id
-        if identifier.endswith("A"):
-            return "pub_id"
-        if identifier.endswith("B") or identifier.endswith("B1") or identifier.endswith("B2"):
-            return "exam_id"
+
+        # EPODOC-style kind codes at the end of the identifier.
+        # Extract the trailing kind segment: last letter plus any following digits, e.g. A, A1, B, B2.
+        kind: str | None = None
+        i = len(identifier) - 1
+        # Skip trailing whitespace (already stripped) and move back through digits
+        while i >= 0 and identifier[i].isdigit():
+            i -= 1
+        if i >= 0 and identifier[i].isalpha():
+            kind = identifier[i:]
+
+        if kind:
+            if kind[0] == "A":
+                # Publication (A, A1, A2, ...)
+                return "pub_id"
+            if kind[0] == "B":
+                # Granted/registered publication (B, B1, B2, ...)
+                return "exam_id"
+
         return "app_id"
 
     def _build_snippets_payload(
