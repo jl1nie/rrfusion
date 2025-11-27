@@ -21,6 +21,7 @@ from ..fusion import (
     compute_lane_ranks,
     compute_pi_scores,
     compute_rrf_scores,
+    compute_fusion_metrics,
     sort_scores,
 )
 from ..models import (
@@ -30,6 +31,7 @@ from ..models import (
     Cond,
     FeatureScope,
     FulltextParams,
+    FusionMetrics,
     GetPublicationRequest,
     GetSnippetsRequest,
     IncludeOpts,
@@ -532,6 +534,11 @@ class MCPService:
         )
         ordered = sort_scores(scores)
         ordered_ids = [doc_id for doc_id, _ in ordered]
+        metrics_payload = compute_fusion_metrics(
+            lane_docs=lane_docs,
+            doc_metadata=doc_metadata,
+            ordered=ordered,
+        )
         lane_ranks = compute_lane_ranks(lane_docs)
         pi_scores = compute_pi_scores(
             doc_metadata,
@@ -610,6 +617,7 @@ class MCPService:
                 "history": history,
                 "freqs_topk": freqs_topk,
                 "contrib": contrib_payload,
+                "metrics": metrics_payload,
                 "representatives": representative_payload,
             },
         )
@@ -627,6 +635,7 @@ class MCPService:
                 RepresentativeEntry.model_validate(rep)
                 for rep in representative_payload
             ],
+            metrics=FusionMetrics.model_validate(metrics_payload),
         )
         response.meta["took_ms"] = _elapsed_ms(start)
         return response
@@ -976,6 +985,7 @@ class MCPService:
         code_distributions: dict[str, dict[str, int]] | None = None
         lane_contributions: dict[str, dict[str, float]] | None = None
         config_snapshot: dict[str, Any] | None = None
+        metrics: FusionMetrics | None = None
 
         representatives: list[RepresentativeEntry] | None = None
 
@@ -1014,6 +1024,12 @@ class MCPService:
                     rep.rank = ranks.get(rep.doc_id)
                     rep.score = scores.get(rep.doc_id)
                     representatives.append(rep)
+            metrics_payload = meta.get("metrics")
+            if isinstance(metrics_payload, dict):
+                try:
+                    metrics = FusionMetrics.model_validate(metrics_payload)
+                except Exception:
+                    metrics = None
 
         meta_with_timing = {**meta, "took_ms": _elapsed_ms(start)}
         return ProvenanceResponse(
@@ -1023,6 +1039,7 @@ class MCPService:
             lane_contributions=lane_contributions,
             code_distributions=code_distributions,
             config_snapshot=config_snapshot,
+            metrics=metrics,
             representatives=representatives,
         )
 

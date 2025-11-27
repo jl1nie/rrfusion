@@ -5,8 +5,12 @@ from rrfusion.fusion import (
     compute_facet_score,
     compute_frontier,
     compute_lane_consistency,
+    compute_fusion_metrics,
+    compute_las,
     compute_pi_scores,
     compute_rrf_scores,
+    compute_s_shape,
+    compute_ccw,
     sort_scores,
     apply_representative_priority,
 )
@@ -176,3 +180,51 @@ def test_apply_representative_priority_resorts():
     assert prioritized[0][0] == "a"
     assert prioritized[1][0] == "y"
     assert prioritized[2][0] == "x"
+
+
+def test_compute_las_reflects_overlap():
+    lanes = {
+        "fulltext": [("A", 0.9), ("B", 0.8)],
+        "semantic": [("A", 0.85), ("C", 0.7)],
+        "code": [("D", 0.6)],
+    }
+    las = compute_las(lanes, k_eval=2)
+    assert las > 0.0
+    assert las < 0.5
+
+
+def test_compute_ccw_prefers_homogeneous_codes():
+    doc_meta = {
+        "A": {"fi_codes": ["H04L1/00"]},
+        "B": {"fi_codes": ["H04L1/00"]},
+        "C": {"fi_codes": ["H04L1/00"]},
+    }
+    ccw = compute_ccw(["A", "B", "C"], doc_meta)
+    assert ccw == 1.0
+    doc_meta["C"]["fi_codes"] = ["G06F3/00"]
+    ccw_mixed = compute_ccw(["A", "B", "C"], doc_meta)
+    assert 0.0 <= ccw_mixed < 1.0
+
+
+def test_compute_s_shape_penalizes_tail_heavy_lists():
+    scores = [3.0, 2.0, 1.0, 0.5, 0.25]
+    s_shape = compute_s_shape(scores)
+    assert s_shape > 0.7
+    assert s_shape < 1.0
+
+
+def test_compute_fusion_metrics_produces_proxy_score():
+    lanes = {
+        "fulltext": [("A", 3.0), ("B", 2.5)],
+        "semantic": [("B", 2.0), ("C", 1.0)],
+    }
+    doc_meta = {
+        "A": {"fi_codes": ["H04L1/00"]},
+        "B": {"fi_codes": ["H04L1/00"]},
+        "C": {"fi_codes": ["G06F3/00"]},
+    }
+    ordered = [("A", 3.0), ("B", 2.5), ("C", 1.0)]
+    metrics = compute_fusion_metrics(lanes, doc_meta, ordered)
+    assert metrics["LAS"] >= 0.0
+    assert 0.0 <= metrics["S_shape"] <= 1.0
+    assert 0.0 <= metrics["Fproxy"] <= 1.0

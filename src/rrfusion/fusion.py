@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Sequence
+import itertools
+import math
+from collections import Counter, defaultdict
+from typing import Any, Sequence
 
 from .models import BlendFrontierEntry, RepresentativeEntry
+
+METRICS_TOP_K = 50
+S_SHAPE_TOP_K = 50
+S_SHAPE_PEAK = 3
+DEFAULT_LAMBDA_SHAPE = 0.5
+DEFAULT_BETA_STRUCT = 1.0
 
 
 def compute_rrf_scores(
@@ -160,6 +168,103 @@ def compute_pi_scores(
     return pi_scores
 
 
+def compute_las(
+    lane_docs: dict[str, Sequence[tuple[str, float]]],
+    k_eval: int = METRICS_TOP_K,
+) -> float:
+    trimmed: list[set[str]] = []
+    for docs in lane_docs.values():
+        trimmed.append({doc_id for doc_id, _ in docs[:k_eval]})
+    if len(trimmed) <= 1:
+        return 0.0
+
+    scores: list[float] = []
+    for base, target in itertools.combinations(trimmed, 2):
+        union = base | target
+        if not union:
+            scores.append(0.0)
+            continue
+        intersection = base & target
+        scores.append(len(intersection) / len(union))
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def compute_ccw(
+    doc_ids: Sequence[str],
+    doc_meta: dict[str, dict[str, Any]],
+) -> float:
+    codes: list[str] = []
+    for doc_id in doc_ids:
+        meta = doc_meta.get(doc_id)
+        if not meta:
+            continue
+        for code in meta.get("fi_codes", []) or []:
+            if code:
+                codes.append(code)
+                break
+    if not codes:
+        return 0.0
+
+    freq = Counter(codes)
+    total = sum(freq.values())
+    if total == 0:
+        return 0.0
+    probs = [value / total for value in freq.values()]
+    H = -sum(p * math.log(p) for p in probs if p > 0)
+    if len(freq) <= 1:
+        return 1.0
+    H_norm = H / math.log(len(freq))
+    return 1.0 - H_norm
+
+
+def compute_s_shape(
+    scores: Sequence[float],
+    *,
+    top_heavy: int = S_SHAPE_PEAK,
+    top_total: int = S_SHAPE_TOP_K,
+) -> float:
+    if not scores:
+        return 0.0
+    heavy = sum(scores[:min(len(scores), top_heavy)])
+    total = sum(scores[:min(len(scores), top_total)])
+    if total <= 0:
+        return 0.0
+    return heavy / total
+
+
+def compute_fusion_metrics(
+    lane_docs: dict[str, Sequence[tuple[str, float]]],
+    doc_metadata: dict[str, dict[str, Any]],
+    ordered: list[tuple[str, float]],
+    *,
+    k_eval: int = METRICS_TOP_K,
+    lambda_shape: float = DEFAULT_LAMBDA_SHAPE,
+    beta_struct: float = DEFAULT_BETA_STRUCT,
+) -> dict[str, float]:
+    las = compute_las(lane_docs, k_eval=k_eval)
+    top_ids = [doc_id for doc_id, _ in ordered[:k_eval]]
+    ccw = compute_ccw(top_ids, doc_metadata)
+    scores = [score for _, score in ordered]
+    s_shape = compute_s_shape(scores)
+
+    beta_sq = beta_struct * beta_struct
+    denom = beta_sq * las + ccw
+    if denom <= 0:
+        f_struct = 0.0
+    else:
+        f_struct = (1 + beta_sq) * las * ccw / denom
+    fproxy = f_struct * max(1.0 - lambda_shape * s_shape, 0.0)
+
+    return {
+        "LAS": las,
+        "CCW": ccw,
+        "S_shape": s_shape,
+        "F_struct": f_struct,
+        "beta_struct": beta_struct,
+        "Fproxy": fproxy,
+    }
+
+
 def compute_lane_ranks(lane_docs: dict[str, Sequence[tuple[str, float]]]) -> dict[str, dict[str, int]]:
     ranks: dict[str, dict[str, int]] = defaultdict(dict)
     for lane, docs in lane_docs.items():
@@ -284,6 +389,10 @@ __all__ = [
     "compute_lane_consistency",
     "compute_lane_ranks",
     "compute_pi_scores",
+    "compute_las",
+    "compute_ccw",
+    "compute_s_shape",
+    "compute_fusion_metrics",
     "apply_representative_priority",
     "aggregate_code_freqs",
     "compute_relevance_flags",

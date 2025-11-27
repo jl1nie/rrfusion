@@ -417,6 +417,15 @@ class ProvenanceRequest(BaseModel):
     trace_id: str | None = None
 
 
+class FusionMetrics(BaseModel):
+    LAS: float
+    CCW: float
+    S_shape: float
+    F_struct: float
+    beta_struct: float = 1.0
+    Fproxy: float
+
+
 class ProvenanceResponse(BaseModel):
     run_id: str
     meta: dict[str, Any]
@@ -425,6 +434,7 @@ class ProvenanceResponse(BaseModel):
     lane_contributions: dict[str, dict[str, float]] | None = None
     code_distributions: dict[str, dict[str, int]] | None = None
     config_snapshot: dict[str, Any] | None = None
+    metrics: FusionMetrics | None = None
 
 
 class RepresentativeEntry(BaseModel):
@@ -499,6 +509,7 @@ class BlendResponse(BaseModel):
         default_factory=list,
         description="Registered representative documents (A/B/C) associated with this fusion run.",
     )
+    metrics: FusionMetrics | None = None
 
 
 class MutateResponse(BaseModel):
@@ -644,6 +655,7 @@ __all__ = [
     "MutateRunResponse",
     "ProvenanceRequest",
     "ProvenanceResponse",
+    "FusionMetrics",
     "BlendRunInput",
     "BlendRequest",
     "PeekConfig",
