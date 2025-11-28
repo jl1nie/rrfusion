@@ -128,7 +128,7 @@ RRFusion MCP v1.3 では、次のような設計哲学を重視しています�
 
 4. **手動チューニングと自動チューニングの両立**
    - 実務家が「もう少しこの分野を厚く」「このコードは弱く」といった指示を出せる余地を残す
-   - 一方で、`mutate_run` などを通じてパラメータ探索を半自動化できる
+- 一方で、`rrf_mutate_run` などを通じてパラメータ探索を半自動化できる
 
 ---
 
@@ -364,7 +364,7 @@ fulltext 系レーンは、同じ `search_fulltext` を使いながら
   - タイトル／クレームを強くしつつ description も弱めに抑えず参照し、「発明の骨格が似ている文献」を優先する。
 
 LLM や実務者が新レーンを設計する場合は、  
-この表を基準に `field_boosts` を少しずつ変えながら `blend_frontier_codeaware` → `peek_snippets` で結果を比較し、  
+この表を基準に `field_boosts` を少しずつ変えながら `rrf_blend_frontier` → `peek_snippets` で結果を比較し、  
 「wide / recall / precision の中間」などのレーンを追加していくことができます。
 
 ---
@@ -659,7 +659,7 @@ v1.3 では、wide や in-field レーンのクエリ設計において:
 - `fulltext_precision` レーンは RRF 重み $w_\ell$ を高めに設定し、
   - 上位に来た文献を強く押し上げる役割を持たせることが多い。
 - 一方で、`fulltext_wide` や `semantic` レーンからも候補が来るため、  
-  これらとのバランスを `blend_frontier_codeaware` で調整する。
+  これらとのバランスを `rrf_blend_frontier` で調整する。
 
 ---
 
@@ -677,7 +677,7 @@ RRFusion MCP v1.3 の標準的な運用パターン（JP/先行技術サーチ�
 6. JP/先行技術サーチでは、`fulltext_wide` は原則として **コードプロファイル用＋安全ネット** として扱い、  
    - 初回 fusion には含めず、recall 不足が明らかになったときに code-aware gating を強く効かせた上で追加する。
 
-これらのレーンをまとめて `blend_frontier_codeaware` に渡し、  
+これらのレーンをまとめて `rrf_blend_frontier` に渡し、  
 RRF + コード情報による融合スコアを得る、というのが v1.3 の基本設計です。
 
 ---
@@ -849,7 +849,7 @@ Step 3 で得た `target_profile` を用いて、
 - （任意）Problem レーン（`fulltext_problem`）の run_id
 - （必要に応じて後段で追加する場合のみ）`fulltext_wide` の run_id（初回 fusion には含めず、明確な recall 不足がわかったときだけ code-aware gating を強めにかけて追加する）
 
-これらを `blend_frontier_codeaware` に渡し、RRF + コード情報に基づく融合を行います。
+これらを `rrf_blend_frontier` に渡し、RRF + コード情報に基づく融合を行います。
 
 1. 入力パラメータの例
 
@@ -893,7 +893,7 @@ target_profile: {...}  # Step 3 で構築したもの
 
 2. 出力
 
-- `blend_frontier_codeaware` は、
+- `rrf_blend_frontier` は、
   - 融合済みランキングを表す新しい `run_id_blend` を返す
 - 以降の Step 6〜7 では、この `run_id_blend` をもとに
   - スニペット確認
@@ -980,9 +980,9 @@ LLM エージェント側でもこのステップを踏むことが前提です�
 
 ### 6.3 Representative-document review
 
-Representative review is an **optional, heavier human-in-the-loop step** that is only proposed when lighter tuning (mutate_run + peek_snippets) has failed to improve the frontier or top candidates.
+Representative review is an **optional, heavier human-in-the-loop step** that is only proposed when lighter fusion tuning (`rrf_mutate_run` + `peek_snippets`) has failed to improve the frontier or top candidates.
 
-- Trigger: after at least two mutate_run cycles on the same fusion run, and only when the frontier and top-ranked candidates have changed little and the human explicitly indicates they want deeper tuning.
+- Trigger: after at least two fusion tuning cycles (implemented via `rrf_mutate_run`) on the same fusion run, and only when the frontier and top-ranked candidates have changed little and the human explicitly indicates they want deeper tuning.
 - Selection: combine the fused ranking (`pairs_top`) with several semantic-high examples so that both lexical and conceptual matches are exposed, and select **exactly 30 candidates** in total.
 - Fetch: use `get_snippets` with `fields=["claim","abst","desc"]` and `per_field_chars={"claim":1000,"abst":600,"desc":1200}` so the human can read a consistent chunk of text without overwhelming Redis.
 - Labeling: categorize each doc as  
@@ -994,9 +994,9 @@ Representative review is an **optional, heavier human-in-the-loop step** that is
 
 ### 6.4 Representative feedback, facet weighting, and fallback search regeneration
 
-- Convert `synonym_clusters` from Step 1 into the `facet_terms` payload that goes into every fusion request, grouping the same technical idea under a single facet (A/B/C) and including multiple synonymous expressions within that facet so `compute_facet_score` can reward semantic coverage. 代表レビューで得た A/B の判断もこの facet 情報とセットで扱い、`facet_weights` の値をレビュー後の判断に応じて書き換えます。たとえば `facet_weights["A"]` を引き上げて `pi′(d)` が A に素直に反応するようにしたり、B を含めて採用する場合は B を含む synonym_cluster を厚めにする、といった運用が想定されます。
-- 代表レビューの結果を基にした A/B の採用範囲が上位候補の受け入れ条件です。人間が「A のみ」受け入れると答えたときは facet_weights で A を重くし、B と C の重みを落としたうえで `pi_weights` の B 信号を抑えてください。A+B を受け入れると返答したときは B を含む facet_terms を厚くし、A と B の両方が一定以上のスコアを獲得するように `pi_weights` を調整します。代表レビューは、初期段階では上位 20 件程度の「軽めの 20-document review」を何度か繰り返して傾向を把握し、フロンティアが安定してきたタイミングで **30 件の代表セット** を固定する、という二段階運用を想定しています。
-- 代表レビューで C しか残らず A/B が得られなかった場合は、現在の fusion 構成を一度リセットしてフォールバック検索を走らせます。具体的には、Step 1〜4（feature_extraction → fulltext_wide → code_profiling → infield_lanes）を見直し、新しい synonym_clusters や field_hints を反映したキーワード／semantic 式を再構築し、それらで再度 run を取得してから blend_frontier_codeaware を呼び直します。`mutate_run` による微調整はこの再スタートの後、「A/B の範囲が確認できたとき」に実行してください。WO/EP/US パイプラインへ展開するかを検討する際も、直前に 20 件程度の代表レビューをやり直し、現在の JP セットの妥当性を確認してから判断するのが望ましい運用です。
+- Convert `synonym_clusters` from Step 1 into the `facet_terms` payload that goes into every fusion request, grouping the same technical idea under a single facet (A/B/C) and including multiple synonymous expressions within that facet so `compute_facet_score` can reward semantic coverage. 代表レビューで得た A/B の判断もこの facet 情報とセットで扱い、`facet_weights` の値をレビュー後の判断に応じて書き換えます。たとえば `facet_weights["A"]` を引き上げて `pi′(d)` が A に素直に反応するようにしたり、B を含めて採用する場合は B を含む synonym_cluster を厚めにする、といった運用が想定されます。ここでの目的は、あくまで「HIL による technical plausibility check」と「各レーンがどの程度 A/B/C を支えているかの診断」であり、代表レビューのサンプルだけからリコール率を直接推定しない点に注意します。
+- 代表レビューの結果を基にした A/B の採用範囲は、上位候補の受け入れ条件や facet レベルの調整に使います。人間が「A のみ」受け入れると答えたときは facet_weights で A を重くし、B と C の重みを落としたうえで `pi_weights` の B 信号を抑えてください。A+B を受け入れると返答したときは B を含む facet_terms を厚くし、A と B の両方が一定以上のスコアを獲得するように `pi_weights` を調整します。代表レビューは、初期段階では上位 20 件程度の「軽めの 20-document review」を何度か繰り返して傾向を把握し、フロンティアが安定してきたタイミングで **30 件の代表セット** を固定する、という二段階運用を想定しています。この調整は、既存レーンの組み合わせ方や facet の比重を微調整するためのものであり、「30 件サンプルからリコールが十分かどうかを判断する」用途には使いません。
+- 代表レビューで C しか残らず A/B が得られなかった場合は、現在の fusion 構成を一度リセットしてフォールバック検索を走らせます。具体的には、Step 1〜4（feature_extraction → fulltext_wide → code_profiling → infield_lanes）を見直し、新しい synonym_clusters や field_hints を反映したキーワード／semantic 式を再構築し、それらで再度 lane run 群を取得してから `rrf_blend_frontier` を呼び直します。`rrf_mutate_run` による微調整（fusion_tuning_step）はこの再スタートの後、「A/B の範囲が確認できたとき」に実行してください。WO/EP/US パイプラインへ展開するかを検討する際も、直前に 20 件程度の代表レビューをやり直し、現在の JP セットの妥当性を確認してから判断するのが望ましい運用です。
 - このフォールバック検索サイクルを終えるまで、非JP パイプライン（WO/EP/US）への展開は提案せず、必要があれば代表レビュー結果を人間に再提示してから追加の corpus を検討してください。
 
 ---
@@ -1007,7 +1007,7 @@ Representative review is an **optional, heavier human-in-the-loop step** that is
   - 既存ライブラリ（`httpx-cache`, `httpx-cache-control` など）を `HttpLaneBackend` の AsyncClient 初期化時に組み込めば、最小限のコード変更でキャッシュが効きます。401/5xx のようなエラー時にはキャッシュを使わず再フェッチし、成功時は TTL を挟んで更新するルールを明示するのが実装例です。
   - クエリのハッシュ化に `hash_query`（`src/rrfusion/utils.py`）を再利用し、`fields` や `filters` まで含めた総合キーを生成しておけば、同じパラメータを利用したときにキャッシュがヒットしやすくなります。
 
-- 現在の `RedisStorage.store_lane_run` は `query_hash`（クエリ＋filters）＋ `lane` で `z:<snapshot>:<query_hash>:<lane>` のスコアセットとドキュメントハッシュを保存し、後続 `blend_frontier_codeaware` は `zslice`/`get_docs` で再利用しています（`src/rrfusion/storage.py:42-220`）。この仕組みを前倒しして、lane 実行前に同じ `query_hash` が存在すれば `SearchToolResponse` をそのまま再利用するパスを追加すると、`run_id` を新たに切らなくてもキャッシュヒットが可能です。
+- 現在の `RedisStorage.store_lane_run` は `query_hash`（クエリ＋filters）＋ `lane` で `z:<snapshot>:<query_hash>:<lane>` のスコアセットとドキュメントハッシュを保存し、後続の fusion 処理では `zslice`/`get_docs` で再利用しています（`src/rrfusion/storage.py:42-220`）。この仕組みを前倒しして、lane 実行前に同じ `query_hash` が存在すればキャッシュヒットを検討できます。
 #### コード語彙によるキャッシュ圧縮
 
 - `RedisStorage` 内部で `code_vocab:{snapshot}` と `code_vocab_rev:{snapshot}` を管理し、分類コード（IPC/CPC/FI/FT/F-term）を整数 ID に置き換えて格納するようにしました。これにより Redis への `doc` フィールド保存時の文字列サイズを抑えつつ、`get_docs` 時には逆引きして元のコード文字列を復元できます（`src/rrfusion/storage.py:36-220`）。
@@ -1016,7 +1016,7 @@ Representative review is an **optional, heavier human-in-the-loop step** that is
 
 ### Step 7. Frontier Tuning（フロンティア調整）
 
-最後に、`mutate_run` と `get_provenance` を使って、  
+最後に、`rrf_mutate_run`（fusion_tuning_step）と `get_provenance` を使って、  
 RRFusion MCP の設定を「手応えのあるフロンティア」にチューニングします。
 
 ここでいう「フロンティア」とは、  
@@ -1027,7 +1027,7 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 
 という **限界のトレードオフ曲線** を指します。
 
-1. `mutate_run` によるパラメータ変更
+1. `rrf_mutate_run` によるパラメータ変更（fusion_tuning_step）
 
 - 入力：
   - 元となる `run_id_blend`
@@ -1035,7 +1035,7 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 
 ```jsonc
 {
-  "tool": "mutate_run",
+  "tool": "rrf_mutate_run",
   "arguments": {
     "run_id": "run_id_blend",
     "delta": {
@@ -1073,7 +1073,7 @@ RRFusion MCP の設定を「手応えのあるフロンティア」にチュー�
 
 4. 設定の固定
 
-- 上記のサイクル（`mutate_run` → `get_provenance` → `peek_snippets`）を数回繰り返し、
+- 上記のサイクル（`rrf_mutate_run` → `get_provenance` → `peek_snippets`）を数回繰り返し、
   - 実務家の感覚と proxy 指標（コード分布など）が両立する設定を「レシピ」として固定する
 
 ---
@@ -1103,16 +1103,16 @@ v1.3 の SystemPrompt と MCP ツール群を前提としたとき、次のよ�
   - 対応方針：feature_extraction で用途語を C（用途・シーン）に明示的に分離し、A/B（コア技術）のみで wide/in-field クエリの骨格を再構築する。
 
 - **レーン寄与の極端な片寄り**
-  - `blend_frontier_codeaware` 後の `lane_contributions`（`get_provenance`）で、特定の 1 レーンが 0.8〜0.9 以上を占め、他レーンの寄与がほぼゼロになっている場合。
+  - `rrf_blend_frontier` 後の `lane_contributions`（`get_provenance`）で、特定の 1 レーンが 0.8〜0.9 以上を占め、他レーンの寄与がほぼゼロになっている場合。
   - 特に `fulltext_precision` や用途付きの in-field レーンだけが支配的になっているときは、precision バイアスに寄り過ぎて広い候補が死んでいる可能性がある。
-  - 対応方針：`mutate_run` で当該レーンの weight を下げ、recall 寄りレーン（wide/recall/semantic）の weight を少し引き上げて frontier の形（Fβ）と代表レビューを再確認する。
+  - 対応方針：`rrf_mutate_run` で当該レーンの weight を下げ、recall 寄りレーン（wide/recall/semantic）の weight を少し引き上げて frontier の形（Fβ）と代表レビューを再確認する。
 
 - **frontier の形がフラットで Fβ が立ち上がらない**
   - `BlendResponse.frontier` の `F_beta_star` が、k を増やしてもほとんど改善しない（例えば k=10〜50 で 0.1〜0.2 のフラットな線に張り付いている）場合。
   - 対応方針：  
     - wide / in-field のクエリ設計を見直し（特に AND/NOT の強さとフィールド選択）、  
     - semantic レーンの feature_scope を変える（claims-only → wide など）  
-    といった「レーン側の情報供給」を疑う。mutate_run だけで frontier を改善しようとしない。
+    といった「レーン側の情報供給」を疑う。rrf_mutate_run だけで frontier を改善しようとしない。
 
 - **代表レビューの A/B がほとんど得られない**
   - 代表 20/30 件のレビューで A/B がほとんどなく C（off-topic）が多数を占める場合、現在の fusion 設定ではコア技術の prior art に十分到達できていない。
@@ -1126,8 +1126,9 @@ v1.3 の SystemPrompt と MCP ツール群を前提としたとき、次のよ�
     - feature_terms / synonym_clusters から一般語を減らし、コア技術語を厚くする  
     など、「クエリ設計」側を優先的に見直す。
 
-これらのアラームは、単独で「失敗」と決めつけるものではなく、「mutate_run での微調整ではなく、レーン設計や feature_extraction に戻るべきか」を判断するトリガとして扱います。  
-また、ここで挙げた条件に完全には当てはまらなくても、検索プロが「結果セットの顔ぶれやコード分布がおかしい」と感じた場合は、それ自体をアラームとして扱い、同様に wide / in-field / feature_extraction の見直しを検討してよいものとします。
+これらのアラームは、単独で「失敗」と決めつけるものではなく、「fusion_tuning_step（= `rrf_mutate_run` による微調整）だけで解決しようとせず、レーン設計や feature_extraction に戻るべきか」を判断するトリガとして扱います。  
+また、ここで挙げた条件に完全には当てはまらなくても、検索プロが「結果セットの顔ぶれやコード分布がおかしい」と感じた場合は、それ自体をアラームとして扱い、同様に wide / in-field / feature_extraction の見直しを検討してよいものとします。  
+コード分布に応じた最適化は、`rrf_mutate_run` を使った fusion_tuning_step を通じて行う **人手チューニング** で行う設計です。
 
 ---
 
@@ -1208,7 +1209,7 @@ RRFusion MCP v1.3 は、wide → in-field → fusion → snippets → tuning と
   - まずは `fulltext_recall` / `fulltext_precision` / `semantic` の in-field トラックだけで fusion を組み、Recall/Precision のバランスを確認する。
 - **wide を safety net として限定的に使う**
   - 上記の in-field fusion とスニペットレビューの結果、「明らかに recall が足りない」「FI/FT だけでは拾えていない周辺技術がある」と判断された場合に限り、
-    - `fulltext_wide` を追加の run として `blend_frontier_codeaware` に渡す。
+    - `fulltext_wide` を追加の run として `rrf_blend_frontier` に渡す。
     - このとき、`target_profile` による code-aware gating を強く効かせ、「target_profile によく一致するコードを持つ wide 文献だけをブーストし、オフプロファイルな wide 文献はスコアを大きく下げる」ようにする。
 - **クエリ設計の見直し**
   - それでも wide 側の FI/FT 分布が明らかにおかしい場合は、
@@ -1246,7 +1247,7 @@ RRFusion MCP v1.3 で実際に採用している実装レベルのロジック�
 
 ### 6.1 RRFスコアリングと格納
 
-各レーン（`search_fulltext` / `search_semantic` など）で検索を実行した結果に対して、  
+各レーン（`rrf_search_fulltext_raw` / `rrf_search_semantic_raw` など）で検索を実行した結果に対して、  
 **ランクベースのスコア** を以下の式で計算します。
 
 \[
@@ -1260,9 +1261,9 @@ RRFusion MCP v1.3 で実際に採用している実装レベルのロジック�
 
 実装上は、RRF 用スコアの計算と保存は次のように行われます。
 
-- 各 `search_*` 呼び出しでは、バックエンド（DB stub）から返された元スコアをそのままレーン別 ZSET に格納します  
+- 各 lane 実行では、バックエンド（DB stub / Patentfield）から返された元スコアをそのままレーン別 ZSET に格納します  
   - キー例：`z:{snapshot}:{query_hash}:{lane}`（`RedisStorage.store_lane_run`）
-- `blend_frontier_codeaware` 呼び出し時に、Python 側で `compute_rrf_scores`（`src/rrfusion/fusion.py`）を用いて  
+- fusion 呼び出し時に、Python 側で `compute_rrf_scores`（`src/rrfusion/fusion.py`）を用いて  
   上記の式に従った RRF スコアを計算し、その結果を `RedisStorage.store_rrf_run` 経由で `z:rrf:{run_id}` に保存します。
 - Redis の `ZUNIONSTORE` を使ってレーン ZSET を直接加算する構成は採用しておらず、  
   RRF の数値計算そのものは Python コードで完結させています。
@@ -1425,7 +1426,7 @@ v1.3 では、上記の考え方を簡略化しつつも、
   - 実装では `compute_rrf_scores`（`src/rrfusion/fusion.py`）で、  
     `lane == "fulltext"` を `"recall"`、それ以外を `"semantic"` として 2 区分の寄与を記録しています
   - `apply_code_boosts` では、コードブースト分を `"code"` 寄与として加算しています
-- fusion 実行時（`blend_frontier_codeaware`）には、各文献について  
+- fusion 実行時（`rrf_blend_frontier`）には、各文献について  
   - `contributions[doc_id]` を合計で割った **正規化寄与度（シェア）** を計算し、  
     上位候補について `BlendResponse.contrib` としてレスポンスに含めると同時に、Redis 上の fusion run メタデータにも保存しています（`src/rrfusion/mcp/service.py`）。
 - `get_provenance` で fusion run の `run_id` を指定すると、この保存済みの寄与度が `lane_contributions` として復元されるため、  
@@ -1464,24 +1465,20 @@ v1.3 では、frontier だけでなく **融合集合そのものの構造** を
     $F_{\text{proxy}} = F_{\text{struct}} \times (1 - \lambda \cdot S_{\text{shape}})$  
     （実装では $\lambda \approx 0.5$ を使用）として、top-heavy 異常があると構造 F が減衰するようにしています。
 
-これらの値は、
-
-- `blend_frontier_codeaware` の返す `BlendResponse.metrics`
-- 後続の `get_provenance(run_id_blend)` の `metrics`
-
-から参照でき、LLM エージェントは次のように解釈する想定です。
+これらの値は、fusion run に保存された `FusionMetrics` として  
+`get_provenance(run_id_blend)` の `metrics` から参照でき、LLM エージェントは次のように解釈する想定です。
 
 - LAS が低い → semantic や特定レーンが off-domain になっている可能性 → 該当レーンの weight / beta_fuse 調整、レーン OFF などを検討
 - CCW が低い → FI 分布が技術的に散らばっている → fulltext_recall/fulltext_precision のクエリ・コード設計を見直す
 - S_shape が高い → fusion スコアが Top-1〜3 に極端に集中 → semantic 重みや beta_fuse を下げ、広めの fulltext レーン比重を上げる
 - Fproxy が 0.5 以上 → 「構造的に十分妥当な集合」とみなし、代表レビューや snippets に進む  
-- Fproxy が 0.5 未満 → まず mutate_run で weights / beta_fuse / lane 構成を調整し、新しい fusion run を試す
+- Fproxy が 0.5 未満 → まず `rrf_mutate_run` で weights / beta_fuse / lane 構成を調整し、新しい fusion run を試す
 
 なお、これらのメトリクスは **絶対値だけで良否を判定するためのものではありません**。
 
 - 特に wide_search 直後や「敢えて分野を広く触っている」初期フェーズでは、LAS/CCW が低いこと自体は必ずしも異常を意味しないため、  
   主に Step 5 以降の infield + fusion 構成が固まった段階で、同一タスク内の run 同士を比較するために用いるのが前提です。
-- 実務上は、同じタスク・同じ infield 構成で mutate_run 前後の LAS/CCW/Fproxy を比較し、「悪化していないか／改善方向に動いているか」を見る **相対的な健康診断指標** として扱います。
+- 実務上は、同じタスク・同じ infield 構成で `rrf_mutate_run` 前後の LAS/CCW/Fproxy を比較し、「悪化していないか／改善方向に動いているか」を見る **相対的な健康診断指標** として扱います。
 
 ---
 
@@ -1525,11 +1522,11 @@ v1.3 では、frontier だけでなく **融合集合そのものの構造** を
 正確な型・フィールドは `rrfusion.models` 等の実装を参照してください。
 
 v1.3 で有効な MCP ツール（`src/rrfusion/mcp/host.py` 準拠）は次の通りです。
-- `search_fulltext` / `search_semantic`（semantic は `semantic_style="default"` 固定）
-- `run_multilane_search` / `run_multilane_search_precise`（初回 in-field バッチ用）
-- `blend_frontier_codeaware` / `blend_frontier_codeaware_lite`
-- `peek_snippets` / `get_snippets` / `get_publication`
-- `mutate_run` / `get_provenance` / `register_representatives`
+- ユーザ向け検索：`search_fulltext` / `search_semantic`
+- マルチレーン実行：`run_multilane_search`（初回 in-field バッチ用、lite 版）
+- Fusion 実行：`rrf_search_fulltext_raw` / `rrf_search_semantic_raw` / `rrf_blend_frontier` / `rrf_mutate_run`
+- スニペット／公報取得：`peek_snippets` / `get_snippets` / `get_publication`
+- 構造観察：`get_provenance` / `register_representatives`
 
 ### 8.1 共通概念
 
@@ -1612,7 +1609,7 @@ v1.3 で有効な MCP ツール（`src/rrfusion/mcp/host.py` 準拠）は次の�
     - FI/FT を使うときは、その定義文言に含まれるキーワードを機械的にすべてクエリに AND せず、長いフレーズの二重カウントによる過剰限定を避ける。一方で、発明の本質要素を表す少数のキーワードであれば、FI/FT と併用してよい。  
     - これにより「コードが弱い分野でキーワードが支え、キーワードが曖昧なケースでコードが支える」という二重の安全装置を維持しつつ、極端な in-field にならないようにしている。
   - **cheap path 優先と新レーン追加の条件**：  
-    - 新しい `search_fulltext`/`search_semantic` レーンを追加する前に、必ず「cheap path」（`blend_frontier_codeaware` → `peek_snippets` → `get_provenance` → `mutate_run`）を 1〜2 回実行し、weights / `rrf_k` / `beta_fuse` / `target_profile` の調整で解決できるかを試す。  
+    - 新しい `search_fulltext`/`search_semantic` レーンを追加する前に、必ず「cheap path」（`rrf_blend_frontier` → `peek_snippets` → `get_provenance` → `rrf_mutate_run`）を 1〜2 回実行し、weights / `rrf_k` / `beta_fuse` / `target_profile` の調整で解決できるかを試す。  
     - cheap path を経ても B/P/T 観点で妥当な候補が 10 件程度に満たない場合に限り、制約を緩めた recall 系レーン（no-code recall や C 条件を SHOULD に落としたバリエーション）を **最大 1 本だけ**追加することを許容する。  
     - cheap path の診断で特定の infield レーン（例: `fulltext_problem`）が off-field 文献ばかりを押し上げていると判明した場合は、新レーン追加より先に、そのレーンの weight を下げるか fusion から外すことを推奨する。
 - AGENT 側で LLM を組み込むときは、運用環境では必ず `mode: production` を使い、  
@@ -1633,18 +1630,15 @@ v1.3 で有効な MCP ツール（`src/rrfusion/mcp/host.py` 準拠）は次の�
 > **注意**：`search_fulltext` / `search_semantic` は `budget_bytes` を受け取らず、`top_k` だけを使って Redis にランキングをキャッシュします。  
 > スニペットの byte 制限は `peek_snippets` / `get_snippets` の `budget_bytes` / `per_field_chars` で制御してください。
 
-**シグネチャ（`mcp.host` と一致）**
+**シグネチャ（`mcp.host` と一致、ユーザ向けシンプル版）**
 
 ```python
 search_fulltext(
     query: str,
     filters: list[Cond] | None = None,
-    fields: list[SnippetField] | None = None,
-    field_boosts: dict[str, float] | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-) -> SearchToolResponse
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]
 ```
 
 **主な引数**
@@ -1667,22 +1661,12 @@ search_fulltext(
 - `trace_id`  
   - 任意のトレース ID。`Meta.trace_id` やログにコピーされる。
 
-**戻り値（`SearchToolResponse` 概要）**
+**戻り値**
 
-- `lane: "fulltext"`  
-  - 実行したレーン名。
-- `run_id_lane: str`  
-  - このレーン実行を識別する ID。  
-  - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` などで参照する。
-- `meta: Meta`  
-  - `meta.params` には `search_fulltext`／`search_semantic` の引数と `trace_id`、`fields`、`feature_scope`（semantic）などが入る。
-- `count_returned: int` / `truncated: bool`  
-  - 実際に返ってきた件数と、`top_k` に対して切り詰められたかどうか。
-- `code_freqs: dict[str, dict[str, int]]`  
-  - IPC/CPC/FI/FT ごとの頻度集計。  
-  - 返却時点では `code_freq_top_k` に応じて上位 n 個に絞り込まれており、F-term（FT）分布も Patentfield の `fterms` 列から取得される。  
-  - `code_freq_top_k` を `None` にすると全コードをそのまま返すので、LLM/エージェントが必要なときにのみ値を増やす。  
-  - 実運用では 30 程度で十分なため、デフォルトの引数はこの値に設定される。
+- `list[str]`  
+  - `id_type` で指定した種別の識別子（`app_id` など）を、関連度の高い順に並べたリスト。
+  - lane run やコード頻度は返さず、純粋な「ユーザ向け検索」として扱う。  
+  - RRFusion のレーンとして使いたい場合は、`rrf_search_fulltext_raw` を用いて lane run (`RunHandle`) を取得する。
 
 > 実装ノート（lane）：payload に `lane` を含めることで、stub 側でも fulltext/semantic の区別を再現しています。
 
@@ -1702,19 +1686,15 @@ search_fulltext(
 
 > 実装ノート：`get_snippets` では `numbers` API（`n`/`t` のリスト）を使った一括番号検索を行うため、内部で `doc_id`（= `app_doc_id`）リストを、Backend が要求する番号種別（通常は `app_id`）に正規化した `{"n": "<pair>", "t": "app_id"}` 形式などへ変換して再検索する。Backend がこの `numbers` 形式に対応していることが必要です。
 
-**シグネチャ（`mcp.host` と一致）**
+**シグネチャ（`mcp.host` と一致、ユーザ向けシンプル版）**
 
 ```python
 search_semantic(
     text: str,
     filters: list[Cond] | None = None,
-    fields: list[SnippetField] | None = None,
-    feature_scope: str | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-    semantic_style: SemanticStyle = "default",
-) -> SearchToolResponse
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]
 ```
 
 **主な引数**
@@ -1746,25 +1726,16 @@ search_semantic(
 > semantic には `field_boosts` は存在しない。  
 > 「どのセクションから特徴を取るか」だけを `feature_scope` で指定し、重み付けやスコアリング本体は Patentfield に委ねる。
 
-**戻り値（`SearchToolResponse` 概要）**
+**戻り値**
 
-- `lane: "semantic" | "original_dense"`  
-  - `semantic_style` に応じた実レーン名（v1.3 では `"semantic"` が Patentfield の dense semantic レーン、`"original_dense"` は無効な予約値）。
-- `run_id_lane: str`  
-  - この semantic 実行を識別する ID。  
-  - 後続の `blend_frontier_codeaware` / `peek_snippets` / `get_provenance` で使う。
-- `meta: Meta`  
-  - `meta.params` には `search_semantic` ～ `code_freq_top_k` の引数が入り、`trace_id` / `fields` / `feature_scope` / `semantic_style` などが含まれる。
-- `count_returned: int` / `truncated: bool`  
-  - 実際に返ってきた件数と、`top_k` に対して切り詰められたかどうか。
-- `code_freqs: dict[str, dict[str, int]]`  
-  - IPC/CPC/FI/FT ごとの頻度集計。  
-  - `code_freq_top_k` に応じて上位 n 個に絞られ、FT 項目は Patentfield の `fterms` から取得される。  
-  - `code_freq_top_k` を `None` にすると全コードを返すため、「全体分布の確認時だけ増やす」などの戦略が立てられる。
+- `list[str]`  
+  - `id_type` で指定した種別の識別子を、semantic 類似度の高い順に並べたリスト。  
+  - lane run やコード頻度は返さず、こちらもユーザ向けのシンプルな検索として扱う。  
+  - RRFusion のレーンとして使いたい場合は、`rrf_search_semantic_raw` を用いて lane run (`RunHandle`) を取得する。
 
 ---
 
-### 8.4 `blend_frontier_codeaware`
+### 8.4 `rrf_blend_frontier`
 
 **役割**
 
@@ -1774,16 +1745,9 @@ search_semantic(
 **シグネチャ（`mcp.host` と一致）**
 
 ```python
-blend_frontier_codeaware(
-    runs: list[BlendRunInput],
-    weights: dict[str, float] | None = None,
-    rrf_k: int | None = None,
-    beta_fuse: float | None = None,
-    target_profile: dict[str, dict[str, float]] | None = None,
-    top_m_per_lane: dict[str, int] | None = None,
-    k_grid: list[int] | None = None,
-    peek: PeekConfig | None = None,
-) -> BlendResponse
+rrf_blend_frontier(
+    request: BlendRequest,
+) -> RunHandle
 ```
 
 **主な引数**
@@ -1800,26 +1764,20 @@ blend_frontier_codeaware(
 - `k_grid`：frontier を計算する `k` のグリッド。
 - `peek`：`PeekConfig` を与えると、融合直後に snippet を収集。
 
-**戻り値（`BlendResponse` 概要）**
+**戻り値**
 
-- `run_id`：生成された fusion run。
-- `pairs_top`：`rank`/`doc_id`/`score` の順序。
-- `frontier`：`BlendFrontierEntry`（`k,P_star,R_star,F_beta_star`）。
-- `freqs_topk`：上位での IPC/CPC/FI/FT 頻度。
-- `contrib`：各レーンがどれだけ貢献したかの比率。
-- `recipe`：使用されたパラメータ（`delta` を含む）。
-- `peek_samples`：`peek_snippets` を inline で取得した例。
-- `meta`：`took_ms` 等のメタ情報。
-- *追加*: `priority_pairs`（代表の doc_id を優先した再ソート結果）と `representatives`（登録済みの doc_id＋A/B/C）も含めるので、UI/LLM はこれらを使って代表が消えないよう表示する。
- - *追加*: `metrics`（`FusionMetrics`）には LAS / CCW / S_shape / F_struct / beta_struct / Fproxy が格納され、`get_provenance` からも同じ構造で参照できる。
+- `RunHandle`  
+  - `run_id`: 生成された fusion run の ID。  
+  - `meta: SearchMetaLite`（`top_k`, `count_returned`, `took_ms` などの軽量メタ）。  
+  - ランキング本体や frontier, コード分布, レシピなどの詳細は Redis に保存され、`get_provenance` から参照する。
 
-> 実装ノート：このツールで生成したレシピと `target_profile` は `mutate_run` / `get_provenance` の入力になる。今回の `field_boosts` や `feature_scope` は `runs` 側で設定した lane run metadata から継承します。
+> 実装ノート：このツールで生成したレシピと `target_profile` は `rrf_mutate_run` / `get_provenance` の入力になる。今回の `field_boosts` や `feature_scope` は `runs` 側で設定した lane run metadata から継承します。
 
 **使用例**
 
 ```json
 {
-  "tool": "blend_frontier_codeaware",
+  "tool": "rrf_blend_frontier",
   "arguments": {
     "runs": [
       {"lane": "fulltext", "run_id_lane": "fulltext-abc"},
@@ -1838,40 +1796,6 @@ blend_frontier_codeaware(
 
 - wide/recall/precision レーンのランを集めた直後に run_id をまとめ、frontier を確認したいとき。
 - `target_profile` に基づくコード優先順位と、`peek_snippets` でサンプルを取得するセットで用途。
-
-### 8.4.1 `blend_frontier_codeaware_lite`
-
-**役割**
-
-- 既存の `blend_frontier_codeaware` と同じレーン融合を行うが、LLMのプロンプトコンテキストを節約するため、`run_id` + 上位 doc_idリスト + トリム済み `frontier` + 税onomies ごとの上位コードのみを返す。
-- `pairs_top`/`contrib`/`recipe` など、詳細なランキングや貢献率を返さない代わりに、軽量な `BlendLite` オブジェクトを返すので、重複情報や large JSON を避けたい場面に最適。
-
-**シグネチャ（`mcp.host` と一致）**
-
-```python
-blend_frontier_codeaware_lite(
-    runs: list[BlendRunInput],
-    weights: dict[str, float] | None = None,
-    rrf_k: int | None = None,
-    beta_fuse: float | None = None,
-    target_profile: dict[str, dict[str, float]] | None = None,
-    top_m_per_lane: dict[str, int] | None = None,
-    k_grid: list[int] | None = None,
-    peek: PeekConfig | None = None,
-) -> BlendLite
-```
-
-**戻り値（`BlendLite` 概要）**
-
-- `run_id`: フュージョン結果。
-- `top_ids`: 上位 `pairs_top` から抽出した doc_id リスト（デフォルト 20 件）。
-- `frontier`: `BlendFrontierEntry` のうち、最上位数点だけを返す。
-- `top_codes`: `freqs_topk` の各 taxonomy について、上位 few code のリスト。
-- `meta`: `took_ms` など、極小のメタ情報。
-
-> システムプロンプトでは、コンテキストを抑えたいときに本ツールを使い、詳細確認や `mutate_run` に備えている場合は従来の `blend_frontier_codeaware` を呼ぶ運用とする。
-
----
 
 ### 8.5 `peek_snippets`
 
@@ -1895,7 +1819,7 @@ peek_snippets(
 
 **主な引数**
 
-- `run_id`: `blend_frontier_codeaware` / `mutate_run` の fusion run ID。
+- `run_id`: fusion run ID（通常は `rrf_blend_frontier` / `rrf_mutate_run` の出力）。
 - `offset`, `limit`: ランキング内のスライド。
 - `fields`: 返すテキストセクション（デフォルト `['title','abst','claim']`）。  
   - 必要に応じて `desc`, `app_doc_id`, `app_id`, `pub_id`, `exam_id`, `app_date`, `pub_date`, `apm_applicants`, `cross_en_applicants` などを追加する。
@@ -1907,7 +1831,6 @@ peek_snippets(
 - `snippets`: `PeekSnippet` のリスト（`id` + `fields`）。
 - `meta`: `PeekMeta`（`used_bytes`, `truncated`, `peek_cursor`, `total_docs`, `retrieved`, `returned`, `took_ms`）。
 
-> 実装ノート：このツールは `mutate_run` / `get_provenance` を挟んだループで複数回呼び、前後の顔ぶれを定量・定性の両面で比較します。
 
 **使用例**
 
@@ -1926,7 +1849,7 @@ peek_snippets(
 
 **典型的な場面**
 
-- fusion 実行後、`mutate_run` などで `weights` を変える前に上位を大きく俯瞰する。
+- fusion 実行後、`rrf_mutate_run` などで `weights` を変える前に上位を大きく俯瞰する。
 ### 8.6 `get_snippets`
 
 **役割**
@@ -1974,38 +1897,36 @@ get_snippets(
 
 > 実装ノート：backend の `/search` へ `numbers`（`[{"n": "...", "t": "pub_id"}, ...]`）を渡し、`columns` で必要 field だけを指定してスニペットを取得します。
 
-### 8.7 `mutate_run`
+### 8.7 `rrf_mutate_run`
 
 **役割**
 
-- 既存の fusion run に対して `weights`, `rrf_k`, `beta_fuse` を上書きし、新しい run を生成する。
-- 結果は `MutateResponse` で返され、`recipe` に `delta` を含める。
+- 既存の fusion run に対して `weights`, `rrf_k`, `beta_fuse` を上書きし、新しい fusion run を生成する。
+- 結果は `RunHandle` で返され、`run_id` と軽量メタ（`SearchMetaLite`）のみを含む。詳細なレシピや frontier は `get_provenance` から取得する。
 
 **シグネチャ**
 
 ```python
-mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
+rrf_mutate_run(run_id: str, delta: MutateDelta) -> RunHandle
 ```
 
 **主な引数**
 
-- `run_id`: ベースとなる fusion run。
+- `run_id`: ベースとなる fusion run（`rrf_blend_frontier` / `rrf_mutate_run` の出力）。
 - `delta`: `weights`, `rrf_k`, `beta_fuse` の上書き。指定しない項目は元 run の recipe を継承。
 
-**戻り値（`MutateResponse`）**
+**戻り値（`RunHandle`）**
 
-- `new_run_id`: 生成された fusion run。
-- `frontier`: `BlendFrontierEntry` リスト。
-- `recipe`: 新 recipe（`delta` を含む）。
-- `meta`: `took_ms` 等。
+- `run_id`: 生成された fusion run の ID。
+- `meta: SearchMetaLite`: `top_k`, `count_returned`, `truncated`, `took_ms` など。
 
-> 実装ノート：`delta` は差分ではなく絶対値として扱われ、変えない設定は元の recipe から引き継がれます。
+> 実装ノート：`delta` は差分ではなく絶対値として扱われ、変えない設定は元の recipe から引き継がれます。実際の frontier と recipe の詳細は Redis に保存され、`get_provenance` から参照します。
 
 **使用例**
 
 ```json
 {
-  "tool": "mutate_run",
+  "tool": "rrf_mutate_run",
   "arguments": {
     "run_id": "run_blend_002",
     "delta": {
@@ -2030,12 +1951,12 @@ mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse
 **シグネチャ**
 
 ```python
-get_provenance(run_id: str) -> ProvenanceResponse
+get_provenance(run_id: str, top_k_lane: int = 20, top_k_code: int = 30) -> ProvenanceResponse
 ```
 
 **主な引数**
 
-- `run_id`: lane run または fusion run で、`blend_frontier_codeaware` や `mutate_run` の出力に使用した ID。
+- `run_id`: lane run または fusion run で、`rrf_blend_frontier` や `rrf_mutate_run` の出力に使用した ID。
 
 **戻り値（`ProvenanceResponse`）**
 
@@ -2090,7 +2011,7 @@ class RepresentativeEntry(BaseModel):
 **主な引数**
 
 - `run_id`:
-  - `blend_frontier_codeaware` または `mutate_run` が返した fusion run の ID。
+  - `rrf_blend_frontier` または `rrf_mutate_run` が返した fusion run の ID。
   - lane run（`search_fulltext` や `search_semantic`）には使えない。
 - `representatives`:
   - 代表レビューで選んだ文献について、`doc_id` と A/B/C ラベル、および任意の `reason` を含むリスト。サーバ側では 1〜30 件を許容する。
@@ -2100,12 +2021,12 @@ class RepresentativeEntry(BaseModel):
 
 - `register_representatives` は指定された fusion run のメタデータを更新し、`meta["representatives"]` と `meta["recipe"]["representatives"]` の両方に代表公報リストを書き込む。同じ run_id に対しては原則 1 回だけ登録でき、2 回目以降の登録試行は 400 エラーになる（代表をやり直したい場合は新しい fusion run を作る）。
 - 代表情報を書き込んだ後、内部で `get_provenance(run_id)` を呼び出し、現在のランキングに基づいて各代表公報の `rank` と `score` を付与した `ProvenanceResponse` を返す。
-- その後 `mutate_run` を呼んでも、代表は doc_id ブーストとしては使わず、facet_terms / facet_weights / pi_weights の調整に使うことを想定している（π′ の中身で「A/B/C のどの構成を厚く見るか」を変える）。代表セットを変えない限り、これらの重みはその fusion 系列で基本的に固定される。
+- その後 `rrf_mutate_run` を呼んでも、代表は doc_id ブーストとしては使わず、facet_terms / facet_weights / pi_weights の調整に使うことを想定している（π′ の中身で「A/B/C のどの構成を厚く見るか」を変える）。代表セットを変えない限り、これらの重みはその fusion 系列で基本的に固定される。
 - `get_provenance` を fusion run に対して呼ぶと、`representatives` フィールドに現在のランク付き代表公報リストが含まれるため、「もともと代表に選んだ文献が、最新の調整後でも上位に残っているか？」を常に確認できる。rank が `null` のエントリは、現在のランキング集合（融合結果）には含まれていない代表公報であることを意味する。
 
 - **典型的な場面**
 
-- 初回 fusion 後に 20 件程度の representative-review を繰り返し、A/B/C の分布や欠落している観点を把握したうえで、安定したフロンティアに対して 30 件の代表セットを確定し、その結果を固定しつつ以降の `mutate_run` で微調整したいとき。
+- 初回 fusion 後に 20 件程度の representative-review を繰り返し、A/B/C の分布や欠落している観点を把握したうえで、安定したフロンティアに対して 30 件の代表セットを確定し、その結果を固定しつつ以降の `rrf_mutate_run` で微調整したいとき。
 - JP パイプラインで十分な A/B が得られたか確認しながら、代表公報が大きくランクアウトしていないか監視する用途（WO/EP/US パイプラインを検討する前後で、20 件レビューと 30 件レビューの両方を組み合わせて現状把握を行うことが多い）。
 
 ### 8.9 `run_multilane_search`
@@ -2114,7 +2035,7 @@ class RepresentativeEntry(BaseModel):
 
 - 複数の `search_fulltext` / `search_semantic` ベースのレーンを **1 回の MCP ツール呼び出しでまとめて実行し、LLM コンテキストを節約した要約結果を返す。**
 - `feature_flags.enable_multi_run` が `true` になっている環境（debug/CI スタックなど）では Phase 2 の infield レーンを `lanes` に詰めてこのツールを使い、ランハンドル・ステータス・code_summary を取得する。
-- 実行結果は `MultiLaneSearchLite` 型なので、`SearchToolResponse` を必要としない限りこの lite バージョンをデフォルトとし、詳細な解析が必要なときだけ `run_multilane_search_precise` を追随して呼び出す。
+- 実行結果は `MultiLaneSearchLite` 型であり、各レーンの RunHandle と簡易なコード要約のみを返す。現行 v1.3 では precise 版マルチレーンツールは公開していないため、この lite バージョンをデフォルトとする。
 
 **シグネチャ（`mcp.host` と一致）**
 
@@ -2125,7 +2046,7 @@ run_multilane_search(
 ) -> MultiLaneSearchLite
 ```
 
-`MultiLaneEntryRequest` の構造は以下のとおりで、`run_multilane_search_precise` と共通です。
+`MultiLaneEntryRequest` の構造は以下のとおりで、現行 v1.3 では lite/multi-lane ツールのみに使用されます。
 
 - `lane_name: str` — 人間/LLM 用の論理レーン名（例：`"fulltext_recall"`）。
 - `tool: Literal["search_fulltext","search_semantic"]` — 実際に呼び出す MCP 関数名。
@@ -2134,41 +2055,18 @@ run_multilane_search(
 
 **戻り値（`MultiLaneSearchLite` 概要）**
 
-- `lanes`: `MultiLaneLaneSummary` のリスト（`lane_name`/`tool`/`lane`/`status`/`run_id_lane` + `meta` + `code_summary` + `error` 情報）。
+- `lanes`: `MultiLaneLaneSummary` のリスト（`lane_name`/`tool`/`lane`/`status`/`handle` + `code_summary` + `error` 情報）。
 - `trace_id`: 一致する trace_id。
 - `took_ms_total`: バッチ全体の実行時間。
 - `success_count` / `error_count`: 成否件数。
 
-`code_summary` には `top_codes` / `top_code_counts` などが含まれ、fusion に渡す code 指標を軽く確認できる。
+`handle` は各レーンの `RunHandle`（`run_id` + `SearchMetaLite`）であり、fusion や provenance/snippet 取得にそのまま再利用できます。`code_summary` には簡易なトップコード情報が含まれ、fusion に渡す code 指標を軽く確認できます。
 
 **利用タイミングのガイド**
 
 - wide 検索と code profiling が終わり、追加する infield レーン（`fulltext_recall` / `fulltext_precision` / semantic 設計など）のクエリ・フィルタ・パラメータが固まった段階で、それらを `lanes` 配列としてまとめて投げる。
-- Lite バージョンはランIDと timing を押さえながら LLM コンテキストを節約する想定なので、基本はこのツールで進み、細かい `SearchToolResponse` を見たいときだけ `run_multilane_search_precise` を追加で呼び出す。
+- Lite バージョンはランIDと timing を押さえながら LLM コンテキストを節約する想定であり、現行 v1.3 では precise 版（各レーンの詳細 payload を返すツール）は公開していません。
 - 内部では `lanes` に記載された順番で 1 本ずつ `MCPService.search_lane` を呼び出し、HTTP 403 を避けつつシリアルに実行する。
-
-### 8.9.1 `run_multilane_search_precise`
-
-**役割**
-
-- `run_multilane_search` と同じ複数レーンバッチを実行しつつ、各 lane の `SearchToolResponse`/`meta`/`code_freqs` をそのまま返す。
-- 詳細な `code_freqs` や `pairs_top` 相当の `SearchToolResponse` を downstream 解析や手動レビューで使いたいときに呼び出す。
-
-**シグネチャ（`mcp.host` と一致）**
-
-```python
-run_multilane_search_precise(
-    lanes: list[MultiLaneEntryRequest],
-    trace_id: str | None = None,
-) -> MultiLaneSearchResponse
-```
-
-**戻り値（`MultiLaneSearchResponse` 概要）**
-
-- `results: list[MultiLaneEntryResponse]` — `lane_name` / `tool` / `lane` / `status` / `took_ms` に加えて、`response` にそのレーンの `SearchToolResponse`、`error` にエラー詳細を持つ。
-- `meta: MultiLaneSearchMeta` — 全体の `took_ms_total` / `trace_id` / `success_count` / `error_count`。
-
-この精密バージョンは lite 概要に比べてペイロードが大きく、LLM コンテキストをより多く消費するため、必要なタイミングでだけ併用するのが推奨です。
 
 ## 9. 開発・テスト環境の手順
 

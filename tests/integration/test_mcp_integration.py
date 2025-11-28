@@ -56,7 +56,7 @@ async def _ensure_runs(service: MCPService) -> tuple[str, str]:
     semantic = await service.search_lane("semantic", text="integration query", top_k=200)
     _assert_took_ms(fulltext.meta.took_ms, "fulltext integration search")
     _assert_took_ms(semantic.meta.took_ms, "semantic integration search")
-    return fulltext.run_id_lane, semantic.run_id_lane
+    return fulltext.run_id, semantic.run_id
 
 
 def _assert_took_ms(value: int | None, source: str) -> None:
@@ -94,7 +94,7 @@ async def test_multi_lane_search_batch_runs_sequential():
         for entry in response.results:
             assert entry.status == MultiLaneStatus.success
             assert entry.error is None
-            assert entry.response is not None
+            assert entry.handle is not None
             _assert_took_ms(entry.took_ms, f"{entry.lane_name} multi-lane timing")
 
 
@@ -160,7 +160,7 @@ async def test_get_publication_returns_full_fields():
     async with service_context() as service:
         search_resp = await service.search_lane("fulltext", query="fulltext", top_k=1)
         peek = await service.peek_snippets(
-            run_id=search_resp.run_id_lane,
+            run_id=search_resp.run_id,
             limit=1,
             fields=["title", "abst", "claim"],
             per_field_chars={"title": 64, "abst": 128, "claim": 128},
@@ -187,8 +187,8 @@ async def test_search_lane_handles_thousands_of_docs():
     async with service_context() as service:
         response = await service.search_lane("fulltext", query="large search", top_k=5000)
         expected = min(5000, _stub_max_results())
-        assert response.count_returned == expected
-        assert response.run_id_lane
+        assert response.meta.count_returned == expected
+        assert response.run_id
         _assert_took_ms(response.meta.took_ms, "large search lane")
 
 
@@ -206,7 +206,10 @@ async def test_large_search_and_peek_budget_flow():
         _assert_took_ms(fulltext.meta.took_ms, "budget stress fulltext")
         _assert_took_ms(semantic.meta.took_ms, "budget stress semantic")
 
-        min_count = min(fulltext.count_returned, semantic.count_returned)
+        min_count = min(
+            fulltext.meta.count_returned or 0,
+            semantic.meta.count_returned or 0,
+        )
         if min_count < 4000:
             pytest.skip(
                 "DB stub not configured for large-result scenarios (need >=4k hits)"
@@ -214,8 +217,8 @@ async def test_large_search_and_peek_budget_flow():
 
         blend_request = BlendRequest(
             runs=[
-                {"lane": "fulltext", "run_id_lane": fulltext.run_id_lane},
-                {"lane": "semantic", "run_id_lane": semantic.run_id_lane},
+                {"lane": "fulltext", "run_id_lane": fulltext.run_id},
+                {"lane": "semantic", "run_id_lane": semantic.run_id},
             ],
             weights={"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
             rrf_k=60,
@@ -267,7 +270,7 @@ async def test_get_provenance_returns_structured_metadata_for_lane_and_fusion():
     async with service_context() as service:
         # Prepare a lane run (fulltext_wide 相当)
         lane_resp = await service.search_lane("fulltext", query="provenance lane", top_k=200)
-        lane_prov = await service.provenance(lane_resp.run_id_lane)
+        lane_prov = await service.provenance(lane_resp.run_id)
         assert isinstance(lane_prov, ProvenanceResponse)
         # lane meta should at least include basic config
         assert lane_prov.meta.get("lane") == "fulltext"
@@ -283,8 +286,8 @@ async def test_get_provenance_returns_structured_metadata_for_lane_and_fusion():
         semantic_resp = await service.search_lane("semantic", text="provenance semantic", top_k=200)
         blend_request = BlendRequest(
             runs=[
-                {"lane": "fulltext", "run_id_lane": lane_resp.run_id_lane},
-                {"lane": "semantic", "run_id_lane": semantic_resp.run_id_lane},
+                {"lane": "fulltext", "run_id_lane": lane_resp.run_id},
+                {"lane": "semantic", "run_id_lane": semantic_resp.run_id},
             ],
             weights={"fulltext": 1.0, "semantic": 1.0},
             rrf_k=60,
@@ -320,8 +323,11 @@ async def test_get_provenance_returns_structured_metadata_for_lane_and_fusion():
 async def test_original_dense_lane_metadata():
     async with service_context() as service:
         response = await service.search_lane("original_dense", text="dense boost query", top_k=40)
-        assert response.lane == "original_dense"
-        assert response.meta.params.get("semantic_style") == "original_dense"
+        # Inspect lane metadata via provenance instead of direct response fields
+        prov = await service.provenance(response.run_id)
+        assert prov.meta.get("lane") == "original_dense"
+        params = prov.meta.get("params") or {}
+        assert params.get("semantic_style") == "original_dense"
         _assert_took_ms(response.meta.took_ms, "original_dense search")
 
 
@@ -331,7 +337,7 @@ async def test_snippet_identifier_fields_available():
     async with service_context() as service:
         search_resp = await service.search_lane("fulltext", query="id fields", top_k=5)
         peek = await service.peek_snippets(
-            run_id=search_resp.run_id_lane,
+            run_id=search_resp.run_id,
             limit=3,
             fields=["app_doc_id", "pub_id", "exam_id"],
             per_field_chars={"app_doc_id": 32, "app_id": 32, "pub_id": 32, "exam_id": 32},

@@ -14,30 +14,32 @@ from starlette.responses import JSONResponse
 from rrfusion.config import get_settings
 from rrfusion.mcp.service import MCPService
 from rrfusion.models import (
+    BlendRequest,
     BlendResponse,
     BlendRunInput,
+    Cond,
     FulltextParams,
     Lane,
+    LaneCodeSummary,
     MutateDelta,
     MutateResponse,
     MultiLaneEntryRequest,
+    MultiLaneSearchLite,
     MultiLaneSearchRequest,
     MultiLaneSearchResponse,
+    MultiLaneStatus,
     MultiLaneTool,
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
     RepresentativeEntry,
+    RunHandle,
+    SearchMetaLite,
     SearchParams,
-    SearchToolResponse,
     SemanticParams,
-    SemanticStyle,
-    SnippetField,
-    BlendLite,
-    MultiLaneSearchLite,
     normalize_filters,
 )
-from rrfusion.mcp.llm_views import build_blend_lite, build_multi_lane_search_lite
+from rrfusion.mcp.llm_views import build_multi_lane_search_lite
 
 settings = get_settings()
 logging.basicConfig(
@@ -46,6 +48,8 @@ logging.basicConfig(
 )
 _service: MCPService | None = None
 LifespanState = dict[str, Any]
+_MULTILANE_CODE_LIMIT = 3
+_DEFAULT_COUNTRY = "JP"
 
 
 @asynccontextmanager
@@ -121,6 +125,30 @@ class RRFusionFastMCP(FastMCP):
         )
 
 
+def _normalize_filters(raw_filters: Any | None) -> list[Cond]:
+    """
+    Backwards-compatible wrapper around rrfusion.models.normalize_filters
+    used by tests. Raises RuntimeError on invalid payloads.
+    """
+    try:
+        return normalize_filters(raw_filters)
+    except Exception as exc:  # pragma: no cover - behavior verified in tests
+        raise RuntimeError("invalid filters payload") from exc
+
+
+def _normalize_filters_with_default_country(raw_filters: Any | None) -> list[Cond]:
+    """
+    Normalize filters and ensure a default JP country filter is present
+    when the caller did not specify any country constraint.
+    """
+    conds = normalize_filters(raw_filters)
+    for cond in conds:
+        if cond.field == "country":
+            return conds
+    conds.append(Cond(lop="and", field="country", op="in", value=[_DEFAULT_COUNTRY]))
+    return conds
+
+
 mcp = RRFusionFastMCP(
     name="rrfusion-mcp",
     instructions="Multi-lane patent search with RRF fusion, code-aware frontier, and snippet budgeting.",
@@ -141,9 +169,7 @@ def _elapsed_ms(start: float) -> int:
 
 
 def _record_tool_timing(response: Any, took_ms: int) -> None:
-    if isinstance(response, SearchToolResponse):
-        response.meta.took_ms = took_ms
-    elif isinstance(response, PeekSnippetsResponse):
+    if isinstance(response, PeekSnippetsResponse):
         response.meta.took_ms = took_ms
     elif isinstance(response, BlendResponse):
         response.meta["took_ms"] = took_ms
@@ -353,7 +379,7 @@ def _normalize_multilane_params(
     else:
         raise ValueError(f"unsupported params type: {type(raw)}")
 
-    payload["filters"] = normalize_filters(payload.get("filters"))
+    payload["filters"] = _normalize_filters_with_default_country(payload.get("filters"))
 
     fields_value = _normalize_optional_list(payload.get("fields"))
     if fields_value is None:
@@ -442,146 +468,235 @@ async def _execute_blend_frontier(
 @mcp.tool
 async def search_fulltext(
     query: str,
-    filters: list[Any] | None = None,
-    fields: list[SnippetField] | None = None,
-    field_boosts: dict[str, float] | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-) -> SearchToolResponse:
+    filters: list[Cond] | None = None,
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]:
     """
-    summary: Run lexical full-text search over patent documents using TT-IDF/BM25-style scoring.
+    summary: Run a TT-IDF/BM25-style full-text search and return publication IDs only.
     when_to_use:
-      - Use in the wide_search step for the fulltext lane.
-      - Use when you need high-recall keyword-based candidates before fusion.
+      - Use for user-facing keyword search where you only need a ranked list of publication identifiers.
+      - Use when you do not need lane handles or code frequency summaries and want to keep context small.
     arguments:
       query:
         type: string
         required: true
         description: Search expression describing the technical idea in the corpus language.
       filters:
-        type: list[object]
+        type: list[Cond]
         required: false
-        description: High-level filters ({field, include_values/include_codes/include_range}); host converts them into low-level conditions.
-      fields:
-        type: list[SnippetField]
-        required: false
-        description: Which text sections to index/return; defaults to ["abst","title","claim"].
-      field_boosts:
-        type: dict[string,float]
-        required: false
-        description: Optional per-field boosts for the fulltext backend (e.g., {"title":100,"abst":10,"claim":5}); controls Patentfield weights.
+        description: Optional structured filter conditions (IPC/FI/CPC/year/assignee/country/ft).
       top_k:
         type: int
         required: false
-        description: Maximum number of hits to retrieve for this lane (typically up to 800).
-      code_freq_top_k:
-        type: int
+        description: Number of top-ranked hits to return (default: 50).
+      id_type:
+        type: '"pub_id" | "app_doc_id" | "app_id" | "exam_id"'
         required: false
-        description: Limit how many codes appear in the lane-level `code_freqs` summary (default: 30, set to `None` to surface all codes).
-      trace_id:
-        type: string
-        required: false
-        description: Optional identifier to correlate this lane run in logs/telemetry.
+        description: Which identifier type to return for each hit; falls back to internal doc_id if missing.
     constraints:
       - Query must be non-empty and written in the primary language of the target corpus.
-      - Keep top_k within reasonable limits to avoid unnecessary latency.
     returns:
-      run_id_lane:
-        description: Handle for this fulltext lane run, to be used in fusion, peek_snippets, and provenance.
+      ids:
+        description: Ranked list of identifiers corresponding to id_type, in decreasing relevance order.
       notes:
-        - Response also includes lane-level code frequencies and timing metadata in response.meta.took_ms.
-        - Text sections are not stored in this response; use peek_snippets/get_snippets for snippet text.
+        - To obtain lane handles and code frequencies for fusion workflows, use rrf_search_fulltext_raw instead.
     """
-    start = perf_counter()
-    response = await _require_service().search_lane(
+    search_response = await _require_service().search_lane(
         "fulltext",
         query=query,
-        filters=normalize_filters(filters),
-        fields=_normalize_optional_list(fields),
-        field_boosts=_normalize_optional_dict(field_boosts),
+        filters=_normalize_filters_with_default_country(filters),
         top_k=top_k,
-        trace_id=trace_id,
-        code_freq_top_k=code_freq_top_k,
     )
-    _record_tool_timing(response, _elapsed_ms(start))
-    return response
+    peek = await _require_service().peek_snippets(
+        run_id=search_response.run_id,
+        offset=0,
+        limit=top_k,
+        fields=[id_type],
+        per_field_chars={id_type: 64},
+        budget_bytes=4096,
+    )
+    ids: list[str] = []
+    for snippet in peek.snippets:
+        value = snippet.fields.get(id_type, "")
+        ids.append(value or snippet.id)
+    return ids
 
 
 @mcp.tool
 async def search_semantic(
     text: str,
-    filters: list[Any] | None = None,
-    fields: list[SnippetField] | None = None,
-    feature_scope: str | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-    semantic_style: SemanticStyle = "default",
-) -> SearchToolResponse:
+    filters: list[Cond] | None = None,
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]:
     """
-    summary: Run similarity-score-based semantic search using natural language guidance.
+    summary: Run semantic similarity search and return publication IDs only.
     when_to_use:
-      - Use in the wide_search step for the semantic lane when you need contextual similarity.
-      - Use when you want to adjust which sections (claims/background/etc.) drive the similarity score.
+      - Use when you want a user-facing semantic search that returns just a ranked list of identifiers.
     arguments:
       text:
         type: string
         required: true
         description: Natural language description of the technical idea (1–3 paragraphs).
       filters:
-        type: list[object]
+        type: list[Cond]
         required: false
-        description: High-level filters ({field, include_values/include_codes/include_range}); host converts them into low-level conditions.
-      fields:
-        type: list[SnippetField]
-        required: false
-        description: Which text sections to return in lane snippets; defaults to ["abst","title","claim"].
-      feature_scope:
-        type: '"wide" | "title_abst_claims" | "claims_only" | "top_claim" | "background_jp"'
-        required: false
-        description: Semantic feature scope controlling which sections contribute to similarity (mapped to Patentfield feature).
+        description: Optional structured filter conditions (IPC/FI/CPC/year/assignee/country/ft).
       top_k:
         type: int
         required: false
-        description: Number of top results to retrieve (typically up to 800) for ranking storage only (snippet text is not returned).
-      code_freq_top_k:
-        type: int
+        description: Number of top-ranked hits to return (default: 50).
+      id_type:
+        type: '"pub_id" | "app_doc_id" | "app_id" | "exam_id"'
         required: false
-        description: Limit how many codes appear in the lane-level `code_freqs` summary (default: 30, set to `None` to surface all codes).
-      trace_id:
-        type: string
-        required: false
-        description: Optional identifier to correlate this lane run in logs/telemetry.
-      semantic_style:
-        type: '"default" | "original_dense"'
-        required: false
-        description: Internal implementation selector; "default" is the standard setting.
+        description: Which identifier type to return for each hit; falls back to internal doc_id if missing.
     constraints:
       - Text must be written in the primary language of the target corpus.
-      - semantic_style must be "default" for this deployment; "original_dense" is disabled in v1.3.
     returns:
-      run_id_lane:
-        description: ID of this semantic search run, to be used in fusion, peek_snippets, and provenance.
+      ids:
+        description: Ranked list of identifiers corresponding to id_type, in decreasing semantic similarity.
       notes:
-        - Results include doc_id, similarity score, and code information for downstream fusion and analysis.
-        - Text sections are not stored; ask for snippets via peek_snippets/get_snippets when needed.
+        - To obtain lane handles and code frequencies for fusion workflows, use rrf_search_semantic_raw instead.
     """
-    lane = "semantic" if semantic_style == "default" else "original_dense"
-    start = perf_counter()
     response = await _require_service().search_lane(
-        lane,
+        "semantic",
         text=text,
-        filters=normalize_filters(filters),
-        fields=_normalize_optional_list(fields),
-        feature_scope=_normalize_optional_str(feature_scope),
+        filters=_normalize_filters_with_default_country(filters),
         top_k=top_k,
-        trace_id=trace_id,
-        semantic_style=semantic_style,
-        code_freq_top_k=code_freq_top_k,
+    )
+    peek = await _require_service().peek_snippets(
+        run_id=response.run_id,
+        offset=0,
+        limit=top_k,
+        fields=[id_type],
+        per_field_chars={id_type: 64},
+        budget_bytes=4096,
+    )
+    ids: list[str] = []
+    for snippet in peek.snippets:
+        value = snippet.fields.get(id_type, "")
+        ids.append(value or snippet.id)
+    return ids
+
+
+@mcp.tool
+async def rrf_search_fulltext_raw(params: FulltextParams) -> RunHandle:
+    """
+    summary: Run a raw fulltext lane search and return only a run handle with lightweight meta.
+    when_to_use:
+      - Use from RRFusion backend workflows when you only need a lane run_id for later fusion and snippet retrieval.
+      - Prefer this over search_fulltext when you do not need lane-level code frequencies or detailed metadata.
+    arguments:
+      params:
+        type: FulltextParams
+        required: true
+        description: Structured fulltext search parameters including query, filters, and top_k.
+    returns:
+      run_id:
+        description: Lane run identifier to be passed into fusion and provenance tools.
+      meta:
+        description: Lightweight search metadata (top_k, count_returned, truncated, took_ms).
+    """
+    # Delegate directly to the internal lane search and return its RunHandle.
+    return await _require_service().search_lane("fulltext", params=params)
+
+
+@mcp.tool
+async def rrf_search_semantic_raw(params: SemanticParams) -> RunHandle:
+    """
+    summary: Run a raw semantic lane search and return only a run handle with lightweight meta.
+    when_to_use:
+      - Use from RRFusion backend workflows that will later fuse or inspect semantic runs via run_id.
+    arguments:
+      params:
+        type: SemanticParams
+        required: true
+        description: Structured semantic search parameters including text, filters, feature_scope, and top_k.
+    returns:
+      run_id:
+        description: Lane run identifier for this semantic search.
+      meta:
+        description: Lightweight search metadata (top_k, count_returned, truncated, took_ms).
+    """
+    lane: Lane = "semantic" if params.semantic_style == "default" else "original_dense"
+    # Delegate directly to the internal lane search and return its RunHandle.
+    return await _require_service().search_lane(lane, params=params)
+
+
+@mcp.tool
+async def rrf_blend_frontier(request: BlendRequest) -> RunHandle:
+    """
+    summary: Fuse multiple lane runs into a single fusion run and return only a run handle.
+    when_to_use:
+      - Use from RRFusion backend workflows after obtaining lane run_ids via rrf_search_*_raw.
+      - Prefer this over older fusion tools when you only need a fusion run_id and lightweight meta.
+    arguments:
+      request:
+        type: BlendRequest
+        required: true
+        description: Fusion configuration including lane runs, weights, rrf_k, beta_fuse, and target_profile.
+    returns:
+      run_id:
+        description: Fusion run identifier to be passed into provenance and snippet tools.
+      meta:
+        description: Lightweight fusion metadata (top_k, count_returned, took_ms).
+    """
+    start = perf_counter()
+    response = await _require_service().blend(
+        runs=request.runs,
+        weights=request.weights,
+        rrf_k=request.rrf_k,
+        beta_fuse=request.beta_fuse,
+        target_profile=request.target_profile,
+        top_m_per_lane=request.top_m_per_lane,
+        k_grid=request.k_grid,
+        peek=request.peek,
+        representatives=request.representatives,
     )
     _record_tool_timing(response, _elapsed_ms(start))
-    return response
+    count = len(response.pairs_top)
+    meta = SearchMetaLite(
+        top_k=count,
+        count_returned=count,
+        truncated=None,
+        took_ms=response.meta.get("took_ms"),
+    )
+    return RunHandle(run_id=response.run_id, meta=meta)
+
+
+@mcp.tool
+async def rrf_mutate_run(run_id: str, delta: MutateDelta) -> RunHandle:
+    """
+    summary: Create a new fusion run by applying a parameter delta to an existing fusion run.
+    when_to_use:
+      - Use when exploring alternative weights, rrf_k, or beta_fuse settings based on an existing fusion run.
+    arguments:
+      run_id:
+        type: string
+        required: true
+        description: Existing fusion run identifier to mutate.
+      delta:
+        type: MutateDelta
+        required: true
+        description: Replacement values for weights, rrf_k, and/or beta_fuse in the stored recipe.
+    returns:
+      run_id:
+        description: Newly created fusion run identifier after applying the delta.
+      meta:
+        description: Lightweight metadata about the recomputed fusion (top_k, count_returned, took_ms).
+    """
+    start = perf_counter()
+    response = await _require_service().mutate_run(run_id=run_id, delta=delta)
+    _record_tool_timing(response, _elapsed_ms(start))
+    count = len(response.frontier) if response.frontier else 0
+    meta = SearchMetaLite(
+        top_k=count,
+        count_returned=count,
+        truncated=None,
+        took_ms=response.meta.get("took_ms"),
+    )
+    return RunHandle(run_id=response.new_run_id, meta=meta)
 
 
 @mcp.tool
@@ -607,154 +722,38 @@ async def run_multilane_search(
       lanes:
         description: Summaries for each lane with status, handles, and top codes.
       note:
-        - This tool omits the full `SearchToolResponse` payload to conserve context; use `run_multilane_search_precise` if you need detailed meta/code_freqs.
+        - This tool omits full per-lane payloads to conserve context and instead returns RunHandle objects and lightweight code summaries.
     """
     response = await _execute_multilane_search(lanes, trace_id)
-    return build_multi_lane_search_lite(response)
+    lite = build_multi_lane_search_lite(response)
 
+    # Enrich lane summaries with lightweight code frequency snapshots from storage.
+    service = _require_service()
+    for lane_summary in lite.lanes:
+        if (
+            lane_summary.status != MultiLaneStatus.success
+            or lane_summary.handle is None
+        ):
+            continue
+        freqs = await service.storage.get_freq_summary(
+            lane_summary.handle.run_id, lane_summary.lane
+        )
+        if not freqs:
+            continue
+        top_codes: dict[str, list[str]] = {}
+        for taxonomy, distribution in freqs.items():
+            if not distribution:
+                continue
+            sorted_codes = sorted(
+                distribution.items(), key=lambda kv: kv[1], reverse=True
+            )
+            top_codes[taxonomy] = [
+                code for code, _ in sorted_codes[:_MULTILANE_CODE_LIMIT]
+            ]
+        if top_codes:
+            lane_summary.code_summary = LaneCodeSummary(top_codes=top_codes)
 
-@mcp.tool
-async def run_multilane_search_precise(
-    lanes: list[MultiLaneEntryRequest],
-    trace_id: str | None = None,
-) -> MultiLaneSearchResponse:
-    """
-    summary: Execute several search lanes sequentially in a single batch while respecting rate limits.
-    when_to_use:
-      - After finishing fulltext_wide and code_profiling, if enable_multi_run is true.
-      - When you need the full SearchToolResponse payload for in-depth analysis or downstream fusion.
-    arguments:
-      lanes:
-        type: list[MultiLaneEntryRequest]
-        required: true
-        description: Ordered batch of lane specifications (lane_name, tool, lane, params).
-      trace_id:
-        type: string
-        required: false
-        description: Trace identifier propagated to the batch response and logs.
-    constraints:
-      - Only search_fulltext and search_semantic are allowed tools.
-      - Each lane must target the correct physical lane (fulltext for search_fulltext, semantic/original_dense for search_semantic).
-      - Entries run sequentially; parallel execution is not supported to avoid 403 rate limits.
-      - Keep the batch to 3‑4 lanes for readability and response size.
-    returns:
-      results:
-        description: Ordered lane outcomes including success/error status and inner SearchToolResponse.
-      meta:
-        description: Aggregated timing, trace_id, and counts for the batch.
-    """
-    return await _execute_multilane_search(lanes, trace_id)
-
-
-@mcp.tool
-async def blend_frontier_codeaware(
-    runs: list[Any] | None = None,
-    weights: dict[str, float] | None = None,
-    rrf_k: int | None = None,
-    beta_fuse: float | None = None,
-    target_profile: Any | None = None,
-    top_m_per_lane: dict[str, int] | None = None,
-    k_grid: list[int] | None = None,
-    peek: PeekConfig | None = None,
-) -> BlendResponse:
-    """
-    summary: Fuse multiple lane runs with RRF and optional code-aware boosts, returning a frontier summary.
-    when_to_use:
-      - Use after obtaining lane run handles from search_fulltext and/or search_semantic.
-      - Use when you need a single fused ranking plus precision/recall-style frontier metrics.
-    arguments:
-      runs:
-        type: list[object]
-        required: true
-        description: Lane/run_id handles (either strings like \"fulltext-<id>\" or dicts with lane/run_id_lane) referencing existing lane search runs.
-      weights:
-        type: dict[str, float]
-        required: false
-        description: Lane weight map keyed by physical lanes and code (e.g., {"fulltext":1.0,"semantic":0.8,"code":0.5}).
-      rrf_k:
-        type: int
-        required: false
-        description: RRF tail parameter controlling contribution from deeper ranks (default 80).
-      beta_fuse:
-        type: float
-        required: false
-        description: F-beta-like bias for frontier computation (>1 for recall, <1 for precision; default 1.5).
-      target_profile:
-        type: object
-        required: false
-        description: Code prior; either taxonomy->code->weight dict (e.g., {"fi":{"H04L1/00":1.0}}) or a flat code->weight dict that the host will normalize.
-      top_m_per_lane:
-        type: dict[str, int]
-        required: false
-        description: Maximum docs to read per lane before fusion.
-      k_grid:
-        type: list[int]
-        required: false
-        description: K values at which to compute the frontier summary (P_star, R_star, F_beta_star).
-      peek:
-        type: PeekConfig
-        required: false
-        description: Optional inline peek configuration to sample a few top fused snippets.
-    constraints:
-      - Each run in runs must reference an existing lane run_id with compatible filters.
-      - At least one lane run is required; otherwise fusion cannot proceed.
-    returns:
-      run_id:
-        description: Fusion run identifier; use it with peek_snippets, mutate_run, and get_provenance.
-      notes:
-        - Response includes pairs_top (ranking), frontier stats, code frequency summaries, and contribution breakdowns.
-    """
-    start = perf_counter()
-    response = await _execute_blend_frontier(
-        runs=runs,
-        weights=weights,
-        rrf_k=rrf_k,
-        beta_fuse=beta_fuse,
-        target_profile=target_profile,
-        top_m_per_lane=top_m_per_lane,
-        k_grid=k_grid,
-        peek=peek,
-    )
-    _record_tool_timing(response, _elapsed_ms(start))
-    return response
-
-
-@mcp.tool
-async def blend_frontier_codeaware_lite(
-    runs: list[Any] | None = None,
-    weights: dict[str, float] | None = None,
-    rrf_k: int | None = None,
-    beta_fuse: float | None = None,
-    target_profile: Any | None = None,
-    top_m_per_lane: dict[str, int] | None = None,
-    k_grid: list[int] | None = None,
-    peek: PeekConfig | None = None,
-) -> BlendLite:
-    """
-    summary: Run the blend frontier tool and return a compact recap optimized for LLM prompts.
-    when_to_use:
-      - When you only need fused run_id + top doc_ids + frontier/code hints.
-      - Combine with `peek_snippets` if you want document text without bloating the fusion payload.
-    arguments: (same as blend_frontier_codeaware)
-    returns:
-      - run_id: fusion handle
-      - top_ids: up to 20 fused doc_ids
-      - frontier: trimmed frontier points for quick precision/recall checks
-      - top_codes: taxonomy summaries
-    """
-    start = perf_counter()
-    response = await _execute_blend_frontier(
-        runs=runs,
-        weights=weights,
-        rrf_k=rrf_k,
-        beta_fuse=beta_fuse,
-        target_profile=target_profile,
-        top_m_per_lane=top_m_per_lane,
-        k_grid=k_grid,
-        peek=peek,
-    )
-    _record_tool_timing(response, _elapsed_ms(start))
-    return build_blend_lite(response)
+    return lite
 
 
 @mcp.tool
@@ -903,38 +902,11 @@ async def get_publication(
 
 
 @mcp.tool
-async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
-    """
-    summary: Recompute a fusion run with updated blending parameters while reusing cached lane results.
-    when_to_use:
-      - Use after a successful fusion when you want to explore alternative weights or RRF constants.
-      - Use when you need a new frontier variant without repeating lane searches.
-    arguments:
-      run_id:
-        type: string
-        required: true
-        description: Fusion run identifier to mutate.
-      delta:
-        type: MutateDelta
-        required: true
-        description: Replacement values for weights, rrf_k, and/or beta_fuse to apply to the stored recipe.
-    constraints:
-      - Delta fields overwrite the stored recipe values; they are not interpreted as +/- offsets.
-      - The referenced run_id must point to an existing fusion run, not a lane run.
-    returns:
-      new_run_id:
-        description: Identifier of the newly computed fusion run with updated parameters.
-      notes:
-        - Response includes the new frontier, updated recipe (with delta recorded), and timing metadata.
-    """
-    start = perf_counter()
-    response = await _require_service().mutate_run(run_id=run_id, delta=delta)
-    _record_tool_timing(response, _elapsed_ms(start))
-    return response
-
-
-@mcp.tool
-async def get_provenance(run_id: str) -> ProvenanceResponse:
+async def get_provenance(
+    run_id: str,
+    top_k_lane: int = 20,
+    top_k_code: int = 30,
+) -> ProvenanceResponse:
     """
     summary: Inspect the stored recipe and lineage metadata for a given run.
     when_to_use:
@@ -945,6 +917,14 @@ async def get_provenance(run_id: str) -> ProvenanceResponse:
         type: string
         required: true
         description: Lane or fusion run identifier whose provenance you want to inspect.
+      top_k_lane:
+        type: integer
+        required: false
+        description: Maximum number of documents to include in lane_contributions (RRF top-ranked docs).
+      top_k_code:
+        type: integer
+        required: false
+        description: Maximum number of codes per taxonomy to include in code_distributions.
     constraints:
       - The run_id must exist in storage; otherwise an error is returned.
     returns:
@@ -954,7 +934,9 @@ async def get_provenance(run_id: str) -> ProvenanceResponse:
         - Use this payload to reconstruct or explain fusion decisions and to chain further mutations.
     """
     start = perf_counter()
-    response = await _require_service().provenance(run_id)
+    response = await _require_service().provenance(
+        run_id, top_k_lane=top_k_lane, top_k_code=top_k_code
+    )
     _record_tool_timing(response, _elapsed_ms(start))
     return response
 

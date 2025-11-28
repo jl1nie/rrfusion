@@ -35,11 +35,8 @@ from ..models import (
     GetPublicationRequest,
     GetSnippetsRequest,
     IncludeOpts,
-    Meta,
-    MutateDelta,
-    MutateRequest,
-    MutateResponse,
     Lane,
+    Meta,
     MultiLaneEntryError,
     MultiLaneEntryResponse,
     MultiLaneSearchMeta,
@@ -47,20 +44,24 @@ from ..models import (
     MultiLaneSearchResponse,
     MultiLaneStatus,
     MultiLaneTool,
+    MutateDelta,
+    MutateRequest,
+    MutateResponse,
     PeekConfig,
     PeekMeta,
     PeekSnippet,
     PeekSnippetsRequest,
     PeekSnippetsResponse,
     ProvenanceResponse,
-    RepresentativeEntry,
+    RunHandle,
     SEARCH_FIELDS_DEFAULT,
+    SearchItem,
+    SearchMetaLite,
+    SearchParams,
     SemanticParams,
     SemanticStyle,
-    SearchItem,
-    SearchParams,
-    SearchToolResponse,
     SnippetField,
+    RepresentativeEntry,
 )
 from ..mcp.defaults import (
     FUSION_DEFAULT_BETA_FUSE,
@@ -264,7 +265,7 @@ class MCPService:
         field_boosts: dict[str, float] | None = None,
         feature_scope: FeatureScope | None = None,
         code_freq_top_k: int | None = DEFAULT_CODE_FREQ_TOP_K,
-    ) -> SearchToolResponse:
+    ) -> RunHandle:
         start = perf_counter()
         backend = self.backend_registry.get_backend(lane)
         if not backend:
@@ -334,7 +335,6 @@ class MCPService:
         meta = _search_meta(lane, params)
         metadata["params"] = meta.params
         freq_summary = db_payload.code_freqs or _code_freq_summary(db_payload.items)
-        trimmed_freq_summary = _trim_code_freqs(freq_summary, code_freq_top_k)
         await self.storage.store_lane_run(
             run_id=run_id,
             lane=lane,
@@ -344,17 +344,16 @@ class MCPService:
             freq_summary=freq_summary,
         )
 
-        response = SearchToolResponse(
-            lane=lane,
-            run_id_lane=run_id,
-            meta=meta,
-            count_returned=count_returned,
-            truncated=truncated,
-            code_freqs=trimmed_freq_summary,
-            cursor=None,
+        meta.took_ms = _elapsed_ms(start)
+        return RunHandle(
+            run_id=run_id,
+            meta=SearchMetaLite(
+                top_k=meta.top_k,
+                count_returned=count_returned,
+                truncated=truncated,
+                took_ms=meta.took_ms,
+            ),
         )
-        response.meta.took_ms = _elapsed_ms(start)
-        return response
 
     async def multi_lane_search(
         self, req: MultiLaneSearchRequest
@@ -370,7 +369,7 @@ class MCPService:
         for entry in req.lanes:
             lane_start = perf_counter()
             lane_status = MultiLaneStatus.success
-            response: SearchToolResponse | None = None
+            handle: RunHandle | None = None
             error: MultiLaneEntryError | None = None
             allowed_lanes = MULTI_LANE_TOOL_LANES.get(entry.tool)
             if not allowed_lanes:
@@ -385,7 +384,7 @@ class MCPService:
                         detail=f"lane {entry.lane} incompatible with tool {entry.tool}",
                     )
 
-                response = await self.search_lane(lane=entry.lane, params=entry.params)
+                handle = await self.search_lane(lane=entry.lane, params=entry.params)
                 success_count += 1
             except HTTPException as exc:
                 lane_status = MultiLaneStatus.error
@@ -412,7 +411,7 @@ class MCPService:
                         lane=entry.lane,
                         status=lane_status,
                         took_ms=int((lane_end - lane_start) * 1000),
-                        response=response if lane_status == MultiLaneStatus.success else None,
+                        handle=handle if lane_status == MultiLaneStatus.success else None,
                         error=error,
                     )
                 )
@@ -975,7 +974,12 @@ class MCPService:
         return response
 
     # ------------------------------------------------------------------ #
-    async def provenance(self, run_id: str) -> ProvenanceResponse:
+    async def provenance(
+        self,
+        run_id: str,
+        top_k_lane: int = 20,
+        top_k_code: int = 30,
+    ) -> ProvenanceResponse:
         start = perf_counter()
         meta = await self.storage.get_run_meta(run_id)
         if not meta:
@@ -1030,6 +1034,13 @@ class MCPService:
                     metrics = FusionMetrics.model_validate(metrics_payload)
                 except Exception:
                     metrics = None
+
+        if code_distributions:
+            code_distributions = _trim_code_freqs(code_distributions, top_k_code)
+
+        if lane_contributions and top_k_lane > 0:
+            limited_items = list(lane_contributions.items())[:top_k_lane]
+            lane_contributions = {doc_id: payload for doc_id, payload in limited_items}
 
         meta_with_timing = {**meta, "took_ms": _elapsed_ms(start)}
         return ProvenanceResponse(

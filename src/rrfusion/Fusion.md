@@ -291,7 +291,7 @@ Fusion は単発の rank-fusion ではなく、Fproxy を目的関数とする�
 
 1. LLM が multi-lane の検索計画を立てる
 2. 各レーンで search_fulltext / search_semantic を実行
-3. blend_frontier_codeaware で fusion を実行 → BlendResponse
+3. rrf_blend_frontier で fusion を実行 → RunHandle
 4. get_provenance(run_id) で FusionMetrics (LAS/CCW/S_shape/Fproxy) を取得
 5. Fproxy が閾値以上なら採用、閾値未満なら mutate_run でパラメータや検索式を調整し再検索
 
@@ -399,7 +399,7 @@ LLM は get_provenance → metrics を見た上で mutate_run を設計し、必
 ```text
 ### Using fusion metrics (LAS / CCW / S_shape / Fproxy)
 
-After you run `blend_frontier_codeaware`, you MUST call `get_provenance(run_id)`
+After you run `rrf_blend_frontier`, you MUST call `get_provenance(run_id)`
 to inspect the fusion metrics before deciding whether the current search plan is
 good enough or needs refinement.
 
@@ -456,7 +456,7 @@ The MCP backend exposes the following metrics in `ProvenanceResponse.metrics`:
 
 #### Loop behavior
 
-- After each `blend_frontier_codeaware`:
+- After each `rrf_blend_frontier`:
   1. Call `get_provenance(run_id)` and read `metrics`.
   2. Decide whether to accept the current result (`Fproxy >= threshold`) or to refine it.
   3. If refinement is needed, design a `mutate_run` that:

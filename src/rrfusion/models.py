@@ -205,39 +205,6 @@ SearchParams = FulltextParams | SemanticParams
 MultiLaneTool = Literal["search_fulltext", "search_semantic"]
 
 
-class SearchToolResponse(BaseModel):
-    lane: Lane
-    run_id_lane: str
-    meta: Meta
-    count_returned: int
-    truncated: bool
-    code_freqs: dict[str, dict[str, int]] | None = None
-    cursor: str | None = None
-
-
-class FusionRun(BaseModel):
-    lane: Lane
-    run_id: str
-
-
-class FusionParams(BaseModel):
-    runs: list[FusionRun]
-    weights: dict[Lane, float] = Field(
-        default_factory=lambda: {"fulltext": 1.0, "semantic": 1.0, "original_dense": 1.0}
-    )
-    rrf_k: int = 60
-    beta_fuse: float = 1.0
-    trace_id: str | None = None
-
-
-class FusionResult(BaseModel):
-    run_id: str
-    ids: list[str]
-    rank: list[int]
-    score: list[float] | None = None
-    meta: dict[str, Any]
-
-
 class PeekSnippetsRequest(BaseModel):
     run_id: str
     offset: int = 0
@@ -414,6 +381,8 @@ class MutateRunResponse(BaseModel):
 
 class ProvenanceRequest(BaseModel):
     run_id: str
+    top_k_lane: int = 20
+    top_k_code: int = 30
     trace_id: str | None = None
 
 
@@ -435,6 +404,7 @@ class ProvenanceResponse(BaseModel):
     code_distributions: dict[str, dict[str, int]] | None = None
     config_snapshot: dict[str, Any] | None = None
     metrics: FusionMetrics | None = None
+    representatives: list["RepresentativeEntry"] | None = None
 
 
 class RepresentativeEntry(BaseModel):
@@ -566,14 +536,11 @@ class MultiLaneEntryResponse(BaseModel):
         default=None,
         description="Elapsed time in milliseconds for the lane execution if measured.",
     )
-    response: SearchToolResponse | None = Field(
+    handle: RunHandle | None = Field(
         default=None,
-        description="Underlying search tool response when status == success.",
+        description="Lane run handle when status == success.",
     )
-    error: MultiLaneEntryError | None = Field(
-        default=None,
-        description="Structured error when the lane execution did not succeed.",
-    )
+    error: MultiLaneEntryError | None = None
 
 
 class MultiLaneSearchMeta(BaseModel):
@@ -595,6 +562,11 @@ class SearchMetaLite(BaseModel):
     took_ms: int | None = None
 
 
+class RunHandle(BaseModel):
+    run_id: str
+    meta: SearchMetaLite
+
+
 class LaneCodeSummary(BaseModel):
     top_codes: dict[str, list[str]] | None = None
 
@@ -604,8 +576,7 @@ class MultiLaneLaneSummary(BaseModel):
     tool: MultiLaneTool
     lane: Lane
     status: MultiLaneStatus
-    run_id_lane: str | None = None
-    meta: SearchMetaLite | None = None
+    handle: RunHandle | None = None
     code_summary: LaneCodeSummary | None = None
     error_code: str | None = None
     error_message: str | None = None
@@ -617,14 +588,6 @@ class MultiLaneSearchLite(BaseModel):
     took_ms_total: int | None = None
     success_count: int | None = None
     error_count: int | None = None
-
-
-class BlendLite(BaseModel):
-    run_id: str
-    top_ids: list[str]
-    frontier: list[BlendFrontierEntry]
-    top_codes: dict[str, list[str]] | None = None
-    meta: dict[str, Any] | None = None
 
 
 __all__ = [
@@ -639,10 +602,6 @@ __all__ = [
     "DBSearchResponse",
     "FulltextParams",
     "SemanticParams",
-    "SearchToolResponse",
-    "FusionRun",
-    "FusionParams",
-    "FusionResult",
     "PeekSnippetsRequest",
     "PeekSnippetsResponse",
     "PeekMeta",
@@ -676,6 +635,5 @@ __all__ = [
     "MultiLaneLaneSummary",
     "SearchMetaLite",
     "LaneCodeSummary",
-    "BlendLite",
     "RepresentativeEntry",
 ]

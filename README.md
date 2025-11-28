@@ -23,10 +23,10 @@ This scaffold includes:
 - [MCP Tool Reference](#mcp-tool-reference)
   - [`search_fulltext`](#search_fulltext)
   - [`search_semantic`](#search_semantic)
-  - [`blend_frontier_codeaware`](#blend_frontier_codeaware)
+  - Fusion (`rrf_blend_frontier`)
   - [`peek_snippets`](#peek_snippets)
   - [`get_snippets`](#get_snippets)
-  - [`mutate_run`](#mutate_run)
+  - [`rrf_mutate_run`](#rrf_mutate_run)
   - [`get_provenance`](#get_provenance)
 
 ## Quick start (Docker)
@@ -164,7 +164,7 @@ Because `cargo make` reuses the same commands locally and in CI, you can run `ca
 
 All MCP tools that return structured responses now capture the wall-clock milliseconds it took to fulfill the request.  
 - `search_fulltext` / `search_semantic` and `provenance` embed the duration in `response.meta.took_ms`.  
-- `blend_frontier_codeaware` / `mutate_run` place `took_ms` inside the `meta` dictionary they return.  
+- `rrf_blend_frontier` / `rrf_mutate_run` place `took_ms` inside the `meta` dictionary they return.  
 - `peek_snippets` exposes it on `meta.took_ms`.
 
 The integration suite (`tests/integration/test_mcp_integration.py`) and CLI-driven E2E runner (`tests/e2e/test_mcp_tools.py` plus `src/rrfusion/scripts/run_fastmcp_e2e.py`) assert this metadata is present, so you can safely rely on those fields when instrumenting agent telemetry or alerting.
@@ -174,9 +174,9 @@ The integration suite (`tests/integration/test_mcp_integration.py`) and CLI-driv
 The MCP loop always starts with independent lane searches, continues with fusion/frontier exploration, and then spends snippet budget.
 
 1. Run both `search_fulltext` and `search_semantic` with identical query/filters to mint lane handles, choosing between `search_fulltext.wide`, `.focused`, or `.hybrid` to match your recall/precision trade-off before fusion.
-2. Feed the resulting `run_id_lane` values to `blend_frontier_codeaware` to decide which `k` frontier to review.
+2. For fusion workflows, obtain lane run handles via `rrf_search_fulltext_raw` / `rrf_search_semantic_raw` and feed them to `rrf_blend_frontier` to decide which `k` frontier to review via `get_provenance`.
 3. Use `peek_snippets` sparingly to preview the fused ordering, then `get_snippets` for the short-listed doc IDs. When budgets should not trim the payload, call `get_publication` instead; it pulls the uncapped publication text via the backend (`id_type` selects `pub_id`, `app_doc_id`, `app_id`, or `exam_id`).
-4. When you need to branch on weights, RRF constants, or code targeting, call `mutate_run` instead of issuing new lane searches.
+4. When you need to branch on weights, RRF constants, or code targeting, call `rrf_mutate_run` instead of issuing new lane searches.
 5. Preserve provenance by logging the fusion `run_id` and, when necessary, resolve it later via `get_provenance`.
 
 **Classification guidance:** When the mission targets JP families, bias `target_profile` toward FI codes first and treat FT codes as secondary corroboration; rely on IPC/CPC evidence for other jurisdictions or when FI/FT labels are missing.
@@ -189,102 +189,73 @@ Each section shows the FastMCP-style decoration you would give the tool in an ag
 
 ```python
 from rrfusion.mcp.host import mcp
+from typing import Literal
 
 @mcp.tool
 async def search_fulltext(
     query: str,
     filters: list[Cond] | None = None,
-    fields: list[SnippetField] | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-) -> SearchToolResponse:
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]:
     """
-    signature: search_fulltext(query: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, code_freq_top_k: int | None = 30, trace_id: str | None = None)
+    signature: search_fulltext(
+        query: str,
+        filters: list[Cond] | None = None,
+        top_k: int = 50,
+        id_type: Literal["pub_id","app_doc_id","app_id","exam_id"] = "app_id",
+    )
     prompts/list:
-    - "List high-recall patent families mentioning {query} with IPC filters {filters}"
-    - "List prior art using only keyword evidence for {query}"
-    prompts/get:
-    - "Get a lane run handle I can feed into fusion for {query}"
+    - "List high-recall patent IDs mentioning {query} with IPC filters {filters}"
+    - "List prior art IDs using only keyword evidence for {query}"
     """
-    Note: `search_fulltext` no longer exposes `budget_bytes`; snippet byte caps are managed by `peek_snippets` and `get_snippets`.
-    Note: `SearchToolResponse` omits the document list—only `run_id_lane`, `meta`, and truncated `code_freqs` are returned. Adjust `code_freq_top_k` (default 30) if you want more code entries for downstream analysis.
 ```
 
-The full-text lane maximizes recall by leaning on raw keyword scoring from the DB stub. Pick the lane variant you need (`search_fulltext.wide`, `.focused`, or `.hybrid`) before adding semantic context, and always capture the `run_id_lane` it returns.
-By default the lane returns `fields` = ["abst","title","claim"], so you only index the title/abstract/claims; add `"desc"` explicitly when you need longer descriptive passages.
+This user-facing tool runs BM25/TT-IDF-style full-text search and returns only a ranked list of identifiers (by default `app_id`). It does not expose lane handles or code frequencies; for RRFusion workflows that need lane runs, call `rrf_search_fulltext_raw` instead.
 
 ### `search_semantic`
 
 ```python
 from rrfusion.mcp.host import mcp
-
 from typing import Literal
 
 @mcp.tool
 async def search_semantic(
     text: str,
     filters: list[Cond] | None = None,
-    fields: list[SnippetField] | None = None,
-    top_k: int = 800,
-    code_freq_top_k: int | None = 30,
-    trace_id: str | None = None,
-    semantic_style: Literal["default", "original_dense"] = "default",
-) -> SearchToolResponse:
+    top_k: int = 50,
+    id_type: Literal["pub_id", "app_doc_id", "app_id", "exam_id"] = "app_id",
+) -> list[str]:
     """
-    signature: search_semantic(text: str, filters: list[Cond] | None = None, fields: list[SnippetField] | None = None, top_k: int = 800, code_freq_top_k: int | None = 30, trace_id: str | None = None, semantic_style: Literal["default","original_dense"] = "default")
+    signature: search_semantic(
+        text: str,
+        filters: list[Cond] | None = None,
+        top_k: int = 50,
+        id_type: Literal["pub_id","app_doc_id","app_id","exam_id"] = "app_id",
+    )
     prompts/list:
-    - "List semantically similar inventions about {text}"
-    - "List embedding-driven hits that stay on-spec for {text}"
-    prompts/get:
-    - "Get the semantic lane handle so I can blend with run {text}"
+    - "List semantically similar patent IDs for {text}"
+    - "List prior art IDs using semantic similarity for {text}"
     """
-    ```
+```
 
-    This lane biases toward precision by using embedding similarity. Pair it with the full-text lane for every query so downstream fusion can rebalance precision/recall on demand.
-    Note: `SearchToolResponse` omits the document list—only `run_id_lane`, `meta`, and `code_freqs` are returned. Tune `code_freq_top_k` (default 30) when you need more code coverage for analysis.
-    Like the full-text lane, `fields` defaults to ["abst","title","claim"], giving you the same lightweight sections before you request `"desc"` for extra description.
-    Set `semantic_style="original_dense"` if you need the dedicated dense-vector lane (shorter input, dense scoring) while `semantic_style="default"` keeps the regular BM25-like pipeline.
-    Note: `search_semantic` also omits `budget_bytes`; snippet byte caps are enforced when you later call `peek_snippets` or `get_snippets`.
+This tool runs an embedding-based semantic search and, like `search_fulltext`, returns only a list of identifiers. Use it in user-facing flows; for backend fusion pipelines, obtain lane handles via `rrf_search_semantic_raw`.
 
-### `blend_frontier_codeaware`
+### `rrf_blend_frontier`
 
 ```python
 from rrfusion.mcp.host import mcp
 
 @mcp.tool
-async def blend_frontier_codeaware(
-    runs: list[BlendRunInput],
-    weights: dict[str, float] | None = None,
-    rrf_k: int = 60,
-    beta_fuse: float = 1.0,
-    target_profile: dict[str, dict[str, float]] | None = None,
-    top_m_per_lane: dict[str, int] | None = None,
-    k_grid: list[int] | None = None,
-    peek: PeekConfig | None = None,
-) -> BlendResponse:
+async def rrf_blend_frontier(request: BlendRequest) -> RunHandle:
     """
-    signature: blend_frontier_codeaware(
-        runs: list[BlendRunInput],
-        weights: dict[str, float] | None = None,
-        rrf_k: int = 60,
-        beta_fuse: float = 1.0,
-        target_profile: dict[str, dict[str, float]] | None = None,
-        top_m_per_lane: dict[str, int] | None = None,
-        k_grid: list[int] | None = None,
-        peek: PeekConfig | None = None,
-    )
-    prompts/list:
-    - "List the best fusion frontier balancing recall and precision for {runs}"
-    - "List fused rankings that favor IPC {target_profile}"
+    signature: rrf_blend_frontier(request: BlendRequest) -> RunHandle
     prompts/get:
-    - "Get a fusion run_id with frontier stats so I can peek snippets for {runs}"
+    - "Fuse lane runs in {request.runs} into a single fusion run handle with frontier stats"
     """
 ```
 
-Fusion consumes multiple lane handles, applies RRF plus optional code-aware boosts, and returns the final ranking with a `frontier` summary. Reuse the `run_id` it emits for snippet peeks, provenance, or further mutation.
-
-When an LLM only needs the fused handle, frontier stats, and a few top codes, call `blend_frontier_codeaware_lite`. It shares the same arguments as `blend_frontier_codeaware` but returns a `BlendLite` payload containing `run_id`, up to 20 `top_ids`, a trimmed `frontier`, and taxonomy summaries; the heavy `pairs_top`, `contrib`, and `recipe` fields are omitted to keep the context slim.
+This backend tool fuses multiple lane runs (`BlendRunInput` with `{lane, run_id_lane}`) using RRF plus optional code-aware boosts. It stores the fused ranking in Redis and returns a `RunHandle` (fusion `run_id` + lightweight meta). Use `get_provenance` to inspect frontier metrics and code distributions, and `peek_snippets` / `get_snippets` to read text.
 
 ### `peek_snippets`
 
@@ -368,26 +339,21 @@ async def get_snippets(
 
 Use this tool after you already know which doc IDs matter. It skips pagination and returns a simple `{doc_id: {field: text}}` mapping for write-ups or citation exports.
 
-### `mutate_run`
+### `rrf_mutate_run`
 
 ```python
 from rrfusion.mcp.host import mcp
 
 @mcp.tool
-async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
+async def rrf_mutate_run(run_id: str, delta: MutateDelta) -> RunHandle:
     """
-    signature: mutate_run(run_id: str, delta: MutateDelta)
-    prompts/list:
-    - "List how the ranking shifts if we bump semantic weight via {delta.weights}"
-    - "List frontier deltas after tightening beta_fuse/rrf_k on run {run_id}"
+    signature: rrf_mutate_run(run_id: str, delta: MutateDelta) -> RunHandle
     prompts/get:
-    - "Get a fresh run_id derived from {run_id} with updated weights/filters"
+    - "Create a new fusion run handle by tweaking weights/rrf_k/beta_fuse on {run_id}"
     """
 ```
 
-`mutate_run` copies the cached lane results, reapplies the tweaked recipe, and yields a brand-new fusion run (with lineage). Prefer this over re-searching when you only change blending parameters.
-
-`delta` provides replacement values for lane weights, `rrf_k`, and `beta_fuse`; each supplied field overwrites the stored recipe value (filters or other offsets are not supported).
+`rrf_mutate_run` copies the cached lane results, reapplies the tweaked recipe, and yields a brand-new fusion run (with lineage). Prefer this over re-searching when you only change blending parameters. `delta` provides replacement values for lane weights, `rrf_k`, and `beta_fuse`; each supplied field overwrites the stored recipe value.
 
 ### `get_provenance`
 
@@ -395,9 +361,13 @@ async def mutate_run(run_id: str, delta: MutateDelta) -> MutateResponse:
 from rrfusion.mcp.host import mcp
 
 @mcp.tool
-async def get_provenance(run_id: str) -> ProvenanceResponse:
+async def get_provenance(
+    run_id: str,
+    top_k_lane: int = 20,
+    top_k_code: int = 30,
+) -> ProvenanceResponse:
     """
-    signature: get_provenance(run_id: str)
+    signature: get_provenance(run_id: str, top_k_lane: int = 20, top_k_code: int = 30)
     prompts/list:
     - "List the recipe parameters that produced fusion run {run_id}"
     - "List the historical lineage for run {run_id}"

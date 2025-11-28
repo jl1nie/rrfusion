@@ -10,7 +10,7 @@
 - `docker compose -f infra/compose.ci.yml up --build rrfusion-redis rrfusion-db-stub rrfusion-mcp` starts **redis**, **db-stub**, and **mcp** in the hermetic CI stack that the tasks and docs rely on; all services report healthy.
 - MCP exposes every tool at `/mcp/...` with the exact signatures listed below.
 - `search_fulltext/semantic` call the DB stub, store results in Redis ZSETs, and return only handles (`run_id_lane`, cursors, metadata).
-- `blend_frontier_codeaware` performs baseline RRF in Python, returns fused IDs, a mocked frontier, code freqs, and run `recipe`.
+- `rrf_blend_frontier` performs baseline RRF in Python, returns a fused run handle, and stores fused IDs, frontier, code freqs, and run `recipe`.
 - `peek_snippets`/`get_snippets` call the stub, enforcing `PEEK_MAX_DOCS` + `PEEK_BUDGET_BYTES`.
 - `mutate_run` mints a new `run_id` (can reuse cached data at this phase).
 - `get_provenance` returns stored metadata/recipe.
@@ -134,7 +134,7 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
   ```
 - `doc_id` values are the EPODOC-style application identifier (app_id) returned by each lane, so snippet fields that expose `app_doc_id`/`app_id` will echo the `doc_id` you received from the lane.
 - `pub_id` remains available as a separate field for the publication number when needed.
-  - Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
+- Cap is driven by `STUB_MAX_RESULTS` (default 2k). Set it to `10000` in `infra/.env` and restart the stub to stress Redis with 10k members per lane.
 - `POST /snippets`  
   Body = `{ "ids": [...], "fields": [...], "per_field_chars": {...} }`.  
   Returns `{ doc_id: { field: truncated_text } }`, respecting char caps.
@@ -151,67 +151,29 @@ Provided by `infra/compose.prod.yml`. Ensure persistence via the `redis-data` vo
 
 ## 5. MCP Tools (HTTP APIs)
 
-### 5.1 `search_fulltext` / `search_semantic`
-Fetch top-k results from the DB stub, store them in Redis, and return handles only.
+### 5.1 `rrf_blend_frontier`
+Perform RRF fusion with optional code awareness; store ranking/frontier in Redis and return a fusion run handle.
 
 **Input**
 ```json
 {
-  "query": "string",           // fulltext lane variant (wide/focused/hybrid); semantic lane uses the `text` field instead
-  "filters": [
-    { "lop": "and", "field": "ipc", "op": "in", "value": ["H04L"] }
-  ],
-  "top_k": 800,
-  "trace_id": "string"
-}
-```
-
-> note: these search calls no longer support `budget_bytes`; snippet byte budgets are enforced via `peek_snippets`/`get_snippets`.
-
-**Output**
-```json
-{
-  "lane": "fulltext" | "semantic",
-  "run_id_lane": "string",
-  "count_returned": 800,
-  "truncated": true,
-  "code_freqs": {
-    "ipc": {"H04L":12},
-    "cpc": {"H04L9/32":6},
-    "fi": {"H04L1/00":5},
-    "ft": {"432":5}
-  },
-  "cursor": "string"
-}
-```
-
-**Implementation notes**
-- Stub milestone: use raw stub scores, store them directly, and return metadata.
-- Algorithm milestone: store RRF-ready scores (`w_lane/(rrf_k + rank)`), and persist code freqs (IPC/CPC/FI/FT) + doc caches for later fusion. `filters` are flattened `Cond` lists, `fields` are `SnippetField`s, and `trace_id` can be set for tracing.
-
----
-
-### 5.2 `blend_frontier_codeaware`
-Perform RRF fusion with optional code awareness and frontier reporting.
-
-**Input**
-```json
-{
-  "runs": [
-    { "lane": "fulltext", "run_id_lane": "string" },
-    { "lane": "semantic",  "run_id_lane": "string" }
-  ],
-  "weights": { "fulltext": 1.0, "semantic": 1.0, "code": 0.5 },
-  "rrf_k": 60,
-  "beta_fuse": 1.0,
-  "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },
-  "top_m_per_lane": { "fulltext": 10000, "semantic": 10000 },
-  "k_grid": [10,20,30,40,50,80,100,150,200],
-  "peek": {
-    "count": 10,
-    "fields": ["title","abst"],
-    "per_field_chars": { "title": 120, "abst": 360 },
-    "budget_bytes": 4096
+  "request": {
+    "runs": [
+      { "lane": "fulltext", "run_id_lane": "string" },
+      { "lane": "semantic",  "run_id_lane": "string" }
+    ],
+    "weights": { "fulltext": 1.0, "semantic": 1.0, "code": 0.5 },
+    "rrf_k": 60,
+    "beta_fuse": 1.0,
+    "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },
+    "top_m_per_lane": { "fulltext": 10000, "semantic": 10000 },
+    "k_grid": [10,20,30,40,50,80,100,150,200],
+    "peek": {
+      "count": 10,
+      "fields": ["title","abst"],
+      "per_field_chars": { "title": 120, "abst": 360 },
+      "budget_bytes": 4096
+    }
   }
 }
 ```
@@ -220,22 +182,17 @@ Perform RRF fusion with optional code awareness and frontier reporting.
 ```json
 {
   "run_id": "string",
-  "pairs_top": [["123456789", 0.913], ["..."]],
-  "frontier": [{"k": 50, "P_star": 0.62, "R_star": 0.55, "F_beta_star": 0.58}],
-  "freqs_topk": {
-    "ipc": {"H04L": 22},
-    "cpc": {"H04L9/32": 11},
-    "fi": {"H04L1/00": 8},
-    "ft": {"432": 5}
-  },
-  "contrib": { "123456789": {"recall":0.4,"semantic":0.4,"code":0.2} },
-  "peek_samples": [ { "id":"123456789", "title":"...", "abst":"..." } ]
+  "meta": {
+    "top_k": 200,
+    "count_returned": 200,
+    "took_ms": 123
+  }
 }
 ```
 
 **Implementation notes**
 - Stub milestone: run RRF in Python, generate a mocked frontier (e.g., random relevance prior), store fusion results in Redis for consistency.
-- Algorithm milestone: use Redis `ZUNIONSTORE`, apply code-aware adjustments (§6), compute true frontier proxies and contribution shares. Include lineage metadata for reproducibility.
+- Algorithm milestone: use Redis `ZUNIONSTORE`, apply code-aware adjustments (§6), compute true frontier proxies and contribution shares, and persist `freqs_topk`/`contrib`/`metrics` in the fusion run meta. Frontiersやコード分布は `get_provenance` から取得する。
 - Implementation note: `target_profile` now accepts IPC/CPC/FI/FT maps, so the fusion run also captures FI/FT frequencies in `freqs_topk`. The new `freq-snapshot` scenario validates those hashes before peek/mutate steps.
 
 ---
@@ -425,17 +382,16 @@ Return `recipe` and lineage for auditability.
 ## 7. LLM Operating Rules (prompt-ready)
 - Always fetch lanes with the **same query/filters**.
 - Never request full `(doc_id, score)` arrays; use handles only.
-- Fuse with `blend_frontier_codeaware`; pick `k` from the returned `frontier` (or explicit `top_K_read`).
+- Fuse with `rrf_blend_frontier`; pick `k` from `get_provenance` frontier metrics (or explicit `top_K_read`).
 - Use `peek_snippets` sparingly (≤ `PEEK_MAX_DOCS`, obey `PEEK_BUDGET_BYTES`).
 - Tune precision vs recall using `weights` and `rrf_k` (smaller = precision bias).
 
 ---
 
 ## 8. Testing & Acceptance
-- **Smoke**: `search_fulltext` → `search_semantic` → `blend_frontier_codeaware` → `peek_snippets`. Assert run IDs exist, Redis ZSETs populated, frontier non-empty, snippet budgets respected.
+- **Smoke**: `search_fulltext` → `search_semantic` → `rrf_blend_frontier` → `peek_snippets`. Assert run IDs exist, Redis ZSETs populated, frontier non-empty, snippet budgets respected.
 - **Unit**: fusion math, code boosts, snippet truncation.
-- **Integration**: `mutate_run` delta path, `get_provenance` lineage, Redis TTL behavior.
-+ **Acceptance checklist**
+- **Integration**: `rrf_mutate_run` delta path, `get_provenance` lineage, Redis TTL behavior.
 -  - `docker compose -f infra/compose.ci.yml up -d rrfusion-redis rrfusion-db-stub rrfusion-mcp` starts Redis + services healthy.
 -  - MCP reads `REDIS_URL`, writes lane ZSETs, and fuses via Redis.
 -  - Frontier computation is server-side and reproducible via `recipe`.

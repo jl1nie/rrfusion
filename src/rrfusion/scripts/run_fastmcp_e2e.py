@@ -69,24 +69,44 @@ async def _prepare_lane_runs(
     *,
     require_large: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    base_payload = {
-        "top_k": cfg.stub_max_results,
-        "filters": None,
-    }
+    """
+    Prepare lane runs via backend-oriented rrf_search_*_raw tools.
+
+    This returns lane run handles plus stored Redis metadata, rather than relying
+    on legacy search_* tool response payloads.
+    """
     lane_runs: dict[str, dict[str, Any]] = {}
     for lane in ("fulltext", "semantic"):
-        payload = {
-            **base_payload,
-            "query" if lane == "fulltext" else "text": "fastmcp fusion scenario",
-        }
-        response = await _call_tool(client, f"search_{lane}", payload, timeout=cfg.timeout)
-        search_meta = response["meta"]
-        _assert_took_ms(search_meta.get("took_ms"), f"{lane} search")
-        if require_large and response["count_returned"] < 2000:
-            raise RuntimeError(f"{lane} lane returned only {response['count_returned']} docs")
-        meta = await _get_run_meta(redis_client, response["run_id_lane"])
+        if lane == "fulltext":
+            tool_name = "rrf_search_fulltext_raw"
+            params: dict[str, Any] = {
+                "query": "fastmcp fusion scenario",
+                "top_k": cfg.stub_max_results,
+                "filters": None,
+            }
+        else:
+            tool_name = "rrf_search_semantic_raw"
+            params = {
+                "text": "fastmcp fusion scenario",
+                "top_k": cfg.stub_max_results,
+                "filters": None,
+                "semantic_style": "default",
+            }
+        handle = await _call_tool(
+            client,
+            tool_name,
+            {"params": params},
+            timeout=cfg.timeout,
+        )
+        meta_payload = handle.get("meta") or {}
+        _assert_took_ms(meta_payload.get("took_ms"), f"{lane} search")
+        count_returned = meta_payload.get("count_returned") or 0
+        if require_large and count_returned < 2000:
+            raise RuntimeError(f"{lane} lane returned only {count_returned} docs")
+        run_id = handle["run_id"]
+        meta = await _get_run_meta(redis_client, run_id)
         zcard = await redis_client.zcard(meta["lane_key"])
-        lane_runs[lane] = {"response": response, "meta": meta, "zcard": zcard}
+        lane_runs[lane] = {"handle": handle, "meta": meta, "zcard": zcard}
     return lane_runs
 
 
@@ -97,13 +117,21 @@ async def _prepare_fusion_run(
     *,
     require_large: bool = False,
 ) -> dict[str, Any]:
-    lane_runs = await _prepare_lane_runs(client, redis_client, cfg, require_large=require_large)
+    lane_runs = await _prepare_lane_runs(
+        client, redis_client, cfg, require_large=require_large
+    )
 
     blend_payload = {
-            "runs": [
-                {"lane": "fulltext", "run_id_lane": lane_runs["fulltext"]["response"]["run_id_lane"]},
-                {"lane": "semantic", "run_id_lane": lane_runs["semantic"]["response"]["run_id_lane"]},
-            ],
+        "runs": [
+            {
+                "lane": "fulltext",
+                "run_id_lane": lane_runs["fulltext"]["handle"]["run_id"],
+            },
+            {
+                "lane": "semantic",
+                "run_id_lane": lane_runs["semantic"]["handle"]["run_id"],
+            },
+        ],
         "weights": {"recall": 1.0, "precision": 1.0, "semantic": 1.0, "code": 0.5},
         "rrf_k": 60,
         "beta_fuse": 1.0,
@@ -112,9 +140,8 @@ async def _prepare_fusion_run(
         "k_grid": [10, 50, 100, 200, 500],
         "peek": None,
     }
-    fusion = await _call_tool(client, "blend_frontier_codeaware", blend_payload, timeout=cfg.timeout)
-    fusion_meta = fusion.get("meta", {})
-    _assert_took_ms(fusion_meta.get("took_ms"), "fusion run")
+    fusion = await _call_tool(client, "rrf_blend_frontier", {"request": blend_payload}, timeout=cfg.timeout)
+    _assert_took_ms(fusion.get("meta", {}).get("took_ms"), "fusion run")
     return fusion
 
 
@@ -123,18 +150,23 @@ async def scenario_search_counts(cfg: RunnerConfig) -> None:
     await redis_client.ping()
 
     async with _make_client(cfg) as client:
-        lane_runs = await _prepare_lane_runs(client, redis_client, cfg, require_large=False)
+        lane_runs = await _prepare_lane_runs(
+            client, redis_client, cfg, require_large=False
+        )
         expected_count = min(cfg.stub_max_results, cfg.stub_max_results)
         for lane, data in lane_runs.items():
-            payload = data["response"]
-            payload_meta = payload["meta"]
-            _assert_took_ms(payload_meta.get("took_ms"), f"{lane} search counts")
-            if payload["count_returned"] != expected_count:
-                raise AssertionError(f"{lane} lane returned unexpected size {payload['count_returned']}")
-            if payload["code_freqs"]["ipc"] == {} or payload["code_freqs"]["cpc"] == {}:
-                raise AssertionError(f"{lane} lane missing code freqs")
-            if data["zcard"] != payload["count_returned"]:
-                raise AssertionError(f"{lane} lane zcard mismatch {data['zcard']}")
+            handle = data["handle"]
+            meta_payload = handle.get("meta") or {}
+            _assert_took_ms(meta_payload.get("took_ms"), f"{lane} search counts")
+            count_returned = meta_payload.get("count_returned")
+            if count_returned != expected_count:
+                raise AssertionError(
+                    f"{lane} lane returned unexpected size {count_returned}"
+                )
+            if data["zcard"] != count_returned:
+                raise AssertionError(
+                    f"{lane} lane zcard mismatch {data['zcard']}"
+                )
 
     await redis_client.aclose()
 
@@ -144,19 +176,32 @@ async def scenario_blend_frontier(cfg: RunnerConfig) -> None:
     await redis_client.ping()
 
     async with _make_client(cfg) as client:
+        # rrf_blend_frontier now returns a RunHandle; validate fusion via snippets
+        # and stored Redis metadata instead of inline payload fields.
         fusion = await _prepare_fusion_run(client, redis_client, cfg, require_large=False)
-        if not fusion["pairs_top"]:
-            raise AssertionError("fusion returned empty ranking")
-        if not fusion["frontier"]:
-            raise AssertionError("frontier missing entries")
-        freqs = fusion["freqs_topk"]
-        if not freqs["ipc"]:
-            raise AssertionError("IPC freqs missing in fusion response")
-        if not freqs["fi"]:
-            raise AssertionError("FI freqs missing in fusion response")
-        if not freqs["ft"]:
-            raise AssertionError("FT freqs missing in fusion response")
-        _assert_took_ms(fusion.get("meta", {}).get("took_ms"), "blend frontier")
+        run_id = fusion["run_id"]
+        meta_payload = fusion.get("meta") or {}
+        _assert_took_ms(meta_payload.get("took_ms"), "blend frontier")
+
+        # Frontier existence check via peek_snippets
+        peek = await _call_tool(
+            client,
+            "peek_snippets",
+            {"run_id": run_id, "offset": 0, "limit": 20, "budget_bytes": 4096},
+            timeout=cfg.timeout,
+        )
+        if not peek.get("snippets"):
+            raise AssertionError("fusion frontier produced no snippets")
+
+        # Code frequency snapshot from stored run metadata
+        run_meta = await _get_run_meta(redis_client, run_id)
+        freqs = run_meta.get("freqs_topk") or {}
+        if not freqs.get("ipc"):
+            raise AssertionError("IPC freqs missing in fusion metadata")
+        if not freqs.get("fi"):
+            raise AssertionError("FI freqs missing in fusion metadata")
+        if not freqs.get("ft"):
+            raise AssertionError("FT freqs missing in fusion metadata")
 
     await redis_client.aclose()
 
@@ -195,9 +240,10 @@ async def scenario_run_multilane_search_batch(cfg: RunnerConfig) -> None:
         for entry, lane in zip(summaries, lanes):
             if entry.get("lane") != lane["lane"]:
                 raise AssertionError("Lite lane lane mismatch")
-            if not entry.get("run_id_lane"):
-                raise AssertionError("Lite lane missing run_id_lane")
-            meta_payload = entry.get("meta") or {}
+            handle = entry.get("handle") or {}
+            if not handle.get("run_id"):
+                raise AssertionError("Lite lane missing handle.run_id")
+            meta_payload = handle.get("meta") or {}
             if meta_payload.get("top_k") != lane["params"]["top_k"]:
                 raise AssertionError("Lite lane meta top_k mismatch")
             code_summary = entry.get("code_summary") or {}
@@ -208,7 +254,7 @@ async def scenario_run_multilane_search_batch(cfg: RunnerConfig) -> None:
 
 
 async def scenario_run_multilane_search_batch_precise(cfg: RunnerConfig) -> None:
-    """Smoke test the full multi-lane pathway that returns SearchToolResponse payloads."""
+    """Smoke test the full multi-lane pathway using the lite multi-lane tool with RunHandle payloads."""
     redis_client = Redis.from_url(cfg.redis_url)
     await redis_client.ping()
 
@@ -228,26 +274,16 @@ async def scenario_run_multilane_search_batch_precise(cfg: RunnerConfig) -> None
             },
         ]
         payload = {"lanes": lanes, "trace_id": "fastmcp-multilane-batch"}
-        response = await _call_tool(client, "run_multilane_search_precise", payload, timeout=cfg.timeout)
-        results = response.get("results") or []
-        if len(results) != len(lanes):
-            raise AssertionError("run_multilane_search_precise returned unexpected result count")
-        meta = response.get("meta") or {}
-        if meta.get("success_count") != len(lanes):
-            raise AssertionError("multi-lane meta success_count mismatch")
-        if meta.get("error_count") not in (0, None):
-            raise AssertionError("multi-lane meta reports errors")
-        _assert_took_ms(meta.get("took_ms_total"), "run_multilane_search total")
-        for entry, lane in zip(results, lanes):
+        response = await _call_tool(client, "run_multilane_search", payload, timeout=cfg.timeout)
+        summaries = response.get("lanes") or []
+        if len(summaries) != len(lanes):
+            raise AssertionError("run_multilane_search returned unexpected result count")
+        for entry, lane in zip(summaries, lanes):
             if entry.get("status") != "success":
                 raise AssertionError(f"Lane {lane['lane_name']} failed: {entry}")
-            resp = entry.get("response")
-            if not resp:
-                raise AssertionError(f"Lane {lane['lane_name']} missing response payload")
-            if resp.get("lane") != lane["lane"]:
-                raise AssertionError("Lane result lane mismatch")
-            if resp.get("count_returned", 0) <= 0:
-                raise AssertionError("Lane returned zero documents")
+            handle = entry.get("handle") or {}
+            if not handle.get("run_id"):
+                raise AssertionError(f"Lane {lane['lane_name']} missing handle.run_id")
 
 
 async def scenario_freq_snapshot(cfg: RunnerConfig) -> None:
@@ -304,7 +340,14 @@ async def scenario_snippets_missing_id(cfg: RunnerConfig) -> None:
 
     async with _make_client(cfg) as client:
         fusion = await _prepare_fusion_run(client, redis_client, cfg, require_large=False)
-        doc_ids = [doc_id for doc_id, _ in fusion["pairs_top"]][:2]
+        run_id = fusion["run_id"]
+        peek = await _call_tool(
+            client,
+            "peek_snippets",
+            {"run_id": run_id, "offset": 0, "limit": 10, "budget_bytes": 2048},
+            timeout=cfg.timeout,
+        )
+        doc_ids = [snippet["id"] for snippet in peek.get("snippets", [])][:2]
         doc_ids.append("doc-missing-000")
         response = await _call_tool(
             client,
@@ -325,7 +368,7 @@ async def scenario_mutate_missing_run(cfg: RunnerConfig) -> None:
     async with _make_client(cfg) as client:
         try:
             await client.call_tool(
-                "mutate_run",
+                "rrf_mutate_run",
                 {"run_id": "fusion-deadbeef", "delta": {"weights": {"semantic": 1.1}}},
                 timeout=cfg.timeout,
             )
@@ -454,7 +497,14 @@ async def scenario_get_snippets(cfg: RunnerConfig) -> None:
 
     async with _make_client(cfg) as client:
         fusion = await _prepare_fusion_run(client, redis_client, cfg, require_large=False)
-        doc_ids = [doc_id for doc_id, _ in fusion["pairs_top"]][:10]
+        run_id = fusion["run_id"]
+        peek = await _call_tool(
+            client,
+            "peek_snippets",
+            {"run_id": run_id, "offset": 0, "limit": 20, "budget_bytes": 4096},
+            timeout=cfg.timeout,
+        )
+        doc_ids = [snippet["id"] for snippet in peek.get("snippets", [])][:10]
         if not doc_ids:
             raise AssertionError("Fusion run returned no doc IDs for snippet fetch")
 
@@ -488,19 +538,19 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
                 "beta_fuse": 0.8,
             },
         }
-        mutation = await _call_tool(client, "mutate_run", mutate_payload, timeout=cfg.timeout)
-        if mutation["new_run_id"] == fusion["run_id"]:
-            raise AssertionError("mutate_run returned identical run_id")
-        if mutation["recipe"]["delta"]["weights"]["semantic"] <= 1.2:
-            raise AssertionError("mutate_run did not echo semantic weight delta")
-        if mutation["recipe"]["delta"].get("beta_fuse") != 0.8:
-            raise AssertionError("mutate_run delta missing beta_fuse")
-        _assert_took_ms(mutation.get("meta", {}).get("took_ms"), "mutate run")
+        mutation = await _call_tool(
+            client, "rrf_mutate_run", mutate_payload, timeout=cfg.timeout
+        )
+        new_run_id = mutation.get("run_id")
+        if not new_run_id or new_run_id == fusion["run_id"]:
+            raise AssertionError("rrf_mutate_run returned identical or empty run_id")
+        meta_payload = mutation.get("meta") or {}
+        _assert_took_ms(meta_payload.get("took_ms"), "mutate run")
 
         provenance = await _call_tool(
             client,
             "get_provenance",
-            {"run_id": mutation["new_run_id"]},
+            {"run_id": new_run_id},
             timeout=cfg.timeout,
         )
         meta = provenance.get("meta", {})
@@ -509,7 +559,12 @@ async def scenario_mutate_chain(cfg: RunnerConfig) -> None:
             raise AssertionError("Provenance parent mismatch")
         if fusion["run_id"] not in lineage:
             raise AssertionError("Parent run missing from provenance history")
-        if meta.get("recipe", {}).get("beta_fuse") != 0.8:
+        recipe = meta.get("recipe", {})
+        delta = recipe.get("delta", {})
+        weights = delta.get("weights", {})
+        if weights.get("semantic", 0) <= 1.2:
+            raise AssertionError("Provenance delta did not record semantic weight change")
+        if delta.get("beta_fuse") != 0.8:
             raise AssertionError("Provenance recipe beta_fuse mismatch")
         _assert_took_ms(meta.get("took_ms"), "provenance")
 
@@ -544,11 +599,15 @@ async def scenario_peek_mutate_snippets(cfg: RunnerConfig) -> None:
                 "weights": {"semantic": 1.1},
             },
         }
-        mutation = await _call_tool(client, "mutate_run", mutate_payload, timeout=cfg.timeout)
-        new_run_id = mutation.get("new_run_id")
+        mutation = await _call_tool(
+            client, "rrf_mutate_run", mutate_payload, timeout=cfg.timeout
+        )
+        new_run_id = mutation.get("run_id")
         if not new_run_id or new_run_id == base_run_id:
-            raise AssertionError("mutate_run did not produce a distinct new_run_id")
-        _assert_took_ms(mutation.get("meta", {}).get("took_ms"), "peek_mutate mutate_run")
+            raise AssertionError("rrf_mutate_run did not produce a distinct run_id")
+        _assert_took_ms(
+            mutation.get("meta", {}).get("took_ms"), "peek_mutate mutate_run"
+        )
 
         # 4) Second peek_snippets on the mutated frontier
         second_peek = await _call_tool(
@@ -562,7 +621,7 @@ async def scenario_peek_mutate_snippets(cfg: RunnerConfig) -> None:
         _assert_took_ms(second_peek.get("meta", {}).get("took_ms"), "peek_mutate second peek")
 
         # 5) get_snippets on a small set of top candidates for detailed inspection
-        doc_ids = [doc_id for doc_id, _ in fusion["pairs_top"]][:10]
+        doc_ids = [snippet["id"] for snippet in first_peek.get("snippets", [])][:10]
         if not doc_ids:
             raise AssertionError("Fusion run returned no doc IDs for diagnostic get_snippets")
         snippets = await _call_tool(
@@ -587,21 +646,32 @@ async def scenario_semantic_style_dense(cfg: RunnerConfig) -> None:
 
     async with _make_client(cfg) as client:
         payload = {
-            "text": "dense lane smoke test",
-            "top_k": 50,
-            "semantic_style": "original_dense",
-            "filters": None,
+            "params": {
+                "text": "dense lane smoke test",
+                "top_k": 50,
+                "semantic_style": "original_dense",
+                "filters": None,
+            }
         }
-        response = await _call_tool(client, "search_semantic", payload, timeout=cfg.timeout)
-        if response.get("lane") != "original_dense":
-            raise AssertionError("semantic_style request did not route to original_dense lane")
-        if response.get("count_returned", 0) == 0:
+        handle = await _call_tool(
+            client, "rrf_search_semantic_raw", payload, timeout=cfg.timeout
+        )
+        meta_payload = handle.get("meta") or {}
+        _assert_took_ms(
+            meta_payload.get("took_ms"), "semantic style dense search"
+        )
+        if meta_payload.get("count_returned", 0) == 0:
             raise AssertionError("original_dense lane returned no docs")
-        meta = await _get_run_meta(redis_client, response["run_id_lane"])
+
+        run_id = handle["run_id"]
+        meta = await _get_run_meta(redis_client, run_id)
+        if meta.get("lane") != "original_dense":
+            raise AssertionError(
+                "semantic_style request did not route to original_dense lane"
+            )
         params = meta.get("params", {})
         if params.get("semantic_style") != "original_dense":
             raise AssertionError("stored run metadata missing semantic_style flag")
-        _assert_took_ms(response["meta"].get("took_ms"), "semantic style dense search")
 
     await redis_client.aclose()
 
