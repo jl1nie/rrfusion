@@ -31,4 +31,21 @@ def truncate_field(value: str, max_chars: int) -> str:
     return value[:slice_len] + ellipsis
 
 
-__all__ = ["hash_query", "random_doc_id", "truncate_field"]
+def normalize_fi_subgroup(fi: str) -> str:
+    """
+    Normalize FI subgroup codes by stripping trailing edition symbols.
+
+    Examples:
+        "G06V10/82A" -> "G06V10/82"
+        "H04L1/00" -> "H04L1/00" (unchanged)
+    """
+    code = (fi or "").strip()
+    if not code:
+        return ""
+    code = code.upper()
+    if len(code) > 1 and code[-1].isalpha() and code[-2].isdigit():
+        return code[:-1]
+    return code
+
+
+__all__ = ["hash_query", "random_doc_id", "truncate_field", "normalize_fi_subgroup"]

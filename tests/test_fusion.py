@@ -27,9 +27,21 @@ def test_rrf_scores_with_code_boosts():
     assert scores["A"] > scores["B"] > 0
 
     doc_codes = {
-        "A": {"ipc": ["H04L"], "cpc": ["H04L9/32"], "fi": ["H04L1/00"], "ft": ["432"]},
-        "B": {"ipc": ["G06F"], "cpc": [], "fi": [], "ft": ["562"]},
-        "C": {"ipc": ["H04L"], "cpc": [], "fi": ["H04W24/00"], "ft": []},
+        "A": {
+            "ipc": ["H04L"],
+            "cpc": ["H04L9/32"],
+            "fi": ["H04L1/00"],
+            "fi_norm": ["H04L1/00"],
+            "ft": ["432"],
+        },
+        "B": {"ipc": ["G06F"], "cpc": [], "fi": [], "fi_norm": [], "ft": ["562"]},
+        "C": {
+            "ipc": ["H04L"],
+            "cpc": [],
+            "fi": ["H04W24/00"],
+            "fi_norm": ["H04W24/00"],
+            "ft": [],
+        },
     }
     target_profile = {"ipc": {"H04L": 1.0}}
     boosted = apply_code_boosts(scores, contrib, doc_codes, target_profile, weights)
@@ -43,18 +55,21 @@ def test_frontier_and_freqs():
             "ipc_codes": ["H04L"],
             "cpc_codes": ["H04L9/32"],
             "fi_codes": ["H04L1/00"],
+            "fi_norm_codes": ["H04L1/00"],
             "ft_codes": ["432"],
         },
         "B": {
             "ipc_codes": ["G06F"],
             "cpc_codes": [],
             "fi_codes": [],
+            "fi_norm_codes": [],
             "ft_codes": ["562"],
         },
         "C": {
             "ipc_codes": ["H04L"],
             "cpc_codes": [],
             "fi_codes": ["H04W24/00"],
+            "fi_norm_codes": ["H04W24/00"],
             "ft_codes": [],
         },
     }
@@ -75,12 +90,14 @@ def test_aggregate_code_freqs_includes_fi_ft():
             "ipc_codes": ["H04L"],
             "cpc_codes": ["H04L9/32"],
             "fi_codes": ["H04L1/00", "H04W24/00"],
+            "fi_norm_codes": ["H04L1/00", "H04W24/00"],
             "ft_codes": ["432"],
         },
         "B": {
             "ipc_codes": ["G06F"],
             "cpc_codes": ["G06F3/00"],
             "fi_codes": ["H04L1/00"],
+            "fi_norm_codes": ["H04L1/00"],
             "ft_codes": ["562"],
         },
     }
@@ -133,6 +150,7 @@ def test_compute_pi_scores_combines_signals():
             "ipc_codes": ["H04L"],
             "cpc_codes": [],
             "fi_codes": [],
+            "fi_norm_codes": [],
             "ft_codes": [],
         },
         "B": {
@@ -142,6 +160,7 @@ def test_compute_pi_scores_combines_signals():
             "ipc_codes": ["G06F"],
             "cpc_codes": [],
             "fi_codes": [],
+            "fi_norm_codes": [],
             "ft_codes": [],
         },
     }
@@ -195,13 +214,14 @@ def test_compute_las_reflects_overlap():
 
 def test_compute_ccw_prefers_homogeneous_codes():
     doc_meta = {
-        "A": {"fi_codes": ["H04L1/00"]},
-        "B": {"fi_codes": ["H04L1/00"]},
-        "C": {"fi_codes": ["H04L1/00"]},
+        "A": {"fi_codes": ["H04L1/00"], "fi_norm_codes": ["H04L1/00"]},
+        "B": {"fi_codes": ["H04L1/00"], "fi_norm_codes": ["H04L1/00"]},
+        "C": {"fi_codes": ["H04L1/00"], "fi_norm_codes": ["H04L1/00"]},
     }
     ccw = compute_ccw(["A", "B", "C"], doc_meta)
     assert ccw == 1.0
     doc_meta["C"]["fi_codes"] = ["G06F3/00"]
+    doc_meta["C"]["fi_norm_codes"] = ["G06F3/00"]
     ccw_mixed = compute_ccw(["A", "B", "C"], doc_meta)
     assert 0.0 <= ccw_mixed < 1.0
 
@@ -219,9 +239,9 @@ def test_compute_fusion_metrics_produces_proxy_score():
         "semantic": [("B", 2.0), ("C", 1.0)],
     }
     doc_meta = {
-        "A": {"fi_codes": ["H04L1/00"]},
-        "B": {"fi_codes": ["H04L1/00"]},
-        "C": {"fi_codes": ["G06F3/00"]},
+        "A": {"fi_codes": ["H04L1/00"], "fi_norm_codes": ["H04L1/00"]},
+        "B": {"fi_codes": ["H04L1/00"], "fi_norm_codes": ["H04L1/00"]},
+        "C": {"fi_codes": ["G06F3/00"], "fi_norm_codes": ["G06F3/00"]},
     }
     ordered = [("A", 3.0), ("B", 2.5), ("C", 1.0)]
     metrics = compute_fusion_metrics(lanes, doc_meta, ordered)

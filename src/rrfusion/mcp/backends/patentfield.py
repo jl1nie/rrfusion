@@ -16,7 +16,7 @@ from ...models import (
     Meta,
     SearchItem,
 )
-from ...utils import truncate_field
+from ...utils import normalize_fi_subgroup, truncate_field
 from .base import HttpLaneBackend, SearchParams
 
 logger = logging.getLogger(__name__)
@@ -146,6 +146,16 @@ class PatentfieldBackend(HttpLaneBackend):
             if isinstance(value, list):
                 return [str(code) for code in value if code]
         return []
+
+    def _normalize_fi_codes(self, codes: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for code in codes or []:
+            candidate = normalize_fi_subgroup(code)
+            if candidate and candidate not in seen:
+                normalized.append(candidate)
+                seen.add(candidate)
+        return normalized
 
     def _field_text(self, record: dict[str, Any], field: str) -> str:
         candidates: list[str] = []
@@ -293,13 +303,16 @@ class PatentfieldBackend(HttpLaneBackend):
             doc_id = self._doc_id_from_record(hit)
             if not doc_id:
                 continue
+            fi_codes = self._normalize_codes(hit, "fis", "fi_codes")
+            fi_norm_codes = self._normalize_fi_codes(fi_codes)
             items.append(
                 SearchItem(
                     doc_id=doc_id,
                     score=self._normalize_score(hit),
                     ipc_codes=self._normalize_codes(hit, "ipcs", "ipc_codes"),
                     cpc_codes=self._normalize_codes(hit, "cpcs", "cpc_codes"),
-                    fi_codes=self._normalize_codes(hit, "fis", "fi_codes"),
+                    fi_codes=fi_codes,
+                    fi_norm_codes=fi_norm_codes,
                     ft_codes=self._normalize_codes(hit, "fterms", "fts", "ft_codes"),
                 )
             )

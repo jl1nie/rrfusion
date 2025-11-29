@@ -72,7 +72,7 @@ from ..mcp.defaults import (
 )
 from ..snippets import build_snippet_item, cap_by_budget
 from ..storage import RedisStorage
-from ..utils import hash_query
+from ..utils import hash_query, normalize_fi_subgroup
 from .backends import LaneBackend, LaneBackendRegistry
 
 logger = logging.getLogger(__name__)
@@ -195,6 +195,7 @@ def _build_search_item(
     ipc_codes = doc_meta.get("ipc_codes") if include.codes else None
     cpc_codes = doc_meta.get("cpc_codes") if include.codes else None
     fi_codes = doc_meta.get("fi_codes") if include.codes else None
+    fi_norm_codes = doc_meta.get("fi_norm_codes") if include.codes else None
     ft_codes = doc_meta.get("ft_codes") if include.codes else None
     return SearchItem(
         doc_id=doc_id,
@@ -202,6 +203,7 @@ def _build_search_item(
         ipc_codes=ipc_codes,
         cpc_codes=cpc_codes,
         fi_codes=fi_codes,
+        fi_norm_codes=fi_norm_codes,
         ft_codes=ft_codes,
     )
 
@@ -511,15 +513,25 @@ class MCPService:
             lane_meta[run.run_id_lane] = meta
 
         doc_metadata = await self.storage.get_docs(doc_ids)
-        doc_codes = {
-            doc_id: {
+        doc_codes: dict[str, dict[str, list[str]]] = {}
+        for doc_id, meta in doc_metadata.items():
+            fi_norm_codes = meta.get("fi_norm_codes", []) or []
+            if not fi_norm_codes:
+                seen: set[str] = set()
+                fallback: list[str] = []
+                for code in meta.get("fi_codes", []) or []:
+                    normalized = normalize_fi_subgroup(code)
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        fallback.append(normalized)
+                fi_norm_codes = fallback
+            doc_codes[doc_id] = {
                 "ipc": meta.get("ipc_codes", []),
                 "cpc": meta.get("cpc_codes", []),
                 "fi": meta.get("fi_codes", []),
+                "fi_norm": fi_norm_codes,
                 "ft": meta.get("ft_codes", []),
             }
-            for doc_id, meta in doc_metadata.items()
-        }
 
         scores, contributions = compute_rrf_scores(
             lane_docs, request.rrf_k, request.weights

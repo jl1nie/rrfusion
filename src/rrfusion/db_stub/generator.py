@@ -16,7 +16,7 @@ from ..models import (
     SemanticParams,
     SearchItem,
 )
-from ..utils import random_doc_id, truncate_field
+from ..utils import normalize_fi_subgroup, random_doc_id, truncate_field
 
 WORDS = [
     "quantum",
@@ -91,6 +91,13 @@ def _doc_meta(doc_id: str) -> dict:
     cpc_codes = sorted(set(rng.sample(CPC_CODES, k=rng.randint(1, 3))))
     fi_codes = sorted(set(rng.sample(FI_CODES, k=rng.randint(0, 2))))
     ft_codes = sorted(set(rng.sample(FT_CODES, k=rng.randint(0, 2))))
+    fi_norm_codes = sorted(
+        {
+            normalize_fi_subgroup(code)
+            for code in fi_codes
+            if code
+        }
+    )
     title = f"{rng.choice(WORDS).title()} {rng.choice(WORDS).title()} system {doc_id[-3:]}"
     abst = _paragraph(rng, sentences=2, words=10)
     claim = _paragraph(rng, sentences=1, words=14)
@@ -120,6 +127,7 @@ def _doc_meta(doc_id: str) -> dict:
         "ipc_codes": ipc_codes,
         "cpc_codes": cpc_codes,
         "fi_codes": fi_codes,
+        "fi_norm_codes": fi_norm_codes,
         "ft_codes": ft_codes,
     }
 

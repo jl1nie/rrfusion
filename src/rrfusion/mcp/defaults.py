@@ -8,6 +8,7 @@ FUSION_DEFAULT_WEIGHTS: Dict[str, float] = {
     "fulltext": 1.0,
     "semantic": 0.7,
     "code": 0.5,
+    "code_secondary": 0.2,
 }
 
 FUSION_DEFAULT_RRF_K = 80

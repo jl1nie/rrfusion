@@ -45,6 +45,7 @@ async def test_store_lane_run_records_fi_and_ft_frequencies_and_doc_meta() -> No
             "ipc_codes": ["H04L"],
             "cpc_codes": ["H04L9/32"],
             "fi_codes": ["H04L1/00"],
+            "fi_norm_codes": ["H04L1/00"],
             "ft_codes": ["432"],
         }
     ]
@@ -69,6 +70,7 @@ async def test_store_lane_run_records_fi_and_ft_frequencies_and_doc_meta() -> No
 
         doc_meta = await storage.get_docs([docs[0]["doc_id"]])
         assert doc_meta[docs[0]["doc_id"]]["fi_codes"] == docs[0]["fi_codes"]
+        assert doc_meta[docs[0]["doc_id"]]["fi_norm_codes"] == docs[0]["fi_norm_codes"]
         assert doc_meta[docs[0]["doc_id"]]["ft_codes"] == docs[0]["ft_codes"]
     finally:
         await redis.aclose()

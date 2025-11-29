@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from .utils import normalize_fi_subgroup
+
 Lane = Literal["fulltext", "semantic", "original_dense"]
 SemanticStyle = Literal["default", "original_dense"]
 FeatureScope = Literal[
@@ -91,11 +93,36 @@ def _normalize_date_value(value: Any) -> Any:
     return _format(value)
 
 
+def _normalize_fi_values(value: Any) -> Any:
+    """Convert FI filter values to subgroup codes only."""
+    if isinstance(value, str):
+        return normalize_fi_subgroup(value)
+    if isinstance(value, (list, tuple)):
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not item:
+                continue
+            candidate = normalize_fi_subgroup(str(item))
+            if candidate and candidate not in seen:
+                normalized.append(candidate)
+                seen.add(candidate)
+        return normalized
+    return value
+
+
+def _normalize_fi_cond(cond: Cond) -> None:
+    if cond.field == "fi":
+        cond.value = _normalize_fi_values(cond.value)
+
+
 def _conds_from_filter_entry(entry: FilterEntry) -> list[Cond]:
     conds: list[Cond] = []
 
     def add_cond(lop: str, op: str, value: Any) -> None:
-        conds.append(Cond(lop=lop, field=entry.field, op=op, value=value))
+        cond = Cond(lop=lop, field=entry.field, op=op, value=value)
+        _normalize_fi_cond(cond)
+        conds.append(cond)
 
     if entry.include_values:
         add_cond("and", "in", entry.include_values)
@@ -124,6 +151,7 @@ def normalize_filters(filters: list[Any] | None) -> list[Cond]:
     normalized: list[Cond] = []
     for entry in filters:
         if isinstance(entry, Cond):
+            _normalize_fi_cond(entry)
             normalized.append(entry)
         elif isinstance(entry, dict):
             if any(key in entry for key in ("include_values", "include_codes", "include_range")):
@@ -139,7 +167,9 @@ def normalize_filters(filters: list[Any] | None) -> list[Cond]:
                     end = value_dict.get("to") or value_dict.get("end")
                     if start is not None and end is not None:
                         payload["value"] = [start, end]
-                normalized.append(Cond.model_validate(payload))
+                cond = Cond.model_validate(payload)
+                _normalize_fi_cond(cond)
+                normalized.append(cond)
         else:
             raise RuntimeError(f"unexpected filter type: {type(entry)}")
     return normalized
@@ -157,6 +187,7 @@ class SearchItem(BaseModel):
     ipc_codes: list[str] | None = None
     cpc_codes: list[str] | None = None
     fi_codes: list[str] | None = None
+    fi_norm_codes: list[str] | None = None
     ft_codes: list[str] | None = None
 
 

@@ -128,7 +128,7 @@ class RedisStorage:
         return decoded
 
     async def _encode_codes_for_docs(self, docs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-        code_fields = ("ipc_codes", "cpc_codes", "fi_codes", "ft_codes")
+        code_fields = ("ipc_codes", "cpc_codes", "fi_codes", "fi_norm_codes", "ft_codes")
         all_codes: set[str] = set()
         for doc in docs:
             for taxonomy in code_fields:
@@ -203,6 +203,7 @@ class RedisStorage:
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
                 "fi_codes": json.dumps(doc.get("fi_codes", [])),
+                "fi_norm_codes": json.dumps(doc.get("fi_norm_codes", [])),
                 "ft_codes": json.dumps(doc.get("ft_codes", [])),
             }
             pipe.hset(doc_key, mapping=doc_payload)
@@ -261,6 +262,7 @@ class RedisStorage:
                 "ipc_codes": json.dumps(doc.get("ipc_codes", [])),
                 "cpc_codes": json.dumps(doc.get("cpc_codes", [])),
                 "fi_codes": json.dumps(doc.get("fi_codes", [])),
+                "fi_norm_codes": json.dumps(doc.get("fi_norm_codes", [])),
                 "ft_codes": json.dumps(doc.get("ft_codes", [])),
             }
             pipe.hset(doc_key, mapping=doc_payload)
@@ -339,6 +341,7 @@ class RedisStorage:
                 "ipc_codes": await _decode_codes("ipc_codes"),
                 "cpc_codes": await _decode_codes("cpc_codes"),
                 "fi_codes": await _decode_codes("fi_codes"),
+                "fi_norm_codes": await _decode_codes("fi_norm_codes"),
                 "ft_codes": await _decode_codes("ft_codes"),
             }
         return docs

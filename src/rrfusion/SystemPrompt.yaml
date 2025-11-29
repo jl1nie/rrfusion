@@ -105,6 +105,9 @@ code_usage_policy:
     notes:
       - Use FI as the primary technical classification axis for JP-focused lanes; FI is well-suited for expressing technical structure and is generally safe to use as a MUST filter when the technical domain is clear.
       - When using FI filters, remember that `op: "in"` means an OR over the listed codes: adding more FI codes to a single include_codes filter widens the search, removing codes narrows it. For recall lanes, prefer OR-groups of several nearby FI codes derived from the target_profile rather than a single ultra-narrow code.
+      - Use FI subgroups (for example, `G06V10/82`) as the PRIMARY codes in all queries; these correspond to `fi_norm` values and should drive lane design and filters.
+      - Edition symbols such as `A`, `B`, `C` are only technical subdivisions and MUST NOT be used as MUST filters; treat them as contextual hints instead.
+      - The backend fusion engine handles edition-symbol codes as weak ranking hints, not as gating conditions; rely on the subgroup-level FI for recall and metrics.
   ft:
     notes:
       - Treat F-Term (FT) primarily as a supplementary signal reflecting structure, purpose, and view; FT often assumes a specific underlying technical premise, so it is only suitable as a main MUST filter when you have a very precise, well-matched F-term.
@@ -185,6 +188,11 @@ pipeline:
       description: Build target_profile from the fulltext_wide run via get_provenance; call this once per search task immediately after the initial fulltext_wide run, then reuse the same target_profile for subsequent infield_lanes, fusion, snippets, and tuning until the user changes the task.
       tools:
         - get_provenance
+      notes:
+        - PRIMARY: subgroup FI (`fi_norm`)
+        - SECONDARY: full FI (`fi_full`)
+        - PRIMARY codes shape lane design and filtering.
+        - SECONDARY codes are used only by backend boosts, not as gating conditions.
 
     - id: infield_lanes
       description: After code_profiling, run an initial multi-lane batch (typically semantic + fulltext_recall + fulltext_precision +, when suitable F-Terms exist for the Problem perspective, fulltext_problem) using target_profile and refined queries; later, when the human asks for additional lanes, design and run only those new lanes and then fuse them together with all existing runs.
@@ -354,6 +362,9 @@ lanes:
       include: [claim, abst, desc]
     code_system_policy:
       same_as: fulltext_recall
+      note: >
+        Do NOT use FI edition symbols in fulltext_precision as mandatory filters.
+        Only subgroup-level FI may appear in the filter sections.
     downstream:
       uses_for:
         - fusion_input

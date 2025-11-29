@@ -8,12 +8,48 @@ from collections import Counter, defaultdict
 from typing import Any, Sequence
 
 from .models import BlendFrontierEntry, RepresentativeEntry
+from .utils import normalize_fi_subgroup
 
 METRICS_TOP_K = 50
 S_SHAPE_TOP_K = 50
 S_SHAPE_PEAK = 3
 DEFAULT_LAMBDA_SHAPE = 0.5
 DEFAULT_BETA_STRUCT = 1.0
+
+
+def _get_doc_fi_norm_codes(meta: dict[str, Any]) -> list[str]:
+    candidate_codes = meta.get("fi_norm_codes")
+    if candidate_codes:
+        return [code for code in candidate_codes if code]
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for code in meta.get("fi_codes", []) or []:
+        if not code:
+            continue
+        subgroup = normalize_fi_subgroup(code)
+        if subgroup and subgroup not in seen:
+            seen.add(subgroup)
+            normalized.append(subgroup)
+    return normalized
+
+
+def _build_fi_profiles(fi_profile: dict[str, float] | None) -> tuple[dict[str, float], dict[str, float]]:
+    primary: dict[str, float] = {}
+    secondary: dict[str, float] = {}
+    if not fi_profile:
+        return primary, secondary
+    for code, weight in fi_profile.items():
+        try:
+            value = float(weight)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0 or not isinstance(code, str):
+            continue
+        subgroup = normalize_fi_subgroup(code)
+        if subgroup:
+            primary[subgroup] = primary.get(subgroup, 0.0) + value
+        secondary[code] = secondary.get(code, 0.0) + value
+    return primary, secondary
 
 
 def compute_rrf_scores(
@@ -41,21 +77,38 @@ def apply_code_boosts(
     target_profile: dict[str, dict[str, float]],
     weights: dict[str, float],
 ) -> dict[str, float]:
-    code_weight = weights.get("code", 0.0)
-    if not code_weight or not target_profile:
+    primary_weight = weights.get("code", 0.0)
+    secondary_weight = weights.get("code_secondary", 0.0)
+    if not target_profile or (primary_weight <= 0 and secondary_weight <= 0):
         return scores
 
+    fi_primary, fi_secondary = _build_fi_profiles(target_profile.get("fi"))
+    non_fi_taxonomies = ("ipc", "cpc", "ft")
+
     for doc_id, tax_map in doc_codes.items():
-        boost = 0.0
-        for taxonomy, codes in tax_map.items():
+        primary_boost = 0.0
+        secondary_boost = 0.0
+        for taxonomy in non_fi_taxonomies:
             desired = target_profile.get(taxonomy, {})
-            for code in codes:
-                boost += desired.get(code, 0.0)
-        if boost <= 0:
+            for code in tax_map.get(taxonomy, []):
+                primary_boost += desired.get(code, 0.0)
+        for norm_code in tax_map.get("fi_norm", []):
+            primary_boost += fi_primary.get(norm_code, 0.0)
+        for full_code in tax_map.get("fi", []):
+            secondary_boost += fi_secondary.get(full_code, 0.0)
+
+        added_primary = primary_boost * primary_weight
+        added_secondary = secondary_boost * secondary_weight
+        boost_score = added_primary + added_secondary
+        if boost_score <= 0:
             continue
-        boost_score = boost * code_weight
+
         scores[doc_id] += boost_score
         contributions[doc_id]["code"] = contributions[doc_id].get("code", 0.0) + boost_score
+        if added_primary:
+            contributions[doc_id]["code_primary"] = contributions[doc_id].get("code_primary", 0.0) + added_primary
+        if added_secondary:
+            contributions[doc_id]["code_secondary"] = contributions[doc_id].get("code_secondary", 0.0) + added_secondary
     return scores
 
 
@@ -73,12 +126,15 @@ def compute_code_scores(
 
     raw_scores: dict[str, float] = {}
     max_score = 0.0
+    fi_primary_profile, _ = _build_fi_profiles(target_profile.get("fi"))
     for doc_id, meta in doc_meta.items():
         score = 0.0
-        for taxonomy in ("ipc", "cpc", "fi", "ft"):
+        for taxonomy in ("ipc", "cpc", "ft"):
             desired = target_profile.get(taxonomy, {})
             for code in meta.get(f"{taxonomy}_codes", []):
                 score += desired.get(code, 0.0)
+        for code in _get_doc_fi_norm_codes(meta):
+            score += fi_primary_profile.get(code, 0.0)
         raw_scores[doc_id] = score
         max_score = max(max_score, score)
 
@@ -198,10 +254,9 @@ def compute_ccw(
         meta = doc_meta.get(doc_id)
         if not meta:
             continue
-        for code in meta.get("fi_codes", []) or []:
-            if code:
-                codes.append(code)
-                break
+        norm_codes = _get_doc_fi_norm_codes(meta)
+        if norm_codes:
+            codes.append(norm_codes[0])
     if not codes:
         return 0.0
 
@@ -349,6 +404,8 @@ def compute_relevance_flags(
         score = 0.0
         for taxonomy, codes in meta.items():
             if not taxonomy.endswith("_codes"):
+                continue
+            if taxonomy == "fi_norm_codes":
                 continue
             tax = taxonomy.replace("_codes", "")
             desired = target_profile.get(tax, {})
