@@ -228,6 +228,24 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 - `*N{distance}"term1 AND term2"`: term1とterm2が指定距離内に出現
 - `*ONP{distance}"term1 AND term2"`: 順序付き近接検索（term1がterm2の前）
 - 各グループは`AND`で接続（スペースだけでは不可）
+- **NEARを使用する場合、クエリ全体を簡潔に保つ（4-5個のANDグループまで）**
+- **複雑なクエリ（6個以上のANDグループ、複数のNOT）ではNEARを避ける**
+- **NEAR演算子は1クエリにつき1-2箇所まで**
+
+**原因3: 複雑すぎるクエリでNEARを使用**
+```
+// ❌ 複雑すぎる（6個のANDグループ + 2個のNOT + NEAR）
+(顔認証) AND *N30"(マスク) AND (目元)" AND (検知) AND (特徴抽出) AND (強化) AND (認証) NOT (指紋) NOT (表情認識)
+```
+
+**対策:**
+```
+// ✅ シンプルに保つ（4-5個のANDグループまで）
+(顔認証) AND *N30"(マスク) AND (目元)" AND (強化) AND (認証)
+
+// または、NEARを外してシンプルなANDに変更
+(顔認証) AND (マスク) AND (目元) AND (検知) AND (特徴抽出) AND (強化) AND (認証)
+```
 
 ---
 
@@ -245,6 +263,8 @@ LLMエージェントがMCPツールを呼び出す前に確認すべき項目:
 
 - [ ] `fi`フィールドのフィルタは**fi_norm**（例: G06V10/82）または**fi_full**（例: G06V10/82A）のどちらでも可
 - [ ] NEAR演算子の構文が正しい（`AND`で接続、スペースのみは不可）
+- [ ] NEARを使用する場合、クエリ全体を簡潔に（4-5個のANDグループまで）
+- [ ] 複雑なクエリ（6個以上のANDグループ、複数のNOT）ではNEARを使わない
 - [ ] `pubyear`フィルタは`op: "range"`、`value: [start, end]`
 - [ ] `field_boosts`の値が妥当（title: 40-80, abst: 10-20, claim: 5-40, desc: 4-40）
 

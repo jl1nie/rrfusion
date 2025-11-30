@@ -309,6 +309,9 @@ query_construction_policy:
       constraints:
         - "NEAR内部はシンプルなOR-groupのみ"
         - "NEAR内にAND/NOTを含めない"
+        - "NEARを使用する場合、クエリ全体を簡潔に保つ（4-5個のANDグループまで）"
+        - "複雑なクエリ（6個以上のANDグループ、複数のNOT）ではNEARを避ける"
+        - "NEAR演算子は1クエリにつき1-2箇所まで（過度な使用は避ける）"
         - "複雑なネストは避ける"
     
     field_specifiers:
