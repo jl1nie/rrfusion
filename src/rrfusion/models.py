@@ -435,15 +435,6 @@ class ProvenanceResponse(BaseModel):
     code_distributions: dict[str, dict[str, int]] | None = None
     config_snapshot: dict[str, Any] | None = None
     metrics: FusionMetrics | None = None
-    representatives: list["RepresentativeEntry"] | None = None
-
-
-class RepresentativeEntry(BaseModel):
-    doc_id: str
-    label: Literal["A", "B", "C"]
-    reason: str | None = None
-    rank: int | None = None
-    score: float | None = None
 
 
 class BlendRunInput(BaseModel):
@@ -475,7 +466,6 @@ class BlendRequest(BaseModel):
     pi_weights: dict[str, float] = Field(
         default_factory=lambda: {"code": 0.4, "facet": 0.4, "lane": 0.2}
     )
-    representatives: list[RepresentativeEntry] = Field(default_factory=list)
 
 
 class PeekConfig(BaseModel):
@@ -505,11 +495,7 @@ class BlendResponse(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     priority_pairs: list[tuple[str, float]] = Field(
         default_factory=list,
-        description="Final ranking that pushes representative docs to the front for presentation.",
-    )
-    representatives: list[RepresentativeEntry] = Field(
-        default_factory=list,
-        description="Registered representative documents (A/B/C) associated with this fusion run.",
+        description="Deprecated field, kept for backward compatibility. Always empty.",
     )
     metrics: FusionMetrics | None = None
 

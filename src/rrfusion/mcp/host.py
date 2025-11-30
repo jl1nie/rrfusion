@@ -32,7 +32,6 @@ from rrfusion.models import (
     PeekConfig,
     PeekSnippetsResponse,
     ProvenanceResponse,
-    RepresentativeEntry,
     RunHandle,
     SearchMetaLite,
     SearchParams,
@@ -936,50 +935,6 @@ async def get_provenance(
     start = perf_counter()
     response = await _require_service().provenance(
         run_id, top_k_lane=top_k_lane, top_k_code=top_k_code
-    )
-    _record_tool_timing(response, _elapsed_ms(start))
-    return response
-
-
-@mcp.tool
-async def register_representatives(
-    run_id: str, representatives: list[Any]
-) -> ProvenanceResponse:
-    """
-    summary: Register A/B/C-labeled representative documents for a fusion run and report their current ranks.
-    when_to_use:
-      - After performing a representative 20-document review on a fusion run.
-      - Before running mutate_run so that subsequent fusions can apply representative boosting.
-    arguments:
-      run_id:
-        type: string
-        required: true
-        description: Fusion run identifier whose representatives you are registering.
-      representatives:
-        type: list[object]
-        required: true
-        description: List of representative documents with A/B/C labels and optional reasons.
-    returns:
-      provenance:
-        description: Updated provenance for the run, including representative entries with their ranks and scores.
-    """
-    start = perf_counter()
-
-    normalized: list[RepresentativeEntry] = []
-    for entry in representatives:
-        if isinstance(entry, RepresentativeEntry):
-            normalized.append(entry)
-        elif isinstance(entry, dict):
-            payload = dict(entry)
-            raw_label = payload.get("label")
-            if isinstance(raw_label, str):
-                payload["label"] = raw_label.strip().upper()
-            normalized.append(RepresentativeEntry.model_validate(payload))
-        else:
-            raise RuntimeError(f"invalid representative entry type: {type(entry)}")
-
-    response = await _require_service().register_representatives(
-        run_id=run_id, representatives=normalized
     )
     _record_tool_timing(response, _elapsed_ms(start))
     return response

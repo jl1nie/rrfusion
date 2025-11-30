@@ -7,7 +7,7 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Sequence
 
-from .models import BlendFrontierEntry, RepresentativeEntry
+from .models import BlendFrontierEntry
 from .utils import normalize_fi_subgroup
 
 METRICS_TOP_K = 50
@@ -434,27 +434,6 @@ def compute_relevance_flags(
     return flags
 
 
-def apply_representative_priority(
-    ordered: list[tuple[str, float]],
-    representatives: list[RepresentativeEntry],
-) -> list[tuple[str, float]]:
-    if not representatives:
-        return ordered
-    priorities = {"A": 0, "B": 1, "C": 2}
-    label_map = {
-        rep.doc_id: rep.label
-        for rep in representatives
-        if rep.label in priorities
-    }
-
-    def sort_key(item: tuple[str, float]) -> tuple[int, float]:
-        doc_id, score = item
-        priority = priorities.get(label_map.get(doc_id, ""), 3)
-        return (priority, -score)
-
-    return sorted(ordered, key=sort_key)
-
-
 __all__ = [
     "compute_rrf_scores",
     "apply_code_boosts",
@@ -469,7 +448,6 @@ __all__ = [
     "compute_ccw",
     "compute_s_shape",
     "compute_fusion_metrics",
-    "apply_representative_priority",
     "aggregate_code_freqs",
     "compute_relevance_flags",
 ]

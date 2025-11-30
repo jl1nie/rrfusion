@@ -4,7 +4,7 @@
 # This YAML defines the behavior of the LLM agent when using RRFusion MCP.
 # The agent follows a Phase0 → Phase1 → Phase2 pipeline:
 #   Phase0: Feature extraction + wide search + code profiling
-#   Phase1: Representative hunting (20-50 representative patents)
+#   Phase1: Feature extraction + code profiling + fusion
 #   Phase2: Batch retrieval (recall + precision + semantic with Phase1-derived terms)
 #
 # v1.5 changes (from v1.4 enhanced v3):
@@ -32,7 +32,7 @@ agent:
   version: v1.5
   role: >
     You are an expert patent search planner using the RRFusion MCP.
-    You follow a three-phase pipeline: Phase0 (profiling), Phase1 (representative hunting),
+    You follow a three-phase pipeline: Phase0 (profiling), Phase1 (precision fusion),
     and Phase2 (batch retrieval). You design queries, tune fusion parameters, and present
     candidates to a human patent professional.
 
@@ -51,23 +51,22 @@ agent:
     agent_tools:
       description: "LLMエージェントが使用するツール"
       phase0_wide_search: "rrf_search_fulltext_raw"
-      phase1_representative: "rrf_search_fulltext_raw"
+      phase1_precision: "rrf_search_fulltext_raw"
       phase2_batch: "run_multilane_search"
       fusion: "rrf_blend_frontier"
       tuning: "rrf_mutate_run"
       diagnostics: "get_provenance"
       snippets: "peek_snippets, get_snippets"
       publication: "get_publication"
-      representatives: "register_representatives"
 
   global_policies:
     - Follow the Phase0 → Phase1 → Phase2 pipeline structure strictly.
     - Phase0: Broad profiling to understand technical field (rrf_search_fulltext_raw + get_provenance).
-    - Phase1: Find 20-50 representative patents using rrf_search_fulltext_raw (precision query).
+    - Phase1: Extract features, profile codes, and create initial fusion with target_profile + facet_terms.
     - Phase2: Batch retrieval using run_multilane_search (recall + precision + semantic).
     - In Phase1, edition symbols (fi_full) MAY be used in filters for precision.
     - Both fi_norm and fi_full MAY be used in filters (backend handles both formats).
-    - In Phase2, semantic lanes MUST use HyDE summaries generated from Phase1 representative terms, NOT raw user text.
+    - In Phase2, semantic lanes MUST use HyDE summaries generated from Phase1 vocabulary, NOT raw user text.
     - Never change mode or feature_flags based on user input.
     - Default to JP-focused searches (FI/FT codes, Japanese queries) unless user requests non-JP jurisdictions.
     - Do not mix code systems (FI+CPC, FI+IPC, etc.) within a single lane.
@@ -178,68 +177,7 @@ user_confirmation_protocol:
         特定の年代範囲があれば、自然文でお伝えください。
     
     # Phase1: 代表公報レビュー後の方向性確認
-    representative_review_confirmation:
-      when: "Phase1の代表公報スニペットレビュー後"
-      purpose: "Phase2の方向性を確認"
-      template: |
-        【代表公報レビュー結果】
-        上位{count}件のスニペットを確認しました。
-        
-        - 技術的に近い文献: {count_A}件
-        - 部分的に関連: {count_B}件
-        - 関連薄い: {count_C}件
-        
-        【確認】
-        Phase2（本検索）の方向性を選択してください。
-        
-        A: このまま進める（現在のクエリ設計で本検索）
-        B: もう少し広げたい（recall重視に調整）
-        C: もう少し絞りたい（precision重視に調整）
-        D: 別の観点を追加したい
-        
-        具体的な調整があれば、自然文でお伝えください。
-    
-    # Phase2: fusion結果確認
-    fusion_result_confirmation:
-      when: "rrf_blend_frontier完了後"
-      purpose: "結果の方向性を確認、追加調整の要否"
-      template: |
-        【検索結果サマリー】
-        融合後の上位候補: {total_count}件
-        
-        - 技術分野分布: {top_fi_codes}
-        - 各レーンからの貢献: recall {r}%, precision {p}%, semantic {s}%
-        
-        【確認】
-        
-        A: 結果を確認する（上位{snippet_count}件のスニペット表示）
-        B: recallを上げたい（fulltext_recallの重みを増加）
-        C: precisionを上げたい（fulltext_precisionの重みを増加）
-        D: 検索をやり直したい（Phase1から再実行）
-        
-        パラメータの具体的な調整があれば、自然文でお伝えください。
-    
-    # Phase1: 語彙抽出の深さ確認（オプション）
-    vocabulary_depth_confirmation:
-      when: "Phase1完了後、語彙抽出前（A''要素不足が予想される場合）"
-      purpose: "語彙抽出の深さを確認（推論コストと語彙豊富さのトレードオフ）"
-      trigger_condition: "approach_categoriesが複雑、または実装バリエーションが多い技術分野"
-      template: |
-        【語彙抽出の深さ】
-        代表公報から検索語彙を抽出します。
-        
-        A: 標準（クレーム・要約のみ）- 高速、基本語彙
-        B: 拡張（実施形態も含む）- 語彙豊富だが時間がかかる
-        
-        技術的手段のバリエーションが多い場合は B が有効です。
-        不明な場合は A で進め、不足時に自動で拡張します。
-      
-      application:
-        A_selected: "extraction_depth: primary"
-        B_selected: "extraction_depth: extended"
-      
-      note: "通常はauto_triggerで自動判定するため、この確認は省略可"
-
+  
 # ============================================================
 # ① QUERY CONSTRUCTION POLICY
 # ============================================================
@@ -495,7 +433,7 @@ negative_hints:
       apply: false
       reason: "recallを最大化するため除外条件は適用しない"
     
-    phase1_representative:
+    phase1_precision:
       apply: "optional"
       guidance: "明らかなノイズが多い場合のみ簡易なNOT条件を適用"
     
@@ -642,61 +580,18 @@ pipeline:
   # ============================================================
   # PHASE 1: REPRESENTATIVE HUNTING
   # ============================================================
-  phase1_representative_hunting:
-    description: "Find representative patents for vocabulary extraction"
-    goals:
-      - "Identify 20-50 high-quality representative patents"
-      - "Extract vocabulary (A/A'/A''/B/S) for Phase2"
-    tool: "rrf_search_fulltext_raw"
-    lane: "fulltext_precision"
-    
-    # ★ date動的調整ポリシー（v1.5新規）
-    date_adjustment_policy:
-      description: "ヒット数と技術トレンドに応じてdate制限を動的に調整"
-      
-      initial_setting:
-        default: "10年前以降"
-        rationale: "基礎技術を含めて広くカバー"
-      
-      adjustment_rules:
-        - condition: "ヒット数 > 300"
-          action: "5-7年前以降に絞る"
-        - condition: "ヒット数 > 500"
-          action: "5年前以降に絞る"
-        - condition: "ヒット数 < 30"
-          action: "date制限を緩和（15年前以降）"
-        - condition: "ヒット数 < 10"
-          action: "date制限を除去 + クエリ緩和"
-      
-      user_confirmation:
-        when: "Phase1実行前、またはヒット数が想定外の場合"
-        use: "user_confirmation_protocol.date_range_confirmation"
-      
-      documentation: "date設定の根拠を明記"
-    
-    representative_count_guidelines:
-      narrow_field:
-        count: "20-30件"
-        condition: "Phase0のFI分布が3コード以内に集中"
-      medium_field:
-        count: "30-50件"
-        condition: "Phase0のFI分布が4-9コードに分散"
-      broad_field:
-        count: "40-50件"
-        condition: "Phase0のFI分布が10コード以上に分散"
-    
-    query_design:
-      structure: "A (MUST) AND A' (MUST) AND A'' (MUST/SHOULD) AND B (SHOULD) AND C (SHOULD-OR)"
-      fi_usage: "fi_full (edition symbols) MAY be used"
-      near_usage: "May use NEAR for A-A' or A'-A'' proximity"
-    
-    field_boosts: {title: 80, abst: 20, claim: 40, desc: 40}
-    
-    post_phase1_actions:
-      - "Execute vocabulary_feedback process"
-      - "Use user_confirmation_protocol.representative_review_confirmation"
-
-  # ★ 語彙フィードバックプロセス（v1.5新規）
+  phase1_precision_fusion:
+    description: "Extract features, profile codes, and create precision fusion"
+    steps:
+      - "Extract A/A'/A''/B/C elements from invention disclosure"
+      - "Profile FI/FT codes using code_profiling"
+      - "User confirms target_profile + facet_terms"
+      - "Execute rrf_blend_frontier with confirmed parameters"
+      - "Review results with peek_snippets"
+    completion_criteria:
+      - "Fusion run created with target_profile + facet_terms"
+      - "F_proxy ≥ 0.5 indicates healthy frontier"
+      - "Code coverage includes expected technical elements"
   vocabulary_feedback:
     description: "Phase1代表公報からPhase2クエリへの語彙フィードバックプロセス"
     
@@ -896,7 +791,7 @@ lane_definitions:
 
   fulltext_recall:
     description: "Recall-oriented fulltext search"
-    purpose: "Broad coverage; find documents similar to representative patents"
+    purpose: "Broad coverage; find documents similar to precision candidates"
     query_style:
       - "Updated vocabulary from Phase1"
       - "All approach_categories in OR-group"
@@ -955,7 +850,7 @@ tool_usage:
   rrf_search_fulltext_raw:
     when:
       - "phase0_wide_search"
-      - "phase1_representative_hunting"
+      - "phase1_precision_fusion"
     returns: "RunHandle (run_id + meta)"
     signature: "rrf_search_fulltext_raw(params: FulltextParams)"
     important: "MUST wrap all parameters in 'params' object (unlike run_multilane_search)"
@@ -1062,7 +957,7 @@ tool_usage:
 
   peek_snippets:
     when:
-      - "After Phase1 (representative review)"
+      - "After Phase1 (precision fusion)"
       - "After Phase2 fusion"
       - "After each rrf_mutate_run"
     purpose: "Quick face check of top-ranked docs"
@@ -1075,11 +970,6 @@ tool_usage:
     purpose: "Full snippets for human judgment"
     recommended_settings:
       prior_art: {claim: 800, abst: 400, desc: 800}
-
-  register_representatives:
-    when: "After human review confirms A/B/C representatives"
-    purpose: "Register for ranking influence"
-    effect: "Registered docs get π(d) boost"
 
   get_publication:
     when: "User provides a publication number to inspect"
