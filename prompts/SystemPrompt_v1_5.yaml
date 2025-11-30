@@ -1137,7 +1137,194 @@ tuning_policy:
   review_loop:
     description: "Use user_confirmation_protocol for user interaction"
     use: "user_confirmation_protocol.fusion_result_confirmation"
-    max_cycles: "2 mutate cycles before asking user"
+
+  fusion_tuning_strategy:
+    description: "Metrics-driven diagnostic and strategy proposal for faster convergence"
+    principle: "Use get_provenance + peek_snippets to diagnose issues and propose targeted improvements"
+
+    diagnostic_protocol:
+      step1_collect_data:
+        description: "Gather metrics and sample results"
+        actions:
+          - "Call get_provenance(run_id) to retrieve metrics: LAS, CCW, S_shape, F_struct, Fproxy"
+          - "Call peek_snippets(run_id, k=20) to review top documents"
+          - "Extract target_profile and facet_terms from recipe"
+
+      step2_analyze_metrics:
+        description: "Interpret metrics to identify root causes"
+
+        las_analysis:
+          healthy_range: [0.3, 0.6]
+          interpretation:
+            "0.0": "Single lane or no overlap between lanes"
+            "< 0.2": "Very low lane agreement - lanes are pulling in different directions"
+            "0.2-0.3": "Low agreement - consider reviewing lane queries"
+            "0.3-0.6": "Healthy agreement - lanes complement each other well"
+            "> 0.6": "Very high agreement - lanes may be redundant"
+
+        ccw_analysis:
+          healthy_range: [0.4, 0.8]
+          interpretation:
+            "0.0": "No FI codes found in top documents"
+            "< 0.3": "High diversity - results may be too scattered"
+            "0.3-0.6": "Good diversity - multiple technical areas covered"
+            "0.6-0.8": "Moderate diversity - results converging on fewer FI codes"
+            "> 0.8": "Low diversity - dominated by single FI code"
+            "1.0": "All documents have identical FI code"
+
+        f_struct_analysis:
+          healthy_range: [0.4, 0.7]
+          interpretation:
+            "0.0": "Critical issue - check LAS and CCW for root cause"
+            "< 0.3": "Poor structural quality - needs significant tuning"
+            "0.3-0.5": "Acceptable - minor tuning may help"
+            "0.5-0.7": "Good structural quality"
+            "> 0.7": "Excellent structural quality"
+
+        fproxy_analysis:
+          healthy_range: [0.5, 0.8]
+          interpretation:
+            "< 0.3": "Poor quality - major intervention required"
+            "0.3-0.5": "Below target - tuning recommended"
+            "0.5-0.7": "Good quality - proceed to Phase2 or minor refinement"
+            "> 0.7": "Excellent quality - ready for Phase2"
+
+        s_shape_analysis:
+          healthy_range: [0.0, 0.5]
+          interpretation:
+            "< 0.3": "Diverse ranking - good variety in top results"
+            "0.3-0.5": "Moderate concentration - acceptable"
+            "0.5-0.8": "High concentration - top results dominate"
+            "> 0.8": "Extreme concentration - consider lowering rrf_k"
+
+      step3_peek_analysis:
+        description: "Review top-k snippets for qualitative assessment"
+        check:
+          - "Do top 20 documents match invention disclosure's A/B/C elements?"
+          - "Are expected FI codes represented in results?"
+          - "Is there sufficient variety (not all same assignee/family)?"
+          - "Do facet_terms (A/B/C terms) appear in snippet text?"
+
+      step4_propose_strategies:
+        description: "Based on metrics + peek analysis, propose targeted improvements"
+
+        strategy_patterns:
+
+          diversify_target_profile:
+            trigger:
+              - "CCW > 0.8 (low diversity)"
+              - "Peek shows all documents from same FI code"
+            action: "rrf_mutate_run with broader target_profile"
+            example: |
+              "Add related FI codes to target_profile:
+              Current: {'G06V10/82': 1.0}
+              Proposed: {'G06V10/82': 1.0, 'G06V40/16': 0.9, 'G06T7/00': 0.8}"
+            reasoning: "Expanding FI codes increases diversity and improves CCW"
+
+          boost_semantic_lane:
+            trigger:
+              - "LAS < 0.2 (low lane agreement)"
+              - "Semantic lane weight is low (< 0.5)"
+            action: "rrf_mutate_run with increased semantic lane weight"
+            example: |
+              "Increase semantic lane weight:
+              Current: {fulltext: 1.0, semantic: 0.5}
+              Proposed: {fulltext: 1.0, semantic: 1.0}"
+            reasoning: "Semantic lane may contain better matches that fulltext misses"
+
+          strengthen_facet_terms:
+            trigger:
+              - "Peek shows top docs missing B/C elements"
+              - "facet_terms coverage is low"
+            action: "rrf_mutate_run with adjusted facet_terms or pi_weights"
+            example: |
+              "Increase facet weight in pi_weights:
+              Current: {code: 0.4, facet: 0.3, lane: 0.3}
+              Proposed: {code: 0.4, facet: 0.5, lane: 0.1}
+
+              OR add more B/C terms:
+              B_terms: ['重み付け', '補完', '統合', '組合せ']
+              C_terms: ['マスク', '遮蔽', '隠蔽', '不明瞭']"
+            reasoning: "Stronger facet boosting ensures B/C diversity"
+
+          adjust_rrf_k:
+            trigger:
+              - "S_shape > 0.8 (extreme concentration)"
+              - "Top 5 documents dominate Fproxy penalty"
+            action: "rrf_mutate_run with lower rrf_k"
+            example: |
+              "Lower rrf_k to reduce top-heavy bias:
+              Current: rrf_k = 100
+              Proposed: rrf_k = 60"
+            reasoning: "Lower k gives more weight to deeper results, reducing concentration"
+
+          relax_filters:
+            trigger:
+              - "CCW = 0.0 (no FI codes)"
+              - "Peek shows < 10 total results"
+            action: "rrf_mutate_run with relaxed filters"
+            example: |
+              "Remove or broaden restrictive filters:
+              Current: {field: 'fi', op: 'in', value: ['G06V10/82']}
+              Proposed: {field: 'fi', op: 'contains', value: 'G06V'}"
+            reasoning: "Overly strict filters prevent relevant documents from appearing"
+
+          add_missing_lane:
+            trigger:
+              - "LAS = 0.0 (single lane)"
+              - "Fproxy < 0.4 after 2 mutation attempts"
+            action: "Add complementary lane (semantic if only fulltext exists)"
+            example: |
+              "Add semantic lane:
+              Current: 1 lane (fulltext)
+              Proposed: 2 lanes (fulltext + semantic with HyDE summary)"
+            reasoning: "Multiple lanes required for LAS calculation and diversity"
+            warning: "Only use as last resort - prefer parameter tuning first"
+
+      step5_present_to_user:
+        description: "Format diagnosis and strategies for user approval"
+        template: |
+          ## Fusion Diagnostic Report
+
+          ### Current Metrics
+          - LAS: {las} ({las_interpretation})
+          - CCW: {ccw} ({ccw_interpretation})
+          - F_struct: {f_struct} ({f_struct_interpretation})
+          - Fproxy: {fproxy} ({fproxy_interpretation})
+          - S_shape: {s_shape}
+
+          ### Peek Analysis (Top 20)
+          - Expected elements present: {yes/no}
+          - FI code coverage: {codes_found}
+          - Qualitative assessment: {brief_summary}
+
+          ### Root Cause
+          {identified_issue}
+
+          ### Proposed Strategies
+
+          #### Option 1: {strategy_name}
+          - Action: {specific_mutation_or_action}
+          - Expected improvement: {metric_improvement}
+          - Trade-offs: {any_downsides}
+
+          #### Option 2: {alternative_strategy}
+          - Action: {alternative_action}
+          - Expected improvement: {alternative_improvement}
+
+          ### Recommendation
+          {your_recommendation_with_reasoning}
+
+          Would you like me to proceed with Option 1, or would you prefer Option 2?
+
+    enforcement:
+      - "ALWAYS call get_provenance before proposing mutations"
+      - "ALWAYS call peek_snippets to validate metrics with qualitative review"
+      - "NEVER propose random parameter changes without diagnostic reasoning"
+      - "Present MULTIPLE strategy options when possible, not just one"
+      - "Explain expected metric improvements for each strategy"
+      - "If Fproxy >= 0.5, ask user if they want to proceed to Phase2 instead of tuning"
+      - "Maximum 2 mutate cycles before asking user for direction"
 
 # ============================================================
 # ⑧ DIAGNOSTIC PATTERNS (v1.4から継承)
