@@ -6,58 +6,7 @@ LLMエージェントがRRFusion MCPツールを呼び出す際に発生する�
 
 ## 問題パターンと対策
 
-### ❌ 問題 #1: FI分冊識別記号をMUSTフィルタで使用（バックエンド制限）
-
-**エラー:**
-```
-400 Bad Request from backend
-```
-
-**原因:**
-```json
-{
-  "filters": [{
-    "field": "fi",
-    "op": "in",
-    "value": ["G06V10/82A", "G06V40/16A"]  // ⚠️ 分冊識別記号付き
-  }]
-}
-```
-
-**現状の対策（回避策）:**
-```json
-{
-  "filters": [{
-    "field": "fi",
-    "op": "in",
-    "value": ["G06V10/82", "G06V40/16"]  // ✅ fi_norm（正規化版）を使用
-  }]
-}
-```
-
-**⚠️ 重要な注意:**
-
-これは**バックエンド実装の制限**であり、本来は実装バグです：
-
-- ✅ **理想的な実装**: バックエンドが`fi_full`を受け取ったら内部で正規化して検索すべき
-  - `normalize_fi_subgroup`関数は既に存在（[utils.py:34](../src/rrfusion/utils.py#L34)）
-  - レスポンス側では正規化済み（[patentfield.py:154](../src/rrfusion/mcp/backends/patentfield.py#L154)）
-  - **リクエスト側のフィルタ正規化が未実装**
-
-- ❌ **現状**: Patentfieldバックエンドが`fi_full`形式を拒否
-
-- 🔧 **修正予定**: `patentfield.py`でリクエスト時にフィルタを正規化する処理を追加
-
-**SystemPromptの推奨ルール（暫定）:**
-- `code_usage_policy.fi_edition_symbols`: "Avoid in MUST filters for backend compatibility"
-- Phase2では**fi_normのみ**をフィルタに使用することを推奨（現状の回避策として）
-
-**将来の実装:**
-バックエンドでフィルタ正規化を実装後、LLMは両方の形式を安全に使用可能になる予定。
-
----
-
-### ❌ 問題 #2: run_multilane_search のパラメータ構造不一致
+### ❌ 問題 #1: run_multilane_search のパラメータ構造不一致
 
 **エラー:**
 ```
@@ -131,7 +80,7 @@ Unexpected keyword argument: params
 
 ---
 
-### ❌ 問題 #3: rrf_blend_frontier のパラメータ構造不一致
+### ❌ 問題 #2: rrf_blend_frontier のパラメータ構造不一致
 
 **エラー:**
 ```
@@ -198,7 +147,7 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 
 ---
 
-### ❌ 問題 #4: NEAR演算子の不正な構文
+### ❌ 問題 #3: NEAR演算子の不正な構文
 
 **エラー:**
 ```
@@ -233,8 +182,8 @@ LLMエージェントがMCPツールを呼び出す前に確認すべき項目:
 
 ### ✅ rrf_search_fulltext_raw / search_fulltext
 
-- [ ] `fi`フィールドのフィルタは**fi_norm**（分冊識別記号なし）
-- [ ] NEAR演算子の構文が正しい（`AND`で接続）
+- [ ] `fi`フィールドのフィルタは**fi_norm**（例: G06V10/82）または**fi_full**（例: G06V10/82A）のどちらでも可
+- [ ] NEAR演算子の構文が正しい（`AND`で接続、スペースのみは不可）
 - [ ] `pubyear`フィルタは`op: "range"`、`value: [start, end]`
 - [ ] `field_boosts`の値が妥当（title: 40-80, abst: 10-20, claim: 5-40, desc: 4-40）
 
@@ -271,7 +220,7 @@ LLMエージェントがMCPツールを呼び出す前に確認すべき項目:
 | `Missing required argument: request` | パラメータを直接渡している | `request`オブジェクトでラップ |
 | `Unexpected keyword argument: params` | 不要な`params`ラッパー | ラッパーを削除 |
 | `Field required: tool` | レーン定義に`tool`フィールドがない | `tool: "search_fulltext"`等を追加 |
-| `400 Bad Request` | バックエンドが拒否 | FI分冊識別記号、NEAR構文を確認 |
+| `400 Bad Request` | バックエンドが拒否 | NEAR構文を確認（ANDで接続されているか） |
 
 ### 2. SystemPromptの該当セクションを確認
 

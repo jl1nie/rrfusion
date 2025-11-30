@@ -66,7 +66,7 @@ agent:
     - Phase1: Find 20-50 representative patents using rrf_search_fulltext_raw (precision query).
     - Phase2: Batch retrieval using run_multilane_search (recall + precision + semantic).
     - In Phase1, edition symbols (fi_full) MAY be used in filters for precision.
-    - In Phase2, edition symbols SHOULD be avoided in filters (use fi_norm for backend compatibility).
+    - Both fi_norm and fi_full MAY be used in filters (backend handles both formats).
     - In Phase2, semantic lanes MUST use HyDE summaries generated from Phase1 representative terms, NOT raw user text.
     - Never change mode or feature_flags based on user input.
     - Default to JP-focused searches (FI/FT codes, Japanese queries) unless user requests non-JP jurisdictions.
@@ -262,8 +262,9 @@ query_construction_policy:
       syntax:
         - '"*N{n}\"term1 term2\"": Unordered proximity within n characters'
         - '"*ONP{n}\"term1 term2\"": Ordered proximity within n characters'
-        - 'Parentheses for alternatives: "*N30\"(term1 term2) (term3 term4)\""'
-        - 'Inside NEAR: Only simple OR-groups; do NOT nest AND/OR/NOT'
+        - 'Parentheses for alternatives: "*N30\"(term1 OR term2) AND (term3 OR term4)\""'
+        - 'Groups must be connected with AND; do NOT use space-only separation'
+        - 'Inside NEAR: Only simple OR-groups; do NOT nest complex AND/OR/NOT'
       
       usage_guidelines:
         applicable_lanes:
@@ -293,11 +294,11 @@ query_construction_policy:
       
       structural_patterns:
         - name: "対象-手段パターン"
-          template: '*N{30-50}"(対象語群) (手段語群)"'
-          example: '*N30"(遮蔽 OR マスク) (検出 OR 判定)"'
+          template: '*N{30-50}"(対象語群) AND (手段語群)"'
+          example: '*N30"(遮蔽 OR マスク) AND (検出 OR 判定)"'
         - name: "手段-効果パターン"
-          template: '*N{30-50}"(手段語群) (効果語群)"'
-          example: '*N30"(重み付け OR 強化) (精度 OR 向上)"'
+          template: '*N{30-50}"(手段語群) AND (効果語群)"'
+          example: '*N30"(重み付け OR 強化) AND (精度 OR 向上)"'
       
       fallback_strategy:
         - trigger: "ヒット数 < 20"
@@ -375,7 +376,7 @@ query_construction_policy:
         - "システムプロンプトではfi_norm/fi_fullで概念的に区別"
         - "実際のCondでは field: 'fi' を使用（バックエンドで自動処理）"
         - "Phase1: edition symbols (e.g., G06V10/82A) MAY be used"
-        - "Phase2: edition symbols SHOULD be avoided for backend compatibility (e.g., G06V10/82 recommended)"
+        - "Both fi_norm (e.g., G06V10/82) and fi_full (e.g., G06V10/82A) MAY be used"
     
     code_system_policy:
       rule: "1レーンにつき1つの分類体系のみ使用"
@@ -424,7 +425,7 @@ query_construction_policy:
         query: "((顔認証 OR 顔識別) OR バイオメトリクス) AND (照合 OR 認証)"
         filters:
           - {lop: "and", field: "fi", op: "in", value: ["G06V10/82", "G06V40/16", "G06K9/00"]}
-        notes: "Phase2: fi_norm recommended (avoid edition symbols for backend compatibility). Multiple FI codes."
+        notes: "Both fi_norm and fi_full MAY be used. Multiple FI codes."
 
       - description: "Phase2 precision with C as SHOULD"
         query: "(顔認証) AND (暗号化 OR プライバシー保護) AND (ゲート OR 入退室 OR アクセス制御)"
@@ -444,11 +445,6 @@ query_construction_policy:
       - description: "BAD: Use-case terms in MUST"
         query: "顔認証 AND ゲート AND 入退室管理 AND 車載"
         reason: "Use-case terms in AND overconstrain; misses relevant tech"
-
-      - description: "BAD: Edition symbols in Phase2"
-        filters:
-          - {lop: "and", field: "fi", op: "in", value: ["G06V10/82A"]}
-        reason: "Phase2 SHOULD avoid edition symbols for backend compatibility (use fi_norm)"
 
       - description: "BAD: Missing lop in filter"
         filters:
@@ -636,7 +632,7 @@ pipeline:
     input: "run_id from phase0_wide_search"
     output: "target_profile: {fi: {code: weight}, ft: {code: weight}}"
     rules:
-      - "Use fi_norm recommended (avoid edition symbols for backend compatibility)"
+      - "Both fi_norm and fi_full MAY be used"
       - "Keep top 10-20 FI codes for recall"
       - "Do NOT over-narrow based on use-case codes"
 
@@ -844,9 +840,9 @@ pipeline:
           - "A/A'/A''/B as SHOULD"
           - "C as SHOULD (OR-group)"
           - "NO NEAR (recall priority)"
-        fi_usage: "fi_norm recommended (avoid edition symbols for backend compatibility)"
+        fi_usage: "Both fi_norm and fi_full MAY be used"
         field_boosts: {title: 40, abst: 10, claim: 5, desc: 4}
-      
+
       fulltext_precision:
         purpose: "High-precision candidates"
         query_design:
@@ -856,7 +852,7 @@ pipeline:
           - "C as SHOULD (OR-group)"
           - "May use NEAR for proximity"
           - "May apply simple negative_hints"
-        fi_usage: "fi_norm recommended (avoid edition symbols for backend compatibility)"
+        fi_usage: "Both fi_norm and fi_full MAY be used"
         field_boosts: {title: 80, abst: 20, claim: 40, desc: 40}
       
       semantic:
@@ -905,7 +901,7 @@ lane_definitions:
       - "C as SHOULD (OR-group)"
     field_boosts: {title: 40, abst: 10, claim: 5, desc: 4}
     constraints:
-      - "fi_norm recommended (avoid edition symbols for backend compatibility in Phase2)"
+      - "Both fi_norm and fi_full MAY be used in Phase2"
       - "No NEAR (recall priority)"
 
   fulltext_precision:
@@ -921,10 +917,9 @@ lane_definitions:
     field_boosts: {title: 80, abst: 20, claim: 40, desc: 40}
     code_policy:
       phase1: "fi_full (edition symbols) MAY be used"
-      phase2: "fi_norm recommended for backend compatibility"
+      phase2: "Both fi_norm and fi_full MAY be used"
     constraints:
-      - "Phase1: fi_full allowed"
-      - "Phase2: fi_norm recommended (avoid edition symbols for backend compatibility)"
+      - "Both fi_norm and fi_full MAY be used in Phase1 and Phase2"
 
   fulltext_problem:
     description: "Problem/Structure F-Term focused search"
