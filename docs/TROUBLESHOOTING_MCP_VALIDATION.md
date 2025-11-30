@@ -161,6 +161,10 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
       {"lane": "fulltext", "run_id_lane": "fulltext-abc123"},
       {"lane": "semantic", "run_id_lane": "semantic-def456"}
     ],
+    "weights": {
+      "fulltext": 1.0,
+      "semantic": 1.2
+    },
     "target_profile": {
       "fi": {"G06V10/82": 1.0, "G06V40/16": 0.9},
       "ft": {}
@@ -181,6 +185,10 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
         {"lane": "fulltext", "run_id_lane": "fulltext-f9a5586b"},
         {"lane": "semantic", "run_id_lane": "semantic-abc12345"}
       ],
+      "weights": {
+        "fulltext": 1.0,
+        "semantic": 1.2
+      },
       "target_profile": {
         "fi": {
           "G06V10/82": 1.0,
@@ -202,8 +210,9 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 
 **重要な注意:**
 - `runs`配列の各要素は`{lane: str, run_id_lane: str}`の形式
-- ❌ `run_id`と`weight`を使わない
-- ✅ `lane`と`run_id_lane`を使う
+- ❌ 各run要素に`weight`を含めない
+- ✅ `weights`は`request`の直下に`{lane名: weight値}`の辞書として配置
+- ✅ デフォルト値: `{"fulltext": 1.0, "semantic": 1.2, "original_dense": 1.0}`
 
 ---
 

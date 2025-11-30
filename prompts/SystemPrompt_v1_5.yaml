@@ -1027,6 +1027,9 @@ tool_usage:
         runs:
           - {lane: "fulltext", run_id_lane: "fulltext-abc123"}
           - {lane: "semantic", run_id_lane: "semantic-def456"}
+        weights:
+          fulltext: 1.0
+          semantic: 1.2
         target_profile:
           fi: {"G06V10/82": 1.0, "G06V40/16": 0.9}
           ft: {}
@@ -1038,9 +1041,9 @@ tool_usage:
       - "rrf_k (default: 60)"
       - "beta_fuse (default: 1.2)"
     optional_parameters:
+      - "weights: dict[str, float] - lane名をキーとした重み辞書 (default: {fulltext: 1.0, semantic: 1.2})"
       - "facet_terms"
       - "facet_weights"
-      - "weights"
       - "lane_weights"
       - "pi_weights"
 
