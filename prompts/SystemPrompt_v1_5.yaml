@@ -954,18 +954,37 @@ tool_usage:
       - "phase0_wide_search"
       - "phase1_representative_hunting"
     returns: "RunHandle (run_id + meta)"
+    signature: "rrf_search_fulltext_raw(params: FulltextParams)"
+    important: "MUST wrap all parameters in 'params' object (unlike run_multilane_search)"
     example_call:
-      params:
+      params:  # ✅ REQUIRED: params wrapper
         query: "((顔認証 OR 顔識別) OR バイオメトリクス) AND (遮蔽 OR マスク) AND (強化 OR 選択 OR 補完)"
         filters:
           - {lop: "and", field: "fi", op: "in", value: ["G06V10/82", "G06V40/16"]}
           - {lop: "and", field: "country", op: "in", value: ["JP"]}
         top_k: 500
         field_boosts: {title: 80, abst: 20, claim: 40, desc: 40}
+    bad_example:
+      # ❌ WRONG: Do NOT pass parameters at top level
+      query: "..."
+      filters: [...]
+      # This will cause: "Missing required argument: params"
 
   run_multilane_search:
     when: "phase2_batch_retrieval"
     returns: "list[RunHandle]"
+    signature: "run_multilane_search(lanes: list[LaneConfig])"
+    important: "Do NOT wrap in 'params' - pass 'lanes' array directly at top level"
+    example_structure:
+      lanes:  # ✅ REQUIRED: lanes at top level (NOT wrapped in params)
+        - lane_name: "fulltext_recall"
+          tool: "search_fulltext"
+          lane: "fulltext"
+          params:  # ✅ Each lane has its own params
+            query: "..."
+            filters: [...]
+            top_k: 400
+            field_boosts: {...}
     lanes_config:
       - lane_name: "fulltext_recall"
         query: "((顔認証 OR 顔識別) AND (遮蔽 OR マスク OR オクルージョン) AND (強化 OR 選択 OR 補完 OR 正規化))"
@@ -984,11 +1003,34 @@ tool_usage:
         feature_scope: "wide"
         top_k: 300
 
+  rrf_search_semantic_raw:
+    when: "Standalone semantic search (rarely used; prefer run_multilane_search)"
+    returns: "RunHandle (run_id + meta)"
+    signature: "rrf_search_semantic_raw(params: SemanticParams)"
+    important: "MUST wrap all parameters in 'params' object (same as rrf_search_fulltext_raw)"
+    example_call:
+      params:  # ✅ REQUIRED: params wrapper
+        text: "顔認証において、マスク着用により口元が遮蔽された場合でも、目元や額などの非遮蔽領域の特徴量を強化して認証精度を維持する技術。"
+        feature_scope: "wide"
+        top_k: 300
+
   rrf_blend_frontier:
     when: "After run_multilane_search or multiple rrf_search_*_raw calls"
     purpose: "Fuse multiple lane results"
+    signature: "rrf_blend_frontier(request: FusionRequest)"
+    important: "MUST wrap all parameters in 'request' object"
+    example_structure:
+      request:  # ✅ REQUIRED: request wrapper
+        runs:
+          - {run_id: "fulltext-abc123", lane: "fulltext", weight: 1.0}
+          - {run_id: "semantic-def456", lane: "semantic", weight: 0.8}
+        target_profile:
+          fi: {"G06V10/82": 1.0, "G06V40/16": 0.9}
+          ft: {}
+        rrf_k: 60
+        beta_fuse: 1.2
     required_parameters:
-      - "runs: list of RunHandle or {run_id_lane, weight}"
+      - "runs: list of RunHandle or {run_id, lane, weight}"
       - "target_profile"
       - "rrf_k (default: 60)"
       - "beta_fuse (default: 1.2)"
