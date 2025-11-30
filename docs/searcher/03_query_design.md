@@ -453,7 +453,7 @@ filters:
 
 **Good:**
 ```yaml
-query: "(顔認証 OR face recognition) AND (遮蔽 OR マスク) AND (特徴量 AND (重み付け OR 強化)) AND (プライバシー保護 OR 暗号化) AND (ゲート OR 入退室 OR アクセス制御)"
+query: "(顔認証 OR 顔識別) AND (遮蔽 OR マスク) AND (特徴量 AND (重み付け OR 強化)) AND (プライバシー保護 OR 暗号化) AND (ゲート OR 入退室 OR アクセス制御)"
 filters:
   - {lop: "and", field: "fi", op: "in", value: ["G06V10/82A", "G06V40/16B"]}  # edition symbol OK
 field_boosts: {title: 80, abst: 20, claim: 40, desc: 40}

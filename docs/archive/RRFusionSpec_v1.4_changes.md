@@ -253,7 +253,7 @@ SystemPrompt側の使い方が変わっただけです。
 
 ```yaml
 # fulltext_precision lane only
-query: "(顔認証 OR face recognition) AND (プライバシー保護 OR privacy) AND (ゲート OR 入退室)"
+query: "(顔認証 OR 顔識別) AND (プライバシー保護 OR 個人情報保護) AND (ゲート OR 入退室)"
 filters:
   - field: "fi_full"  # edition symbol OK in Phase1
     op: "in"

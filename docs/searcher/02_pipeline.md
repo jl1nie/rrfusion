@@ -237,7 +237,7 @@ D: 年代制限なし - 最も広くカバー
 
 **例:**
 ```yaml
-query: "(顔認証 OR face recognition) AND (遮蔽 OR マスク) AND (特徴量 AND (重み付け OR 強化))"
+query: "(顔認証 OR 顔識別) AND (遮蔽 OR マスク) AND (特徴量 AND (重み付け OR 強化))"
 filters:
   - {lop: "and", field: "fi", op: "in", value: ["G06V10/82A", "G06V40/16B"]}
   - {lop: "and", field: "date", op: ">=", value: "2015-01-01"}

@@ -183,6 +183,33 @@ user_confirmation_protocol:
 # ============================================================
 query_construction_policy:
 
+  keyword_language_policy:
+    principle: "Query keywords MUST match the language of target patent documents"
+    rules:
+      - target_country: "JP"
+        keyword_language: "Japanese only"
+        example: "(顔認証 OR 顔識別) AND (マスク OR 遮蔽)"
+        bad_example: "(顔認証 OR face recognition) AND (マスク OR mask)"
+        reason: "JP patents are written in Japanese; English keywords cause noise and reduce precision"
+
+      - target_country: "US"
+        keyword_language: "English only"
+        example: "(face recognition OR facial recognition) AND (mask OR occlusion)"
+        bad_example: "(face recognition OR 顔認証) AND (mask OR マスク)"
+        reason: "US patents are written in English; Japanese keywords will not match"
+
+      - target_country: "Multi-country (JP + US)"
+        strategy: "Execute separate searches per country with appropriate language"
+        example: |
+          JP search: "(顔認証 OR 顔識別) AND (マスク OR 遮蔽)" with filters: [{field: "country", op: "in", value: ["JP"]}]
+          US search: "(face recognition OR facial recognition) AND (mask OR occlusion)" with filters: [{field: "country", op: "in", value: ["US"]}]
+        reason: "Mixed-language queries reduce effectiveness; country-specific searches ensure optimal results"
+
+    enforcement:
+      - "ALWAYS check country filter before constructing query"
+      - "NEVER mix languages within a single query"
+      - "Use run_multilane_search with separate country-specific lanes if searching multiple countries"
+
   syntax:
     boolean_ops:
       - '"AND": Both terms must appear'
@@ -356,11 +383,12 @@ query_construction_policy:
 
   examples:
     good:
-      - description: "Phase1 precision query"
-        query: "(顔認証 OR face recognition) AND (プライバシー保護 OR privacy)"
+      - description: "Phase1 precision query (JP)"
+        query: "(顔認証 OR 顔識別) AND (プライバシー保護 OR 個人情報保護)"
         filters:
           - {lop: "and", field: "fi", op: "in", value: ["G06V10/82A", "G06V40/16B"]}
-        notes: "Phase1: Edition symbols OK. A+B in MUST."
+          - {lop: "and", field: "country", op: "in", value: ["JP"]}
+        notes: "Phase1: Edition symbols OK. A+B in MUST. JP query uses Japanese keywords."
 
       - description: "Phase2 recall query"
         query: "((顔認証 OR 顔識別) OR バイオメトリクス) AND (照合 OR 認証)"
