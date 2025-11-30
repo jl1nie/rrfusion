@@ -6,7 +6,62 @@ LLMエージェントがRRFusion MCPツールを呼び出す際に発生する�
 
 ## 問題パターンと対策
 
-### ❌ 問題 #1: run_multilane_search のパラメータ構造不一致
+### ❌ 問題 #1: rrf_search_fulltext_raw のパラメータ構造不一致
+
+**エラー:**
+```
+Missing required argument: params
+Unexpected keyword argument: query, filters, top_k, field_boosts
+```
+
+**原因:**
+```json
+{
+  "query": "...",         // ❌ トップレベルで渡している
+  "filters": [...],
+  "top_k": 800,
+  "field_boosts": {...}
+}
+```
+
+**対策:**
+```json
+{
+  "params": {  // ✅ paramsオブジェクトでラップ
+    "query": "...",
+    "filters": [...],
+    "top_k": 800,
+    "field_boosts": {...}
+  }
+}
+```
+
+**正しい呼び出し例:**
+```json
+{
+  "tool_name": "rrf_search_fulltext_raw",
+  "arguments": {
+    "params": {
+      "query": "(顔認証 OR 顔識別) AND (マスク OR 遮蔽)",
+      "filters": [
+        {"lop": "and", "field": "fi", "op": "in", "value": ["G06V10/82", "G06V40/16"]},
+        {"lop": "and", "field": "country", "op": "in", "value": ["JP"]},
+        {"lop": "and", "field": "pubyear", "op": "range", "value": [2015, 2024]}
+      ],
+      "top_k": 800,
+      "field_boosts": {"title": 80, "abst": 10, "claim": 5, "desc": 1}
+    }
+  }
+}
+```
+
+**重要な注意:**
+- `rrf_search_fulltext_raw`と`rrf_search_semantic_raw`は`params`ラッパーが**必須**
+- `run_multilane_search`は逆に`params`ラッパーが**不要**（問題#2参照）
+
+---
+
+### ❌ 問題 #2: run_multilane_search のパラメータ構造不一致
 
 **エラー:**
 ```
@@ -80,7 +135,7 @@ Unexpected keyword argument: params
 
 ---
 
-### ❌ 問題 #2: rrf_blend_frontier のパラメータ構造不一致
+### ❌ 問題 #3: rrf_blend_frontier のパラメータ構造不一致
 
 **エラー:**
 ```
@@ -147,7 +202,7 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 
 ---
 
-### ❌ 問題 #3: NEAR演算子の不正な構文
+### ❌ 問題 #4: NEAR演算子の不正な構文
 
 **エラー:**
 ```
@@ -180,7 +235,13 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 
 LLMエージェントがMCPツールを呼び出す前に確認すべき項目:
 
-### ✅ rrf_search_fulltext_raw / search_fulltext
+### ✅ rrf_search_fulltext_raw / rrf_search_semantic_raw
+
+- [ ] すべてのパラメータを`params`オブジェクトでラップ
+- [ ] `params`内に`query`（fulltextの場合）または`text`（semanticの場合）
+- [ ] `params`内に`filters`, `top_k`, `field_boosts`等を格納
+
+### ✅ search_fulltext / search_semantic（詳細版）
 
 - [ ] `fi`フィールドのフィルタは**fi_norm**（例: G06V10/82）または**fi_full**（例: G06V10/82A）のどちらでも可
 - [ ] NEAR演算子の構文が正しい（`AND`で接続、スペースのみは不可）
@@ -216,9 +277,11 @@ LLMエージェントがMCPツールを呼び出す前に確認すべき項目:
 
 | エラーメッセージ | 原因 | 対策 |
 |----------------|------|------|
-| `Missing required argument: lanes` | `params`ラッパーを使用 | `lanes`を直接トップレベルで渡す |
-| `Missing required argument: request` | パラメータを直接渡している | `request`オブジェクトでラップ |
-| `Unexpected keyword argument: params` | 不要な`params`ラッパー | ラッパーを削除 |
+| `Missing required argument: params` | `rrf_search_*_raw`で`params`ラッパーなし | `params`オブジェクトでラップ |
+| `Unexpected keyword argument: query/text` | `rrf_search_*_raw`でトップレベルに直接渡している | `params`内に格納 |
+| `Missing required argument: lanes` | `run_multilane_search`で`params`ラッパーを使用 | `lanes`を直接トップレベルで渡す |
+| `Missing required argument: request` | `rrf_blend_frontier`でパラメータを直接渡している | `request`オブジェクトでラップ |
+| `Unexpected keyword argument: params` | 不要な`params`ラッパー（`run_multilane_search`等） | ラッパーを削除 |
 | `Field required: tool` | レーン定義に`tool`フィールドがない | `tool: "search_fulltext"`等を追加 |
 | `400 Bad Request` | バックエンドが拒否 | NEAR構文を確認（ANDで接続されているか） |
 
