@@ -649,5 +649,4 @@ __all__ = [
     "MultiLaneLaneSummary",
     "SearchMetaLite",
     "LaneCodeSummary",
-    "RepresentativeEntry",
 ]
