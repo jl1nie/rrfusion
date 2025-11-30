@@ -235,7 +235,7 @@ async def my_new_tool(
     return await service.my_new_tool(request)
 ```
 
-### 4. Update SystemPrompt.yaml
+### 4. Update prompts/SystemPrompt_v1_5.yaml
 ```yaml
 tool_usage:
   my_new_tool:

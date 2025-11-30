@@ -12,7 +12,12 @@ This scaffold includes:
 - `infra/compose.stub.yml` — local stub stack with Redis, the DB stub, MCP, and attachable networking for external clients.
 - `infra/env.example` — environment defaults (copy to `infra/.env` for Docker)
 
-> **Note:** Detailed pipeline/tool definitions (including the multi-lane guidance formerly captured in `src/rrfusion/multirunspec.md`) live in `src/rrfusion/RRFusionSpecification.md`. Keep this README as a high-level overview and consult the spec for authoritative behavior.
+> **Note:** This README covers implementation, testing, and Docker workflow. For comprehensive documentation:
+> - **[DOCUMENTATION.md](DOCUMENTATION.md)** - Complete documentation navigation
+> - **[docs/developer/](docs/developer/)** - Architecture, MCP interface, backend integration, component specs
+> - **[docs/searcher/](docs/searcher/)** - RRFusion concepts, pipeline theory, query design, tuning
+> - **[prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml)** - LLM agent behavior (latest)
+> - **[AGENT.md](AGENT.md)** - Implementation spec and API reference
 
 ## Contents
 
@@ -125,7 +130,11 @@ If you prefer Docker, `docker compose -f infra/compose.prod.yml up -d rrfusion-r
 
 Refer to this README (and AGENT.md for the latest agent-facing heuristics) whenever you need pipeline guidance, prompts, or JSON payload examples; the FastMCP server no longer exposes curated prompt handlers.
 
-The human-readable MCP specification is also captured in `src/rrfusion/RRFusionSpecification.md`, so you can review it alongside this README when you need a broader overview. The default agent system prompt and pipeline configuration live in `src/rrfusion/SystemPrompt.yaml`; use that YAML as the canonical starting point when wiring RRFusion into an LLM agent.
+For comprehensive documentation beyond this implementation guide, see:
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** for complete documentation navigation
+- **[docs/developer/](docs/developer/)** for architecture and component specifications
+- **[docs/searcher/](docs/searcher/)** for RRFusion concepts and pipeline theory
+- **[prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml)** for the latest LLM agent behavior specification
 
 ## Testing
 

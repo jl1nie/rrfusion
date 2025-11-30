@@ -108,9 +108,9 @@ The system must support multiple classification systems **independently**:
 - **IPC**: International patent classification
   - Universal baseline classification
 
-### SystemPrompt.yaml Defines Usage Rules
+### prompts/SystemPrompt_v1_5.yaml Defines Usage Rules
 
-[SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) defines **how the LLM agent uses** these systems:
+[prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) defines **how the LLM agent uses** these systems:
 
 - **JP-focused lanes**: Typically use FI/FT
 - **Non-JP lanes**: Typically use CPC or IPC
@@ -209,7 +209,7 @@ filters = [
 
 ### 1. Define logical lane
 ```python
-# In SystemPrompt.yaml
+# In prompts/SystemPrompt_v1_5.yaml
 - name: fulltext_custom
   tool: search_fulltext
   purpose: custom_recall
@@ -246,11 +246,11 @@ cargo make integration
 ```
 
 ### 5. Update docs
-- SystemPrompt.yaml: Add lane definition
-- RRFusionSpecification.md: Add lane description
+- prompts/SystemPrompt_v1_5.yaml: Add lane definition
+- docs/searcher/01_concept.md: Add lane description
 - AGENT.md: Update if MCP changes needed
 
 ## References
-- [SystemPrompt.yaml lanes section](../../src/rrfusion/SystemPrompt.yaml#L273-L397)
-- [RRFusionSpecification.md Chapter 3](../../src/rrfusion/RRFusionSpecification.md#311)
+- [prompts/SystemPrompt_v1_5.yaml lanes section](../../prompts/SystemPrompt_v1_5.yaml#L273-L397)
+- [docs/searcher/01_concept.md Chapter 3](../../docs/searcher/01_concept.md#311)
 - [mcp/host.py tool implementations](../../src/rrfusion/mcp/host.py)

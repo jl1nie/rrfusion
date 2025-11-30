@@ -54,8 +54,8 @@ cargo make stop-ci
 - Check `docker compose -f infra/compose.ci.yml ps`
 
 ### Test failures after spec changes
-1. Update [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml)
-2. Update [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md)
+1. Update [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml)
+2. Update [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md)
 3. Re-run tests with `cargo make ci`
 
 ## Development Loop

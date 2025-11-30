@@ -18,9 +18,19 @@ RRFusionは、Codex(Anthropic社のAI開発ツール)で開発された特許検
 ### ドキュメント体系
 RRFusionは非常に充実したドキュメントを持っています:
 
+**開発者向け:**
 1. **[AGENT.md](AGENT.md)**: 実装仕様とAPI定義
-2. **[SystemPrompt.yaml](src/rrfusion/SystemPrompt.yaml)**: LLMエージェントの動作仕様(約700行)
-3. **[RRFusionSpecification.md](src/rrfusion/RRFusionSpecification.md)**: 数理的背景と設計哲学
+2. **[docs/developer/](docs/developer/)**: システムアーキテクチャ、MCPインターフェース、バックエンド連携、コンポーネント仕様
+3. **[SystemPrompt v1.5](prompts/SystemPrompt_v1_5.yaml)**: LLMエージェントの動作仕様(最新版)
+
+**サーチャ/プロンプトメンテナンス向け:**
+4. **[docs/searcher/](docs/searcher/)**: RRFusionコンセプト、パイプライン理論、クエリ設計、チューニング
+
+**全体ナビゲーション:**
+5. **[DOCUMENTATION.md](DOCUMENTATION.md)**: 全ドキュメントの索引
+
+**アーカイブ:**
+6. **[docs/archive/](docs/archive/)**: 過去バージョンの仕様書(v1.3, v1.4等)
 
 ## Claude Codeでの開発戦略
 
@@ -33,9 +43,9 @@ RRFusionは非常に充実したドキュメントを持っています:
 graph LR
     A[要件/Issue] --> B{どの領域?}
     B -->|MCP API| C[AGENT.md]
-    B -->|LLM動作| D[SystemPrompt.yaml]
-    B -->|アルゴリズム| E[RRFusionSpec.md]
-    B -->|FI処理| F[fi-improvement.md]
+    B -->|LLM動作| D[SystemPrompt v1.5]
+    B -->|アーキテクチャ| E[docs/developer/]
+    B -->|検索理論| F[docs/searcher/]
     C --> G[実装]
     D --> G
     E --> G
@@ -47,10 +57,10 @@ graph LR
 
 | コード変更内容 | 更新が必要なドキュメント |
 |--------------|---------------------|
-| MCPツール追加/変更 | AGENT.md + SystemPrompt.yaml |
-| レーン設計変更 | SystemPrompt.yaml + RRFusionSpec.md |
-| 融合アルゴリズム変更 | RRFusionSpec.md + fusion.py docstrings |
-| FI処理変更 | fi-improvement.md + storage.py docstrings |
+| MCPツール追加/変更 | AGENT.md + [prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml) + [docs/developer/02_mcp_interface.md](docs/developer/02_mcp_interface.md) |
+| レーン設計変更 | [prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml) + [docs/searcher/02_pipeline.md](docs/searcher/02_pipeline.md) |
+| 融合アルゴリズム変更 | [docs/developer/05_fusion_engine.md](docs/developer/05_fusion_engine.md) + fusion.py docstrings |
+| バックエンド連携変更 | [docs/developer/03_backend_interface.md](docs/developer/03_backend_interface.md) + [docs/developer/04_storage_layer.md](docs/developer/04_storage_layer.md) |
 
 ### 2. レイヤー別開発アプローチ
 
@@ -58,17 +68,17 @@ RRFusionは明確なレイヤー構造を持っています:
 
 ```
 ┌─────────────────────────────────┐
-│ LLM Agent Layer                 │  ← SystemPrompt.yaml
+│ LLM Agent Layer                 │  ← prompts/SystemPrompt_v1_5.yaml
 ├─────────────────────────────────┤
-│ MCP Tools Layer                 │  ← mcp/host.py
+│ MCP Tools Layer                 │  ← mcp/host.py (docs/developer/02)
 ├─────────────────────────────────┤
 │ Business Logic Layer            │  ← mcp/service.py
 ├─────────────────────────────────┤
-│ Fusion Engine Layer             │  ← fusion.py
+│ Fusion Engine Layer             │  ← fusion.py (docs/developer/05)
 ├─────────────────────────────────┤
-│ Storage Layer                   │  ← storage.py
+│ Storage Layer                   │  ← storage.py (docs/developer/04)
 ├─────────────────────────────────┤
-│ Backend Adapter Layer           │  ← backends/
+│ Backend Adapter Layer           │  ← backends/ (docs/developer/03)
 └─────────────────────────────────┘
 ```
 
@@ -217,7 +227,7 @@ graph TD
 
 ### システムアーキテクチャの理解
 
-RRFusionは**LLMエージェント**（ClaudeやGPTなど）が[SystemPrompt.yaml](src/rrfusion/SystemPrompt.yaml)で定義された検索戦略に従って使用することを前提に設計されています。Claude Code開発者としての役割は:
+RRFusionは**LLMエージェント**（ClaudeやGPTなど）が[SystemPrompt.yaml](prompts/SystemPrompt_v1_5.yaml)で定義された検索戦略に従って使用することを前提に設計されています。Claude Code開発者としての役割は:
 
 1. **インフラストラクチャの実装**: LLMエージェントが必要とする機能を提供
 2. **仕様との整合性維持**: コードと仕様書(AGENT.md、SystemPrompt.yaml)の一貫性を保つ
@@ -256,7 +266,7 @@ MCPツールは以下を受け入れる必要があります:
 
 ### SystemPrompt.yamlとの関係
 
-[SystemPrompt.yaml](src/rrfusion/SystemPrompt.yaml)は**LLMエージェントの動作仕様**です。開発者として理解すべきポイント:
+[SystemPrompt.yaml](prompts/SystemPrompt_v1_5.yaml)は**LLMエージェントの動作仕様**です。開発者として理解すべきポイント:
 
 - **lanes セクション**: どのようなレーンが存在し、どんなパラメータを使うか → 実装側はこれらを正しく処理する必要がある
 - **code_usage_policy**: FI/FTの使い方ルール → 実装側はfi_normとfi_fullの両方を提供する必要がある
@@ -335,7 +345,7 @@ cargo make unit  # fusion_test.py
 # 6. 統合確認
 cargo make integration
 
-# 7. RRFusionSpecification.md更新
+# 7. docs/searcher/01_concept.md更新
 # 変更したパラメータの根拠を記載
 ```
 
@@ -362,7 +372,7 @@ lanes:
 # 4. 統合テスト
 # tests/integration/test_custom_lane.py
 
-# 5. RRFusionSpecification.md更新
+# 5. docs/searcher/01_concept.md更新
 # 新レーンの目的・役割・パラメータを記載
 
 # 6. 実行
@@ -499,17 +509,18 @@ rg "fi_full.*MUST" src/ || echo "OK: 分冊識別記号はMUSTで使われてい
 rg "@mcp\.tool" src/rrfusion/mcp/host.py
 
 # SystemPrompt構文確認
-python -c "import yaml; yaml.safe_load(open('src/rrfusion/SystemPrompt.yaml'))"
+python -c "import yaml; yaml.safe_load(open('prompts/SystemPrompt_v1_5.yaml'))"
 ```
 
 ## まとめ: Claude Codeでの開発チェックリスト
 
 コミット前に確認すべき項目:
 
-- [ ] 関連する仕様書を読んだ（AGENT.md、SystemPrompt.yaml、RRFusionSpec.md）
+- [ ] 関連する仕様書を読んだ（AGENT.md、[prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml)、[docs/developer/](docs/developer/)）
 - [ ] 適切なskillsを参照した
 - [ ] 実装がAGENT.mdの仕様通りに動作する
-- [ ] SystemPrompt.yamlで定義されたLLMエージェントの動作をサポートしている
+- [ ] [prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml)で定義されたLLMエージェントの動作をサポートしている
+- [ ] [DOCUMENTATION.md](DOCUMENTATION.md)を確認し、更新すべきドキュメントを特定した
 - [ ] FI正規化インフラ（fi_norm/fi_full両方のサポート）が正しく動作（ストレージ/融合層を変更した場合）
 - [ ] 複数のコード体系（FI/FT/CPC/IPC）を独立して処理できる
 - [ ] `cargo make lint` が通る

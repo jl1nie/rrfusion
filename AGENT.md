@@ -397,4 +397,12 @@ Return `recipe` and lineage for auditability.
 -  - Frontier computation is server-side and reproducible via `recipe`.
 -  - Snippet endpoints enforce doc count and byte caps.
 
-This AGENT.md is the single source of truth; the previous `AGENT_2.md`, `CODEX_BRIEF_STUB.md`, and `CODEX_BRIEF_ALGO.md` have been merged here. The human-friendly MCP specification lives in `src/rrfusion/RRFusionSpecification.md`, so consult it for higher-level context when needed. The recommended system prompt and pipeline configuration for LLM agents are defined in `src/rrfusion/SystemPrompt.yaml`.
+This AGENT.md is the single source of truth; the previous `AGENT_2.md`, `CODEX_BRIEF_STUB.md`, and `CODEX_BRIEF_ALGO.md` have been merged here.
+
+**Documentation Structure:**
+- **For LLM agents and searchers**: [docs/searcher/](docs/searcher/) - RRFusion concepts, pipeline theory, query design, and prompt maintenance
+- **For developers**: [docs/developer/](docs/developer/) - System architecture, MCP interface, backend integration, and component specifications
+- **SystemPrompt**: [prompts/SystemPrompt_v1_5.yaml](prompts/SystemPrompt_v1_5.yaml) - Latest LLM agent behavior specification
+- **Documentation index**: [DOCUMENTATION.md](DOCUMENTATION.md) - Complete documentation navigation
+
+For archived specifications, see [docs/archive/](docs/archive/).

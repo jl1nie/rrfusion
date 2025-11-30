@@ -480,6 +480,6 @@ def test_frontier_estimation():
 
 ## References
 - [fusion.py implementation](../../src/rrfusion/fusion.py)
-- [RRFusionSpecification.md Chapter 1](../../src/rrfusion/RRFusionSpecification.md#L134-L234)
+- [docs/searcher/01_concept.md Chapter 1](../../docs/searcher/01_concept.md#L134-L234)
 - [AGENT.md Algorithm section](../../AGENT.md#L358-L379)
-- [SystemPrompt.yaml fusion config](../../src/rrfusion/SystemPrompt.yaml#L399-L418)
+- [prompts/SystemPrompt_v1_5.yaml fusion config](../../prompts/SystemPrompt_v1_5.yaml#L399-L418)

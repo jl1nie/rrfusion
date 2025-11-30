@@ -30,8 +30,10 @@ curl http://localhost:3000/healthz
 
 ### 2. Read Key Documents First
 1. [AGENT.md](../../AGENT.md) - Implementation spec & API reference
-2. [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) - LLM agent behavior
-3. [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md) - Mathematical foundation
+2. [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) - LLM agent behavior (latest)
+3. [docs/searcher/](../../docs/searcher/) - RRFusion concepts, pipeline theory, query design
+4. [docs/developer/](../../docs/developer/) - Architecture, MCP interface, backend integration
+5. [DOCUMENTATION.md](../../DOCUMENTATION.md) - Complete documentation navigation
 
 ### 3. Development Workflow
 ```bash
@@ -71,9 +73,9 @@ Verify consistency between code and specification documents.
 - Adding new lanes
 
 **Checklist**:
-- SystemPrompt.yaml synchronized
-- RRFusionSpecification.md updated
-- AGENT.md API spec current
+- [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) synchronized
+- [docs/searcher/](../../docs/searcher/) and [docs/developer/](../../docs/developer/) updated
+- [AGENT.md](../../AGENT.md) API spec current
 - Code implementation matches specifications
 
 ### [lane-design.md](skills/lane-design.md)
@@ -146,7 +148,7 @@ Implementation guide for RRF fusion and code-aware algorithms.
 ```
 ┌──────────────────────────────────────────┐
 │ LLM Agent                                │
-│ (Uses SystemPrompt.yaml for behavior)   │
+│ (Uses prompts/SystemPrompt_v1_5.yaml)   │
 └───────────────┬──────────────────────────┘
                 │ MCP Protocol
 ┌───────────────▼──────────────────────────┐
@@ -218,11 +220,11 @@ Estimate precision/recall without ground truth:
 
 ### Understanding the System Architecture
 
-RRFusion is designed to be used by **LLM agents** (like Claude or GPT) that follow specific search strategies defined in [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml). As a Claude Code developer, your role is to:
+RRFusion is designed to be used by **LLM agents** (like Claude or GPT) that follow specific search strategies defined in [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml). As a Claude Code developer, your role is to:
 
 1. **Implement the infrastructure** that supports those strategies
 2. **Maintain consistency** between code and specifications
-3. **Ensure the system behaves** as documented in AGENT.md and SystemPrompt.yaml
+3. **Ensure the system behaves** as documented in AGENT.md and prompts/SystemPrompt_v1_5.yaml
 
 ### Key Implementation Requirements
 
@@ -261,7 +263,7 @@ The MCP tools must accept:
 1. Define Pydantic models in [models.py](../../src/rrfusion/models.py)
 2. Implement business logic in [mcp/service.py](../../src/rrfusion/mcp/service.py)
 3. Register in [mcp/host.py](../../src/rrfusion/mcp/host.py) with `@mcp.tool`
-4. Update [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) tool_usage section
+4. Update [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) tool_usage section
 5. Update [AGENT.md](../../AGENT.md) API spec
 6. Add tests in tests/integration/
 7. Run `cargo make ci`
@@ -269,9 +271,9 @@ The MCP tools must accept:
 See [mcp-development.md](skills/mcp-development.md) for details.
 
 ### Adding a New Lane
-1. Define in [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) lanes section
+1. Define in [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) lanes section
 2. Set field_boosts, code_system_policy, query_style
-3. Update [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md)
+3. Update [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md)
 4. Test with different queries
 5. Document in [lane-design.md](skills/lane-design.md)
 
@@ -287,7 +289,7 @@ See [mcp-development.md](skills/mcp-development.md) for details.
 2. For integration/e2e: Verify Docker stack with `cargo make start-ci`
 3. Check Redis connection and data
 4. Review recent spec changes
-5. Update SystemPrompt.yaml if MCP tools changed
+5. Update prompts/SystemPrompt_v1_5.yaml if MCP tools changed
 
 See [test-workflow.md](skills/test-workflow.md) for details.
 
@@ -321,8 +323,8 @@ STUB_MAX_RESULTS=2000  # Set to 10000 for E2E load tests
 ## Troubleshooting
 
 ### Tests failing after code changes
-1. Update [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml)
-2. Update [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md)
+1. Update [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml)
+2. Update [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md)
 3. Check [spec-check.md](skills/spec-check.md) consistency checklist
 4. Re-run `cargo make ci`
 
@@ -353,8 +355,8 @@ cargo make start-ci
 ### Documentation
 - [README.md](../../README.md) - Quick start & workflow
 - [AGENT.md](../../AGENT.md) - Implementation brief
-- [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) - LLM agent spec
-- [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md) - Design philosophy & math
+- [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) - LLM agent spec
+- [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md) - Design philosophy & math
 
 ### Code Structure
 ```
@@ -394,7 +396,7 @@ infra/
 1. Run full test suite: `cargo make ci`
 2. Update relevant specs (use [spec-check.md](skills/spec-check.md))
 3. Add/update tests for changed functionality
-4. Verify implementation matches documented behavior in AGENT.md and SystemPrompt.yaml
+4. Verify implementation matches documented behavior in AGENT.md and prompts/SystemPrompt_v1_5.yaml
 5. Ensure FI normalization infrastructure works correctly (if modified storage/fusion layers)
 
 ### Code style
@@ -421,8 +423,8 @@ infra/
 
 2. Check the specifications:
    - [AGENT.md](../../AGENT.md) for API details
-   - [SystemPrompt.yaml](../../src/rrfusion/SystemPrompt.yaml) for LLM behavior
-   - [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md) for theory
+   - [prompts/SystemPrompt_v1_5.yaml](../../prompts/SystemPrompt_v1_5.yaml) for LLM behavior
+   - [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md) for theory
 
 3. Inspect the code:
    - [src/rrfusion/](../../src/rrfusion/) for implementation
@@ -434,8 +436,8 @@ infra/
 - Check `h:run:{run_id}` metadata for fusion debugging
 - FI normalization: Ensure both fi_norm and fi_full are stored and available
 - Structural metrics (Fproxy) guide tuning: ≥0.5 is healthy
-- When in doubt, read [RRFusionSpecification.md](../../src/rrfusion/RRFusionSpecification.md)
-- Remember: SystemPrompt.yaml defines LLM agent behavior, your code implements the infrastructure
+- When in doubt, read [docs/searcher/01_concept.md](../../docs/searcher/01_concept.md)
+- Remember: prompts/SystemPrompt_v1_5.yaml defines LLM agent behavior, your code implements the infrastructure
 
 ---
 
