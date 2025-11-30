@@ -55,13 +55,32 @@ def _build_fi_profiles(fi_profile: dict[str, float] | None) -> tuple[dict[str, f
 def compute_rrf_scores(
     lanes: dict[str, Sequence[tuple[str, float]]],
     rrf_k: int,
-    weights: dict[str, float],
+    weights: dict[str, float] | list[tuple[str, float]],
 ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    """
+    Compute RRF scores with per-run or per-lane weights.
+
+    Args:
+        lanes: dict[lane_name, docs] - lane results
+        rrf_k: RRF k parameter
+        weights: Either dict[lane_name, weight] (legacy) or list[(lane_name, weight)] (per-run)
+    """
     total_scores: dict[str, float] = defaultdict(float)
     contributions: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
+    # Convert weights to list format if dict (legacy support)
+    if isinstance(weights, dict):
+        weight_list = [(lane, weights.get(lane, 1.0)) for lane in lanes.keys()]
+    else:
+        weight_list = weights
+
+    # Build lane -> weight mapping (sum weights if same lane appears multiple times)
+    lane_weight_map: dict[str, float] = defaultdict(float)
+    for lane, weight in weight_list:
+        lane_weight_map[lane] += weight
+
     for lane, docs in lanes.items():
-        lane_weight = weights.get(lane, weights.get("recall" if lane == "fulltext" else "semantic", 1.0))
+        lane_weight = lane_weight_map.get(lane, 1.0)
         for rank, (doc_id, _original) in enumerate(docs, start=1):
             score = lane_weight / (rrf_k + rank)
             total_scores[doc_id] += score

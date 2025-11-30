@@ -158,13 +158,9 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 {
   "request": {  // ✅ requestオブジェクトでラップ
     "runs": [
-      {"lane": "fulltext", "run_id_lane": "fulltext-abc123"},
-      {"lane": "semantic", "run_id_lane": "semantic-def456"}
+      {"lane": "fulltext", "run_id_lane": "fulltext-abc123", "weight": 1.0},
+      {"lane": "semantic", "run_id_lane": "semantic-def456", "weight": 1.2}
     ],
-    "weights": {
-      "fulltext": 1.0,
-      "semantic": 1.2
-    },
     "target_profile": {
       "fi": {"G06V10/82": 1.0, "G06V40/16": 0.9},
       "ft": {}
@@ -182,13 +178,9 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
   "arguments": {
     "request": {
       "runs": [
-        {"lane": "fulltext", "run_id_lane": "fulltext-f9a5586b"},
-        {"lane": "semantic", "run_id_lane": "semantic-abc12345"}
+        {"lane": "fulltext", "run_id_lane": "fulltext-f9a5586b", "weight": 1.0},
+        {"lane": "semantic", "run_id_lane": "semantic-abc12345", "weight": 1.2}
       ],
-      "weights": {
-        "fulltext": 1.0,
-        "semantic": 1.2
-      },
       "target_profile": {
         "fi": {
           "G06V10/82": 1.0,
@@ -209,10 +201,10 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 ```
 
 **重要な注意:**
-- `runs`配列の各要素は`{lane: str, run_id_lane: str}`の形式
-- ❌ 各run要素に`weight`を含めない
-- ✅ `weights`は`request`の直下に`{lane名: weight値}`の辞書として配置
-- ✅ デフォルト値: `{"fulltext": 1.0, "semantic": 1.2, "original_dense": 1.0}`
+- `runs`配列の各要素は`{lane: str, run_id_lane: str, weight: float}`の形式
+- ✅ `weight`は**各run要素に個別指定**（デフォルト: 1.0）
+- ✅ 同じlaneを複数回使う場合、それぞれ異なるweightを指定可能
+- 例: `[{lane: "fulltext", run_id_lane: "recall-001", weight: 1.0}, {lane: "fulltext", run_id_lane: "precision-002", weight: 0.8}]`
 
 ---
 

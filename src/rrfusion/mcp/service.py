@@ -533,15 +533,24 @@ class MCPService:
                 "ft": meta.get("ft_codes", []),
             }
 
+        # Build per-run weights list (use per-run weights if specified, else fallback to lane-level weights dict)
+        run_weights = [(run.lane, run.weight) for run in request.runs]
+
         scores, contributions = compute_rrf_scores(
-            lane_docs, request.rrf_k, request.weights
+            lane_docs, request.rrf_k, run_weights
         )
+
+        # For code boosts, extract code/code_secondary weights from the weights dict
+        code_boost_weights = {
+            "code": request.weights.get("code", 0.0),
+            "code_secondary": request.weights.get("code_secondary", 0.0),
+        }
         scores = apply_code_boosts(
             scores,
             contributions,
             doc_codes,
             request.target_profile,
-            request.weights,
+            code_boost_weights,
         )
         ordered = sort_scores(scores)
         ordered_ids = [doc_id for doc_id, _ in ordered]

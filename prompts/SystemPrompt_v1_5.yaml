@@ -1025,23 +1025,20 @@ tool_usage:
     example_structure:
       request:  # ✅ REQUIRED: request wrapper
         runs:
-          - {lane: "fulltext", run_id_lane: "fulltext-abc123"}
-          - {lane: "semantic", run_id_lane: "semantic-def456"}
-        weights:
-          fulltext: 1.0
-          semantic: 1.2
+          - {lane: "fulltext", run_id_lane: "fulltext-abc123", weight: 1.0}
+          - {lane: "semantic", run_id_lane: "semantic-def456", weight: 1.2}
         target_profile:
           fi: {"G06V10/82": 1.0, "G06V40/16": 0.9}
           ft: {}
         rrf_k: 60
         beta_fuse: 1.2
     required_parameters:
-      - "runs: list of {lane: str, run_id_lane: str}"
+      - "runs: list of {lane: str, run_id_lane: str, weight: float (default: 1.0)}"
       - "target_profile"
       - "rrf_k (default: 60)"
       - "beta_fuse (default: 1.2)"
     optional_parameters:
-      - "weights: dict[str, float] - lane名をキーとした重み辞書 (default: {fulltext: 1.0, semantic: 1.2})"
+      - "weights: dict[str, float] - code boost weights (code/code_secondary keys only)"
       - "facet_terms"
       - "facet_weights"
       - "lane_weights"

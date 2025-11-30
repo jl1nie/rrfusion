@@ -449,6 +449,7 @@ class RepresentativeEntry(BaseModel):
 class BlendRunInput(BaseModel):
     lane: Literal["fulltext", "semantic", "original_dense"]
     run_id_lane: str
+    weight: float = 1.0
 
 
 class BlendRequest(BaseModel):
