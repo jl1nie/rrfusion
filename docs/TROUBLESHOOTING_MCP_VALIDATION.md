@@ -158,8 +158,8 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
 {
   "request": {  // ✅ requestオブジェクトでラップ
     "runs": [
-      {"run_id": "fulltext-abc123", "lane": "fulltext", "weight": 1.0},
-      {"run_id": "semantic-def456", "lane": "semantic", "weight": 0.8}
+      {"lane": "fulltext", "run_id_lane": "fulltext-abc123"},
+      {"lane": "semantic", "run_id_lane": "semantic-def456"}
     ],
     "target_profile": {
       "fi": {"G06V10/82": 1.0, "G06V40/16": 0.9},
@@ -178,8 +178,8 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
   "arguments": {
     "request": {
       "runs": [
-        {"run_id": "fulltext-f9a5586b", "lane": "fulltext", "weight": 1.0},
-        {"run_id": "semantic-abc12345", "lane": "semantic", "weight": 0.8}
+        {"lane": "fulltext", "run_id_lane": "fulltext-f9a5586b"},
+        {"lane": "semantic", "run_id_lane": "semantic-abc12345"}
       ],
       "target_profile": {
         "fi": {
@@ -199,6 +199,11 @@ Unexpected keyword argument: runs, target_profile, rrf_k, beta_fuse
   }
 }
 ```
+
+**重要な注意:**
+- `runs`配列の各要素は`{lane: str, run_id_lane: str}`の形式
+- ❌ `run_id`と`weight`を使わない
+- ✅ `lane`と`run_id_lane`を使う
 
 ---
 

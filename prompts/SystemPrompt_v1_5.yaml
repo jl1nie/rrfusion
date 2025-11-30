@@ -1025,15 +1025,15 @@ tool_usage:
     example_structure:
       request:  # ✅ REQUIRED: request wrapper
         runs:
-          - {run_id: "fulltext-abc123", lane: "fulltext", weight: 1.0}
-          - {run_id: "semantic-def456", lane: "semantic", weight: 0.8}
+          - {lane: "fulltext", run_id_lane: "fulltext-abc123"}
+          - {lane: "semantic", run_id_lane: "semantic-def456"}
         target_profile:
           fi: {"G06V10/82": 1.0, "G06V40/16": 0.9}
           ft: {}
         rrf_k: 60
         beta_fuse: 1.2
     required_parameters:
-      - "runs: list of RunHandle or {run_id, lane, weight}"
+      - "runs: list of {lane: str, run_id_lane: str}"
       - "target_profile"
       - "rrf_k (default: 60)"
       - "beta_fuse (default: 1.2)"
