@@ -141,6 +141,9 @@ RRFusionシステムの開発・保守を担当する開発者向けのドキュ
 - [サーチャ向けREADME](./docs/searcher/README.md)
 - [開発者向けREADME](./docs/developer/README.md)
 
+**トラブルシューティング:**
+- [MCPバリデーションエラー対策](./docs/TROUBLESHOOTING_MCP_VALIDATION.md) - よくあるバリデーションエラーと解決方法
+
 **コンセプト理解:**
 - [01. コンセプトと理論](./docs/searcher/01_concept.md)
 - [01. システムアーキテクチャ](./docs/developer/01_architecture.md)
