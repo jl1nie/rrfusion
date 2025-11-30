@@ -159,10 +159,10 @@ Perform RRF fusion with optional code awareness; store ranking/frontier in Redis
 {
   "request": {
     "runs": [
-      { "lane": "fulltext", "run_id_lane": "string" },
-      { "lane": "semantic",  "run_id_lane": "string" }
+      { "lane": "fulltext", "run_id_lane": "string", "weight": 1.0 },
+      { "lane": "semantic",  "run_id_lane": "string", "weight": 1.2 }
     ],
-    "weights": { "fulltext": 1.0, "semantic": 1.0, "code": 0.5 },
+    "weights": { "code": 0.5, "code_secondary": 0.0 },
     "rrf_k": 60,
     "beta_fuse": 1.0,
     "target_profile": { "ipc": {"H04L": 0.7}, "fi": {"H04L1/00": 1.0}, "ft": {"432": 0.5} },

@@ -256,6 +256,17 @@ class RunHandle:
     meta: dict            # メタ情報（クエリ、フィルタ等）
 ```
 
+### BlendRunInput
+
+```python
+class BlendRunInput:
+    lane: str             # レーン名（"fulltext" / "semantic" / "original_dense"）
+    run_id_lane: str      # レーン内でのrun ID
+    weight: float = 1.0   # このrunの重み（デフォルト1.0）
+```
+
+**用途:** `rrf_blend_frontier` で複数のレーン結果を融合する際、各 run の重みを個別に指定可能。同じ lane を複数回使う場合（例: fulltext_recall と fulltext_precision）でも、それぞれ異なる重みを設定できる。
+
 ### FusionResult
 
 ```python

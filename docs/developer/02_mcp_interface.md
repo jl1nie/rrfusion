@@ -190,15 +190,24 @@ List[RunHandle]  # 各レーンのRunHandle
 **パラメータ:**
 ```python
 {
-  "runs": List[Union[RunHandle, Dict]],  # RunHandleまたは{run_id_lane, weight}
+  "runs": List[BlendRunInput],           # 各runにlane/run_id_lane/weightを指定
   "target_profile": TargetProfile,       # コード重み
-  "weights": Optional[Dict[str, float]], # lane typeレベルの重み
-  "lane_weights": Optional[Dict[str, float]], # 個別レーンの重み
+  "weights": Optional[Dict[str, float]], # code boost weights (code/code_secondary)
+  "lane_weights": Optional[Dict[str, float]], # レーン種別の重み
   "pi_weights": Optional[Dict[str, float]],   # π(d)計算の重み
   "facet_terms": Optional[Dict[str, List[str]]], # A/B/C要素の用語
   "facet_weights": Optional[Dict[str, float]],   # facet重み
   "rrf_k": Optional[float],              # RRF定数（デフォルト60）
   "beta_fuse": Optional[float]           # ブースト強度（デフォルト1.2）
+}
+```
+
+**BlendRunInput:**
+```python
+{
+  "lane": Literal["fulltext", "semantic", "original_dense"],
+  "run_id_lane": str,    # レーン検索結果のrun ID
+  "weight": float = 1.0  # このrunの重み（デフォルト1.0）
 }
 ```
 
@@ -224,15 +233,15 @@ FusionResult {
 ```json
 {
   "runs": [
-    {"run_id_lane": "recall-run-id", "weight": 1.0},
-    {"run_id_lane": "precision-run-id", "weight": 1.0},
-    {"run_id_lane": "semantic-run-id", "weight": 0.8}
+    {"lane": "fulltext", "run_id_lane": "recall-run-id", "weight": 1.0},
+    {"lane": "fulltext", "run_id_lane": "precision-run-id", "weight": 0.8},
+    {"lane": "semantic", "run_id_lane": "semantic-run-id", "weight": 1.2}
   ],
   "target_profile": {
     "fi": {"G06V10/82": 1.0, "G06V40/16": 0.9},
     "ft": {}
   },
-  "weights": {"fulltext": 1.0, "semantic": 0.8, "code": 0.3},
+  "weights": {"code": 0.3, "code_secondary": 0.0},
   "lane_weights": {"recall": 1.0, "precision": 1.0, "semantic": 0.8},
   "pi_weights": {"code": 0.4, "facet": 0.3, "lane": 0.3},
   "rrf_k": 60,
