@@ -493,10 +493,6 @@ class BlendResponse(BaseModel):
     recipe: dict[str, Any]
     peek_samples: list[dict[str, Any]]
     meta: dict[str, Any] = Field(default_factory=dict)
-    priority_pairs: list[tuple[str, float]] = Field(
-        default_factory=list,
-        description="Deprecated field, kept for backward compatibility. Always empty.",
-    )
     metrics: FusionMetrics | None = None
 
 

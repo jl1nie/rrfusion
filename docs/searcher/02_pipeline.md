@@ -617,9 +617,9 @@ D: 選択肢4
 Phase0/1/2パイプラインの流れ:
 
 1. **Phase0**: feature_extraction → wide_search → code_profiling
-2. **Phase1**: representative_hunting → vocabulary_feedback
+2. **Phase1**: precision_fusion (target_profile + facet_terms確認 → rrf_blend_frontier)
 3. **Phase2**: run_multilane_search → rrf_blend_frontier → get_provenance
 
-各Phaseでユーザ確認を取りながら、段階的に検索精度を高めていきます。
+各Phaseでユーザ確認を取りながら、段階的に検索精度を高めていきます。Phase1では代表特許のレビューではなく、target_profileとfacet_termsの確認のみを行います。
 
 次章では、クエリ設計の詳細を学びます。

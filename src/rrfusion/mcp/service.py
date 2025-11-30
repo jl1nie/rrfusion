@@ -637,7 +637,6 @@ class MCPService:
             contrib=contrib_payload,
             recipe=recipe,
             peek_samples=peek_samples,
-            priority_pairs=[],
             metrics=FusionMetrics.model_validate(metrics_payload),
         )
         response.meta["took_ms"] = _elapsed_ms(start)
