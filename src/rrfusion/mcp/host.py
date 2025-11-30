@@ -651,7 +651,6 @@ async def rrf_blend_frontier(request: BlendRequest) -> RunHandle:
         top_m_per_lane=request.top_m_per_lane,
         k_grid=request.k_grid,
         peek=request.peek,
-        representatives=request.representatives,
     )
     _record_tool_timing(response, _elapsed_ms(start))
     count = len(response.pairs_top)
