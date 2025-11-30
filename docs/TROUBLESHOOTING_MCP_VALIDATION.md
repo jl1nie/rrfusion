@@ -6,7 +6,7 @@ LLMエージェントがRRFusion MCPツールを呼び出す際に発生する�
 
 ## 問題パターンと対策
 
-### ❌ 問題 #1: FI分冊識別記号をMUSTフィルタで使用
+### ❌ 問題 #1: FI分冊識別記号をMUSTフィルタで使用（バックエンド制限）
 
 **エラー:**
 ```
@@ -19,12 +19,12 @@ LLMエージェントがRRFusion MCPツールを呼び出す際に発生する�
   "filters": [{
     "field": "fi",
     "op": "in",
-    "value": ["G06V10/82A", "G06V40/16A"]  // ❌ 分冊識別記号付き
+    "value": ["G06V10/82A", "G06V40/16A"]  // ⚠️ 分冊識別記号付き
   }]
 }
 ```
 
-**対策:**
+**現状の対策（回避策）:**
 ```json
 {
   "filters": [{
@@ -35,9 +35,25 @@ LLMエージェントがRRFusion MCPツールを呼び出す際に発生する�
 }
 ```
 
-**SystemPromptの該当ルール:**
-- `code_usage_policy.fi_edition_symbols`: "NEVER use in MUST filters"
-- Phase2では**fi_normのみ**をフィルタに使用
+**⚠️ 重要な注意:**
+
+これは**バックエンド実装の制限**であり、本来は実装バグです：
+
+- ✅ **理想的な実装**: バックエンドが`fi_full`を受け取ったら内部で正規化して検索すべき
+  - `normalize_fi_subgroup`関数は既に存在（[utils.py:34](../src/rrfusion/utils.py#L34)）
+  - レスポンス側では正規化済み（[patentfield.py:154](../src/rrfusion/mcp/backends/patentfield.py#L154)）
+  - **リクエスト側のフィルタ正規化が未実装**
+
+- ❌ **現状**: Patentfieldバックエンドが`fi_full`形式を拒否
+
+- 🔧 **修正予定**: `patentfield.py`でリクエスト時にフィルタを正規化する処理を追加
+
+**SystemPromptの推奨ルール（暫定）:**
+- `code_usage_policy.fi_edition_symbols`: "Avoid in MUST filters for backend compatibility"
+- Phase2では**fi_normのみ**をフィルタに使用することを推奨（現状の回避策として）
+
+**将来の実装:**
+バックエンドでフィルタ正規化を実装後、LLMは両方の形式を安全に使用可能になる予定。
 
 ---
 
